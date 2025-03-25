@@ -1,0 +1,11 @@
+*.pyc
+.DS_Store
+backup
+chroma
+data/
+.vscode/
+__pycache__/
+pdfs/
+training/data
+results.txt
+results.txt.progress.txt

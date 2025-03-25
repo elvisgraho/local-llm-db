@@ -1,0 +1,14 @@
+pypdf
+langchain
+langchain_community
+chromadb # Vector storage
+pytest
+boto3
+tqdm
+unstructured
+python-magic-bin
+networkx
+scikit-learn
+PyPDF2>=3.0.0
+tqdm>=4.65.0
+requests>=2.31.0
