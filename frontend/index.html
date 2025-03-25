@@ -25,9 +25,9 @@
                 <select id="queryMode" class="mode-select">
                     <option value="rag">RAG Mode</option>
                     <option value="direct">Direct Mode</option>
-                    <option value="hybrid">Hybrid Mode</option>
                     <option value="graph">Graph Mode</option>
                     <option value="lightrag">Light RAG Mode</option>
+                    <option value="kag">KAG Mode</option>
                 </select>
             </div>
             <div class="optimization-toggle">
@@ -36,6 +36,13 @@
                     <span class="slider round"></span>
                 </label>
                 <span class="toggle-label">Optimize Response</span>
+            </div>
+            <div class="hybrid-toggle">
+                <label class="switch">
+                    <input type="checkbox" id="hybridToggle">
+                    <span class="slider round"></span>
+                </label>
+                <span class="toggle-label">Hybrid Mode</span>
             </div>
             <div class="sidebar-footer">
                 <button class="new-chat-btn" onclick="clearChat()">

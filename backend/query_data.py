@@ -16,62 +16,15 @@ from backend.database_paths import (
     VECTORSTORE_PATH
 )
 from get_embedding_function import get_embedding_function
-
-# Template that restricts the model to only use the provided context
-RAG_ONLY_TEMPLATE = """
-Answer the question based only on the following context:
-
-{context}
-
----
-
-Answer the question based on the above context: {question}
-"""
-
-# Template for Knowledge-Augmented Generation (KAG)
-KAG_TEMPLATE = """
-You are a knowledge-aware AI assistant. Use the following structured knowledge and relationships to answer the question:
-
-Knowledge Context:
-{context}
-
-Relationships:
-{relationships}
-
----
-
-Based on the above knowledge and relationships, please answer this question: {question}
-
-If you use specific relationships or connections from the knowledge graph, please indicate this in your response.
-"""
-
-# Template that allows the model to combine its knowledge with the context
-HYBRID_TEMPLATE = """
-Here is some relevant context that may help answer the question:
-
-{context}
-
----
-
-Using both the above context and your general knowledge, please answer this question: {question}
-
-If you use information from the context, please indicate this. If you use your general knowledge, please indicate this as well.
-"""
-
-# Template for direct queries without RAG
-DIRECT_TEMPLATE = """
-Please answer this question using your general knowledge: {question}
-"""
-
-# Template for query optimization
-QUERY_OPTIMIZATION_TEMPLATE = """
-Given the following query, optimize it to be more specific and effective for retrieval. 
-Keep the core intent but make it more precise and search-friendly:
-
-Original query: {query}
-
-Optimized query:
-"""
+from backend.templates import (
+    RAG_ONLY_TEMPLATE,
+    KAG_TEMPLATE,
+    HYBRID_TEMPLATE,
+    DIRECT_TEMPLATE,
+    QUERY_OPTIMIZATION_TEMPLATE,
+    LIGHTRAG_HYBRID_TEMPLATE,
+    KAG_HYBRID_TEMPLATE
+)
 
 def main():
     # Create CLI.
@@ -128,7 +81,7 @@ def query_hybrid(query_text: str):
     
     return {"text": response_text, "sources": sources}
 
-def query_rag(query_text: str):
+def query_rag(query_text: str, hybrid: bool = False):
     """Query using only RAG context."""
     # Prepare the DB.
     embedding_function = get_embedding_function()
@@ -138,7 +91,10 @@ def query_rag(query_text: str):
     results = db.similarity_search_with_score(query_text, k=5)
 
     context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in results])
-    prompt_template = ChatPromptTemplate.from_template(RAG_ONLY_TEMPLATE)
+    
+    # Use hybrid template if hybrid mode is enabled
+    template = HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE
+    prompt_template = ChatPromptTemplate.from_template(template)
     prompt = prompt_template.format(context=context_text, question=query_text)
 
     # Get response
@@ -146,7 +102,7 @@ def query_rag(query_text: str):
     sources = [doc.metadata.get("id", None) for doc, _score in results]
     return {"text": response_text, "sources": sources}
 
-def query_graph(query_text: str):
+def query_graph(query_text: str, hybrid: bool = False):
     """Query using the graph structure with semantic search."""
     # Load the graph
     try:
@@ -208,32 +164,42 @@ def query_graph(query_text: str):
                 context_parts.append(neighbor_data.get('content', ''))
 
     context_text = "\n\n---\n\n".join(context_parts)
-    prompt_template = ChatPromptTemplate.from_template(RAG_ONLY_TEMPLATE)
+    
+    # Use hybrid template if hybrid mode is enabled
+    template = HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE
+    prompt_template = ChatPromptTemplate.from_template(template)
     prompt = prompt_template.format(context=context_text, question=query_text)
     
     response_text = _get_llm_response(prompt)
     return {"text": response_text, "sources": list(sources)}
 
-def query_lightrag(query_text: str):
+def query_lightrag(query_text: str, hybrid: bool = False):
     """Query using the light RAG implementation."""
     try:
         # Load vectorstore and create QA chain using helper functions
         vectorstore = load_vectorstore()
-        qa_chain = create_qa_chain(vectorstore)
         
-        # Get response
-        response_text = qa_chain.invoke({"query": query_text})["result"]
-        
-        # Get sources from the retrieved documents
+        # Get relevant documents
         results = vectorstore.similarity_search_with_score(query_text, k=3)
+        context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in results])
         sources = [doc.metadata.get("source", "unknown") for doc, _score in results]
+        
+        # Use hybrid template if enabled
+        if hybrid:
+            prompt_template = ChatPromptTemplate.from_template(LIGHTRAG_HYBRID_TEMPLATE)
+            prompt = prompt_template.format(context=context_text, question=query_text)
+            response_text = _get_llm_response(prompt)
+        else:
+            # Use regular QA chain for non-hybrid mode
+            qa_chain = create_qa_chain(vectorstore)
+            response_text = qa_chain.invoke({"query": query_text})["result"]
         
         return {"text": response_text, "sources": sources}
     except Exception as e:
         print(f"Error in light RAG query: {e}")
         return {"text": "Error processing light RAG query", "sources": []}
 
-def query_kag(query_text: str):
+def query_kag(query_text: str, hybrid: bool = False):
     """Query using Knowledge-Augmented Generation (KAG) approach."""
     try:
         # Load the graph
@@ -327,8 +293,9 @@ def query_kag(query_text: str):
     context_text = "\n\n---\n\n".join(context_parts[:5])  # Take top 5 most relevant parts
     relationships_text = "\n\n".join(relationships)
     
-    # Create a more structured prompt
-    prompt_template = ChatPromptTemplate.from_template(KAG_TEMPLATE)
+    # Use hybrid template if enabled
+    template = KAG_HYBRID_TEMPLATE if hybrid else KAG_TEMPLATE
+    prompt_template = ChatPromptTemplate.from_template(template)
     prompt = prompt_template.format(
         context=context_text,
         relationships=relationships_text,

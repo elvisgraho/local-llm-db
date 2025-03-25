@@ -116,7 +116,8 @@ async function sendQuery() {
             body: JSON.stringify({
                 query_text: query,
                 mode: queryMode.value,
-                optimize: document.getElementById('optimizeToggle').checked
+                optimize: document.getElementById('optimizeToggle').checked,
+                hybrid: document.getElementById('hybridToggle').checked
             })
         });
         
@@ -172,8 +173,12 @@ addMessage(`Welcome to the RAG Assistant! You can ask me questions about the doc
 
 - **RAG Mode**: Uses document context to answer questions
 - **Direct Mode**: Uses the model's knowledge directly
-- **Hybrid Mode**: Combines both approaches
 - **Graph Mode**: Uses graph-based reasoning to answer questions
 - **Light RAG Mode**: Uses a lightweight RAG implementation for faster responses
+- **KAG Mode**: Uses knowledge-augmented generation with semantic relationships
+
+You can also enable:
+- **Hybrid Mode**: Combines document context with the model's knowledge
+- **Optimize Response**: Improves query effectiveness
 
 How can I help you today?`); 

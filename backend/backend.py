@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from waitress import serve
-from query_data import query_rag, query_direct, query_hybrid, query_graph, optimize_query, query_lightrag
+from query_data import query_rag, query_direct, query_hybrid, query_graph, optimize_query, query_lightrag, query_kag
 import traceback
 
 app = Flask(__name__)
@@ -20,6 +20,7 @@ def handle_query():
         query_text = data.get('query_text', '')
         query_mode = data.get('mode', 'rag')
         optimize = data.get('optimize', False)
+        hybrid = data.get('hybrid', False)
         
         if not query_text:
             return jsonify({
@@ -27,9 +28,9 @@ def handle_query():
                 'status': 'error'
             }), 400
         
-        if query_mode not in ['rag', 'direct', 'hybrid', 'graph', 'lightrag']:
+        if query_mode not in ['rag', 'direct', 'graph', 'lightrag', 'kag']:
             return jsonify({
-                'error': 'Invalid query mode. Must be one of: rag, direct, hybrid, graph, lightrag',
+                'error': 'Invalid query mode. Must be one of: rag, direct, graph, lightrag, kag',
                 'status': 'error'
             }), 400
         
@@ -51,14 +52,14 @@ def handle_query():
         # Call appropriate query function based on mode
         if query_mode == 'direct':
             query_response = query_direct(optimized_query)
-        elif query_mode == 'hybrid':
-            query_response = query_hybrid(optimized_query)
         elif query_mode == 'graph':
-            query_response = query_graph(optimized_query)
+            query_response = query_graph(optimized_query, hybrid)
         elif query_mode == 'lightrag':
-            query_response = query_lightrag(optimized_query)
+            query_response = query_lightrag(optimized_query, hybrid)
+        elif query_mode == 'kag':
+            query_response = query_kag(optimized_query, hybrid)
         else:
-            query_response = query_rag(optimized_query)
+            query_response = query_rag(optimized_query, hybrid)
         
         response.update({
             'status': 'success',
