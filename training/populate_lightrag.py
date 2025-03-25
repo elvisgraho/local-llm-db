@@ -1,3 +1,23 @@
+"""
+LightRAG (Lightweight Retrieval Augmented Generation) Implementation
+
+This module implements a lightweight approach to RAG using FAISS vectorstore for efficient
+document retrieval. Key features:
+1. Simple document chunking and embedding
+2. Fast similarity search using FAISS
+3. Integration with LM Studio for local LLM inference
+4. Basic question-answering capabilities
+
+The lightweight implementation provides:
+- Faster document processing
+- Lower memory requirements
+- Quick similarity search
+- Simple query interface
+
+This is a simpler alternative to the graph-based approaches (GraphRAG and KAG) that focuses
+on speed and efficiency over complex relationship modeling.
+"""
+
 import os
 import logging
 from typing import List, Dict, Any
@@ -17,6 +37,7 @@ from langchain.llms.base import LLM
 from get_embedding_function import get_embedding_function
 import requests
 import re
+from backend.database_paths import VECTORSTORE_PATH, LIGHT_RAG_DB_DIR
 
 # Configure logging
 logging.basicConfig(
@@ -26,7 +47,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DATA_PATH = "data"
-VECTORSTORE_PATH = "vectorstore"
 LM_STUDIO_API_URL = "http://localhost:1234/v1/chat/completions"
 
 class LMStudioLLM(LLM):
@@ -136,9 +156,16 @@ def create_vectorstore(chunks: List[Document]):
     vectorstore = FAISS.from_documents(chunks, embeddings)
     
     # Save the vectorstore
-    os.makedirs(VECTORSTORE_PATH, exist_ok=True)
+    os.makedirs(LIGHT_RAG_DB_DIR, exist_ok=True)
     vectorstore.save_local(VECTORSTORE_PATH)
     logger.info(f"Vectorstore saved to {VECTORSTORE_PATH}")
+
+def clear_vectorstore():
+    """Clear the Light RAG database."""
+    if os.path.exists(LIGHT_RAG_DB_DIR):
+        for file in os.listdir(LIGHT_RAG_DB_DIR):
+            os.remove(os.path.join(LIGHT_RAG_DB_DIR, file))
+        logger.info("Cleared Light RAG database")
 
 def load_vectorstore():
     """Load the existing vectorstore."""

@@ -1,18 +1,21 @@
 """
-GraphRAG (Graph-based Retrieval Augmented Generation) Implementation
+Knowledge Augmented Graph (KAG) Implementation
 
-This module implements a graph-based approach to RAG that creates a directed graph structure
-from document chunks. The graph captures:
-1. Hierarchical relationships between documents and their chunks
-2. Section types (scenario, mitigation, impact, etc.)
+This module implements a knowledge graph-based approach to RAG that creates a directed graph
+structure from document chunks. The graph captures:
+1. Document hierarchy and relationships
+2. Section types and content categorization
 3. Code blocks and payloads
-4. Semantic relationships between chunks based on embeddings
+4. Semantic relationships between chunks
 
-The graph structure allows for:
-- Complex querying across related chunks
-- Understanding document structure and relationships
-- Finding similar content across different documents
-- Identifying patterns in security documentation
+The knowledge graph enables:
+- Semantic search across related content
+- Understanding document structure
+- Finding similar content
+- Pattern recognition in security documentation
+
+This implementation is similar to GraphRAG but with a focus on knowledge representation
+and semantic relationships.
 """
 
 import argparse
@@ -187,7 +190,7 @@ def split_documents(documents: List[Document]) -> List[Document]:
     
     return chunks
 
-def create_graph_structure(chunks: List[Document]) -> nx.DiGraph:
+def create_knowledge_graph(chunks: List[Document]) -> nx.DiGraph:
     """Create a directed graph structure from document chunks."""
     G = nx.DiGraph()
     
@@ -267,18 +270,26 @@ def save_graph(G: nx.DiGraph):
     with open(KAG_GRAPH_PATH, "w") as f:
         json.dump(graph_data, f, indent=2)
     
-    logger.info(f"Graph saved to {KAG_GRAPH_PATH}")
+    logger.info(f"Saved knowledge graph to {KAG_GRAPH_PATH}")
 
 def clear_graph():
-    """Clear the graph database."""
+    """Clear the KAG database."""
     if os.path.exists(KAG_DB_DIR):
         for file in os.listdir(KAG_DB_DIR):
-            os.remove(os.path.join(KAG_DB_DIR, file))
-        logger.info("Graph database cleared")
+            file_path = os.path.join(KAG_DB_DIR, file)
+            try:
+                if os.path.isfile(file_path):
+                    os.unlink(file_path)
+                elif os.path.isdir(file_path):
+                    import shutil
+                    shutil.rmtree(file_path)
+            except Exception as e:
+                logger.error(f"Error deleting {file_path}: {str(e)}")
+        logger.info(f"Cleared KAG database at {KAG_DB_DIR}")
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--reset", action="store_true", help="Reset the graph database.")
+    parser = argparse.ArgumentParser(description="Populate the knowledge graph database")
+    parser.add_argument("--reset", action="store_true", help="Reset the database before populating")
     args = parser.parse_args()
     
     if args.reset:
@@ -295,9 +306,9 @@ def main():
             logger.error("No valid chunks created")
             return
             
-        G = create_graph_structure(chunks)
+        G = create_knowledge_graph(chunks)
         save_graph(G)
-        logger.info("Graph database population completed successfully")
+        logger.info("Knowledge graph creation completed successfully")
         
     except Exception as e:
         logger.error(f"Error in main process: {str(e)}")

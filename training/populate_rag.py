@@ -16,6 +16,7 @@ from langchain.schema.document import Document
 from get_embedding_function import get_embedding_function
 from langchain_chroma import Chroma
 import re
+from backend.database_paths import CHROMA_PATH, RAG_DB_DIR
 
 # Configure logging
 logging.basicConfig(
@@ -24,7 +25,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-CHROMA_PATH = "chroma"
 DATA_PATH = "data"
 
 def preprocess_text(text: str) -> str:
@@ -215,8 +215,10 @@ def calculate_chunk_ids(chunks):
     return chunks
 
 def clear_database():
-    if os.path.exists(CHROMA_PATH):
-        shutil.rmtree(CHROMA_PATH)
+    """Clear the RAG database."""
+    if os.path.exists(RAG_DB_DIR):
+        shutil.rmtree(RAG_DB_DIR)
+        logger.info("Cleared RAG database")
 
 def main():
     parser = argparse.ArgumentParser()
