@@ -5,13 +5,17 @@ import networkx as nx
 from langchain_chroma import Chroma
 from langchain.prompts import ChatPromptTemplate
 from sklearn.metrics.pairwise import cosine_similarity
-from training.light_rag import load_vectorstore, create_qa_chain
-from backend.database_paths import CHROMA_PATH, KAG_GRAPH_PATH
-
+from langchain_community.vectorstores import FAISS
+from langchain.chains import RetrievalQA
+from langchain.llms.base import LLM
+from training.populate_lightrag import LMStudioLLM, load_vectorstore, create_qa_chain
+from backend.database_paths import (
+    CHROMA_PATH, 
+    KAG_GRAPH_PATH,
+    GRAPHRAG_GRAPH_PATH,
+    VECTORSTORE_PATH
+)
 from get_embedding_function import get_embedding_function
-
-CHROMA_PATH = "chroma"
-GRAPH_PATH = "graphrag/graph.json"
 
 # Template that restricts the model to only use the provided context
 RAG_ONLY_TEMPLATE = """
@@ -146,7 +150,7 @@ def query_graph(query_text: str):
     """Query using the graph structure with semantic search."""
     # Load the graph
     try:
-        with open(GRAPH_PATH, 'r') as f:
+        with open(GRAPHRAG_GRAPH_PATH, 'r') as f:
             graph_data = json.load(f)
         
         G = nx.DiGraph()
@@ -213,7 +217,7 @@ def query_graph(query_text: str):
 def query_lightrag(query_text: str):
     """Query using the light RAG implementation."""
     try:
-        # Load the vectorstore and create QA chain
+        # Load vectorstore and create QA chain using helper functions
         vectorstore = load_vectorstore()
         qa_chain = create_qa_chain(vectorstore)
         

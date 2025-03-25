@@ -192,16 +192,33 @@ def split_documents(documents: List[Document]) -> List[Document]:
 
 def create_knowledge_graph(chunks: List[Document]) -> nx.DiGraph:
     """Create a directed graph structure from document chunks."""
-    G = nx.DiGraph()
+    # Try to load existing graph
+    if os.path.exists(KAG_GRAPH_PATH):
+        logger.info("Loading existing knowledge graph")
+        with open(KAG_GRAPH_PATH, 'r') as f:
+            graph_data = json.load(f)
+            G = nx.DiGraph()
+            for node in graph_data['nodes']:
+                G.add_node(node['id'], **node['data'])
+            for edge in graph_data['edges']:
+                G.add_edge(edge['source'], edge['target'], **edge['data'])
+    else:
+        logger.info("Creating new knowledge graph")
+        G = nx.DiGraph()
     
-    # Get embeddings for all chunks
+    # Get embeddings for new chunks
     embedding_function = get_embedding_function()
     chunk_texts = [chunk.page_content for chunk in chunks]
     chunk_embeddings = embedding_function.embed_documents(chunk_texts)
     
-    # Add document nodes with embeddings
-    for chunk, embedding in tqdm(zip(chunks, chunk_embeddings), desc="Creating graph structure"):
+    # Add new document nodes with embeddings
+    for chunk, embedding in tqdm(zip(chunks, chunk_embeddings), desc="Adding new chunks to graph"):
         chunk_id = f"{chunk.metadata.get('source', 'unknown')}:{chunk.metadata.get('page', 0)}"
+        
+        # Skip if node already exists
+        if G.has_node(chunk_id):
+            logger.info(f"Skipping existing chunk: {chunk_id}")
+            continue
         
         # Add chunk node with metadata and embedding
         G.add_node(chunk_id, 
@@ -235,7 +252,7 @@ def create_knowledge_graph(chunks: List[Document]) -> nx.DiGraph:
             G.add_node(payload_node_id, type="payload")
             G.add_edge(chunk_id, payload_node_id, relation="contains_payload")
     
-    # Add semantic relationships between chunks
+    # Add semantic relationships between new chunks and existing chunks
     chunk_nodes = [n for n, d in G.nodes(data=True) if d.get('type') == 'chunk']
     chunk_embeddings = [G.nodes[n]['embedding'] for n in chunk_nodes]
     

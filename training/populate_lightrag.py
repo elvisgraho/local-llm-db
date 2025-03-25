@@ -38,6 +38,7 @@ from get_embedding_function import get_embedding_function
 import requests
 import re
 from backend.database_paths import VECTORSTORE_PATH, LIGHT_RAG_DB_DIR
+import argparse
 
 # Configure logging
 logging.basicConfig(
@@ -153,7 +154,19 @@ def split_documents(documents: List[Document]) -> List[Document]:
 def create_vectorstore(chunks: List[Document]):
     """Create and save a FAISS vectorstore from document chunks."""
     embeddings = get_embedding_function()
-    vectorstore = FAISS.from_documents(chunks, embeddings)
+    
+    # Try to load existing vectorstore
+    if os.path.exists(VECTORSTORE_PATH):
+        logger.info("Loading existing vectorstore")
+        vectorstore = FAISS.load_local(VECTORSTORE_PATH, embeddings)
+        
+        # Add new chunks
+        logger.info(f"Adding {len(chunks)} new chunks to existing vectorstore")
+        vectorstore.add_documents(chunks)
+    else:
+        # Create new vectorstore
+        logger.info("Creating new vectorstore")
+        vectorstore = FAISS.from_documents(chunks, embeddings)
     
     # Save the vectorstore
     os.makedirs(LIGHT_RAG_DB_DIR, exist_ok=True)
@@ -197,7 +210,15 @@ def query_documents(query: str, qa_chain) -> str:
         return "Sorry, I encountered an error while processing your query."
 
 def main():
-    """Main function to demonstrate usage."""
+    """Main function to populate the LightRAG database."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reset", action="store_true", help="Reset the database before populating")
+    args = parser.parse_args()
+    
+    if args.reset:
+        clear_vectorstore()
+        logger.info("Cleared existing LightRAG database")
+
     try:
         # Load and process documents
         documents = load_documents()
@@ -210,21 +231,12 @@ def main():
             logger.error("No valid chunks created")
             return
             
-        # Create and save vectorstore
+        # Create or update vectorstore
         create_vectorstore(chunks)
-        
-        # Load vectorstore and create QA chain
-        vectorstore = load_vectorstore()
-        qa_chain = create_qa_chain(vectorstore)
-        
-        # Example query
-        query = "What are the main security considerations?"
-        answer = query_documents(query, qa_chain)
-        print(f"\nQuery: {query}")
-        print(f"Answer: {answer}")
+        logger.info("Successfully populated LightRAG database")
         
     except Exception as e:
-        logger.error(f"Error in main process: {str(e)}")
+        logger.error(f"Error in database population: {str(e)}")
         raise
 
 if __name__ == "__main__":
