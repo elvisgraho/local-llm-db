@@ -7,4 +7,4 @@ data/
 __pycache__/
 pdfs/
 training/data
-training/database/
+training/databases/
