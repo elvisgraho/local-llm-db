@@ -23,24 +23,19 @@ import logging
 from typing import List, Dict, Any
 from pathlib import Path
 from tqdm import tqdm
-from langchain_community.document_loaders import (
-    PyPDFDirectoryLoader,
-    TextLoader,
-    UnstructuredMarkdownLoader,
-    DirectoryLoader
-)
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
 from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from langchain.llms.base import LLM
 from get_embedding_function import get_embedding_function
-from extract_metadata_llm import extract_metadata_llm
+from extract_metadata_llm import extract_metadata_llm, extract_metadata
 import requests
 import re
 from backend.database_paths import VECTORSTORE_PATH, LIGHT_RAG_DB_DIR
-from extract_metadata_llm import extract_metadata
 from backend.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
+from config import DATA_DIR
+from load_documents import process_single_file
 import argparse
 
 # Configure logging
@@ -50,142 +45,91 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DATA_PATH = "data"
-LM_STUDIO_API_URL = "http://localhost:1234/v1/chat/completions"
-
-class LMStudioLLM(LLM):
-    """Custom LLM class to use LM Studio's local API."""
-    
-    def _clean_response(self, response: str) -> str:
-        """Clean the response by removing reasoning artifacts and extra whitespace."""
-        # Remove <think> tags and their content
-        response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
-        # Remove any other potential reasoning artifacts
-        response = re.sub(r'<reason>.*?</reason>', '', response, flags=re.DOTALL)
-        response = re.sub(r'<thought>.*?</thought>', '', response, flags=re.DOTALL)
-        # Clean up extra whitespace
-        response = re.sub(r'\s+', ' ', response)
-        return response.strip()
-    
-    def _call(self, prompt: str, stop: List[str] = None) -> str:
-        headers = {"Content-Type": "application/json"}
-        payload = {
-            "model": LOCAL_MAIN_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7
-        }
-        
-        try:
-            response = requests.post(LOCAL_LLM_API_URL, json=payload, headers=headers)
-            response_data = response.json()
-            raw_response = response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            return self._clean_response(raw_response)
-        except Exception as e:
-            logger.error(f"Error calling LM Studio API: {str(e)}")
-            return "Sorry, I encountered an error while processing your query."
-    
-    @property
-    def _llm_type(self) -> str:
-        return "lm_studio"
-
-def preprocess_text(text: str) -> str:
-    """Clean and normalize text before chunking."""
-    text = re.sub(r'\s+', ' ', text)
-    text = text.replace('\r\n', '\n')
-    text = re.sub(r'\n\s*\n', '\n\n', text)
-    return text.strip()
-
-def load_documents() -> List[Document]:
-    """Load documents from various file types."""
-    loaders = {
-        "**/*.pdf": PyPDFDirectoryLoader,
-        "**/*.txt": TextLoader,
-        "**/*.md": UnstructuredMarkdownLoader
-    }
-    
-    all_documents = []
-    for glob_pattern, loader_class in loaders.items():
-        try:
-            loader = DirectoryLoader(
-                DATA_PATH,
-                glob=glob_pattern,
-                loader_class=loader_class,
-                show_progress=True
-            )
-            documents = loader.load()
-            
-            for doc in documents:
-                doc.page_content = preprocess_text(doc.page_content)
-                if len(doc.page_content.strip()) >= 10:  # Basic validation
-                    all_documents.append(doc)
-            
-            logger.info(f"Loaded {len(documents)} documents from {glob_pattern}")
-        except Exception as e:
-            logger.error(f"Error loading {glob_pattern}: {str(e)}")
-    
-    return all_documents
-
-def split_documents(documents: List[Document]) -> List[Document]:
-    """Split documents into chunks."""
+def split_document(doc: Document) -> List[Document]:
+    """Split a single document into chunks with improved parameters for security documentation."""
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
+        chunk_size=1500,
         chunk_overlap=200,
         length_function=len,
+        is_separator_regex=False,
         separators=[
-            "\n\n## ",
-            "\n\n### ",
-            "\n\n#### ",
-            "\n```",
-            "\n\n",
-            "\n",
+            "\n\n## ",  # Main headers
+            "\n\n### ",  # Subheaders
+            "\n\n#### ",  # Sub-subheaders
+            "\n```",  # Code blocks
+            "\n\n",     # Double newlines
+            "\n",       # Single newlines
             "\n**",
-            " ",
-            ""
+            " ",        # Spaces
+            ""         # No separator
         ],
+        keep_separator=True
     )
     
-    chunks = []
-    for doc in tqdm(documents, desc="Splitting documents"):
-        try:
-            doc_chunks = text_splitter.split_documents([doc])
+    try:
+        # Pre-process security-specific content
+        content = doc.page_content
+        
+        # Normalize bullet points and numbered lists
+        content = re.sub(r'^\s*[-•]\s*', '• ', content, flags=re.MULTILINE)
+        content = re.sub(r'^\s*(\d+\.)\s*', r'\1 ', content, flags=re.MULTILINE)
+        
+        # Ensure consistent formatting for code blocks
+        content = re.sub(r'```(\w+)?\n', r'```\n', content)
+        
+        # Update document content
+        doc.page_content = content
+        
+        # Split the document
+        doc_chunks = text_splitter.split_documents([doc])
+        
+        # Process each chunk with LLM metadata extraction
+        processed_chunks = []
+        for chunk in doc_chunks:
+            # Extract LLM-based metadata
+            llm_metadata = extract_metadata_llm(chunk.page_content)
+            chunk.metadata.update(llm_metadata)
             
-            # Process each chunk with LLM metadata extraction
-            for chunk in doc_chunks:
-                # Extract LLM-based metadata
-                llm_metadata = extract_metadata_llm(chunk.page_content)
-                chunk.metadata.update(llm_metadata)
-                
-                # Add file-based metadata
-                chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
-                
-                chunks.append(chunk)
-                
-        except Exception as e:
-            logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
-    
-    return chunks
+            # Add file-based metadata
+            chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
+            
+            processed_chunks.append(chunk)
+            
+        return processed_chunks
+            
+    except Exception as e:
+        logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
+        return []
 
-def create_vectorstore(chunks: List[Document]):
-    """Create and save a FAISS vectorstore from document chunks."""
+def process_document(doc: Document) -> None:
+    """Process a single document and update the vectorstore."""
     embeddings = get_embedding_function()
     
-    # Try to load existing vectorstore
-    if os.path.exists(VECTORSTORE_PATH):
-        logger.info("Loading existing vectorstore")
-        vectorstore = FAISS.load_local(VECTORSTORE_PATH, embeddings)
-        
-        # Add new chunks
-        logger.info(f"Adding {len(chunks)} new chunks to existing vectorstore")
-        vectorstore.add_documents(chunks)
-    else:
-        # Create new vectorstore
-        logger.info("Creating new vectorstore")
+    # Split document into chunks
+    chunks = split_document(doc)
+    if not chunks:
+        logger.warning(f"No valid chunks created for document: {doc.metadata.get('source', 'unknown')}")
+        return
+    
+    # Initialize or update vectorstore
+    try:
+        if os.path.exists(VECTORSTORE_PATH):
+            logger.info("Loading existing vectorstore")
+            vectorstore = FAISS.load_local(VECTORSTORE_PATH, embeddings)
+        else:
+            logger.info("Creating new vectorstore")
+            vectorstore = FAISS.from_documents(chunks, embeddings)
+    except Exception as e:
+        logger.warning(f"Failed to load existing vectorstore: {str(e)}")
         vectorstore = FAISS.from_documents(chunks, embeddings)
     
-    # Save the vectorstore
+    # Add new chunks to vectorstore
+    vectorstore.add_documents(chunks)
+    
+    # Save after each document processing
     os.makedirs(LIGHT_RAG_DB_DIR, exist_ok=True)
     vectorstore.save_local(VECTORSTORE_PATH)
-    logger.info(f"Vectorstore saved to {VECTORSTORE_PATH}")
+    logger.info(f"Updated vectorstore saved to {VECTORSTORE_PATH}")
 
 def clear_vectorstore():
     """Clear the Light RAG database."""
@@ -194,37 +138,28 @@ def clear_vectorstore():
             os.remove(os.path.join(LIGHT_RAG_DB_DIR, file))
         logger.info("Cleared Light RAG database")
 
-def load_vectorstore():
-    """Load the existing vectorstore."""
-    embeddings = get_embedding_function()
-    vectorstore = FAISS.load_local(VECTORSTORE_PATH, embeddings)
-    return vectorstore
-
-def create_qa_chain(vectorstore):
-    """Create a question-answering chain using the vectorstore."""
-    llm = LMStudioLLM()
-    
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=vectorstore.as_retriever(
-            search_kwargs={"k": 3}
-        )
-    )
-    
-    return qa_chain
-
-def query_documents(query: str, qa_chain) -> str:
-    """Query the documents using the QA chain."""
+def process_file_to_vectorstore(file_path: Path) -> None:
+    """Process a single file and update the vectorstore."""
     try:
-        response = qa_chain.invoke({"query": query})
-        return response["result"]
+        # Load documents from the file
+        documents = process_single_file(file_path)
+        if not documents:
+            logger.warning(f"No valid documents found in file: {file_path.name}")
+            return
+            
+        # Process each document
+        for doc in documents:
+            try:
+                process_document(doc)
+            except Exception as e:
+                logger.error(f"Error processing document in {file_path.name}: {str(e)}")
+                continue
+                
     except Exception as e:
-        logger.error(f"Error querying documents: {str(e)}")
-        return "Sorry, I encountered an error while processing your query."
+        logger.error(f"Error processing file {file_path.name}: {str(e)}")
 
 def main():
-    """Main function to populate the LightRAG database."""
+    """Main function to populate the LightRAG database file by file."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--reset", action="store_true", help="Reset the database before populating")
     args = parser.parse_args()
@@ -234,20 +169,41 @@ def main():
         logger.info("Cleared existing LightRAG database")
 
     try:
-        # Load and process documents
-        documents = load_documents()
-        if not documents:
-            logger.error("No valid documents found to process")
+        # Get list of all files to process
+        all_files = []
+        for ext in {'.pdf', '.txt', '.md'}:
+            all_files.extend(list(DATA_DIR.glob(f"**/*{ext}")))
+        
+        if not all_files:
+            logger.error("No supported files found to process")
             return
             
-        chunks = split_documents(documents)
-        if not chunks:
-            logger.error("No valid chunks created")
-            return
+        total_files = len(all_files)
+        processed_files = 0
+        failed_files = 0
             
-        # Create or update vectorstore
-        create_vectorstore(chunks)
-        logger.info("Successfully populated LightRAG database")
+        # Process files one by one
+        for file_path in tqdm(all_files, desc="Processing files", total=total_files):
+            try:
+                logger.info(f"Processing file {processed_files + 1}/{total_files}: {file_path.name}")
+                process_file_to_vectorstore(file_path)
+                processed_files += 1
+                    
+            except Exception as e:
+                logger.error(f"Error processing file {file_path.name}: {str(e)}")
+                failed_files += 1
+                continue
+        
+        # Log final statistics
+        logger.info(f"LightRAG database population completed:")
+        logger.info(f"- Total files: {total_files}")
+        logger.info(f"- Successfully processed files: {processed_files}")
+        logger.info(f"- Failed files: {failed_files}")
+        
+        if processed_files == 0:
+            logger.error("No files were successfully processed")
+        else:
+            logger.info("Successfully populated LightRAG database")
         
     except Exception as e:
         logger.error(f"Error in database population: {str(e)}")

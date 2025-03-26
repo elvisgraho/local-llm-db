@@ -1,23 +1,40 @@
-import argparse
+"""
+RAG (Retrieval Augmented Generation) Implementation
+
+This module implements a standard RAG approach using Chroma vectorstore for document
+retrieval. Key features:
+1. Document chunking and embedding
+2. Vector similarity search
+3. Integration with LM Studio for local LLM inference
+4. Basic question-answering capabilities
+
+The standard implementation provides:
+- Efficient document retrieval
+- Semantic search capabilities
+- Simple query interface
+- Integration with local LLM
+"""
+
 import os
-import shutil
 import logging
 from typing import List, Dict, Any
 from pathlib import Path
 from tqdm import tqdm
-from langchain_community.document_loaders import (
-    PyPDFDirectoryLoader,
-    TextLoader,
-    UnstructuredMarkdownLoader,
-    DirectoryLoader
-)
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
+from langchain_community.vectorstores import Chroma
+from langchain.chains import RetrievalQA
+from langchain.llms.base import LLM
 from get_embedding_function import get_embedding_function
-from langchain_chroma import Chroma
-import re
-from backend.database_paths import CHROMA_PATH, RAG_DB_DIR
 from extract_metadata_llm import extract_metadata_llm
+import requests
+import re
+from backend.database_paths import VECTORSTORE_PATH, RAG_DB_DIR
+from backend.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
+from config import DATA_DIR
+from load_documents import load_documents, extract_metadata, process_single_file
+import argparse
+from langchain.document_loaders import PyPDFLoader, TextLoader, UnstructuredMarkdownLoader
 
 # Configure logging
 logging.basicConfig(
@@ -26,71 +43,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DATA_PATH = "data"
-
-def preprocess_text(text: str) -> str:
-    """Clean and normalize text before chunking."""
-    # Remove excessive whitespace
-    text = re.sub(r'\s+', ' ', text)
-    # Normalize line endings
-    text = text.replace('\r\n', '\n')
-    # Remove empty lines
-    text = re.sub(r'\n\s*\n', '\n\n', text)
-    return text.strip()
-
-def extract_metadata(file_path: str) -> Dict[str, Any]:
-    """Extract additional metadata from file path and content."""
-    path = Path(file_path)
-    return {
-        "file_type": path.suffix.lower(),
-        "file_name": path.name,
-        "directory": str(path.parent),
-        "created_date": os.path.getctime(file_path),
-        "modified_date": os.path.getmtime(file_path)
-    }
-
-def validate_document(doc: Document) -> bool:
-    """Validate document content and metadata."""
-    if not doc.page_content or len(doc.page_content.strip()) < 10:
-        logger.warning(f"Document {doc.metadata.get('source', 'unknown')} is too short or empty")
-        return False
-    return True
-
-def load_documents() -> List[Document]:
-    """Load documents from various file types."""
-    loaders = {
-        "**/*.pdf": PyPDFDirectoryLoader,
-        "**/*.txt": TextLoader,
-        "**/*.md": UnstructuredMarkdownLoader
-    }
-    
-    all_documents = []
-    for glob_pattern, loader_class in loaders.items():
-        try:
-            loader = DirectoryLoader(
-                DATA_PATH,
-                glob=glob_pattern,
-                loader_class=loader_class,
-                show_progress=True
-            )
-            documents = loader.load()
-            
-            # Preprocess and validate documents
-            for doc in documents:
-                doc.page_content = preprocess_text(doc.page_content)
-                if validate_document(doc):
-                    # Add additional metadata
-                    doc.metadata.update(extract_metadata(doc.metadata.get("source", "")))
-                    all_documents.append(doc)
-            
-            logger.info(f"Loaded {len(documents)} documents from {glob_pattern}")
-        except Exception as e:
-            logger.error(f"Error loading {glob_pattern}: {str(e)}")
-    
-    return all_documents
-
-def split_documents(documents: List[Document]) -> List[Document]:
-    """Split documents into chunks with improved parameters for security documentation."""
+def split_document(doc: Document) -> List[Document]:
+    """Split a single document into chunks with improved parameters for security documentation."""
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1500,
         chunk_overlap=200,
@@ -110,131 +64,145 @@ def split_documents(documents: List[Document]) -> List[Document]:
         keep_separator=True
     )
     
-    chunks = []
-    for doc in tqdm(documents, desc="Splitting documents"):
-        try:
-            # Pre-process security-specific content
-            content = doc.page_content
-            
-            # Normalize bullet points and numbered lists
-            content = re.sub(r'^\s*[-•]\s*', '• ', content, flags=re.MULTILINE)
-            content = re.sub(r'^\s*(\d+\.)\s*', r'\1 ', content, flags=re.MULTILINE)
-            
-            # Ensure consistent formatting for code blocks
-            content = re.sub(r'```(\w+)?\n', r'```\n', content)
-            
-            # Update document content
-            doc.page_content = content
-            
-            # Split the document
-            doc_chunks = text_splitter.split_documents([doc])
-            
-            # Process each chunk with LLM metadata extraction
-            for chunk in doc_chunks:
-                # Extract LLM-based metadata
-                llm_metadata = extract_metadata_llm(chunk.page_content)
-                chunk.metadata.update(llm_metadata)
-                
-                # Add file-based metadata
-                chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
-                
-                chunks.append(chunk)
-                
-        except Exception as e:
-            logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
-    
-    return chunks
-
-def add_to_chroma(chunks: List[Document]):
-    """Add documents to Chroma with improved error handling and progress tracking."""
     try:
-        embedding_function = get_embedding_function()
-        db = Chroma(
-            persist_directory=CHROMA_PATH,
-            embedding_function=embedding_function
-        )
-
-        chunks_with_ids = calculate_chunk_ids(chunks)
-        existing_items = db.get(include=[])
-        existing_ids = set(existing_items["ids"])
-        logger.info(f"Number of existing documents in DB: {len(existing_ids)}")
-
-        new_chunks = []
-        for chunk in tqdm(chunks_with_ids, desc="Processing chunks"):
-            if chunk.metadata["id"] not in existing_ids:
-                new_chunks.append(chunk)
-
-        if new_chunks:
-            logger.info(f"Adding {len(new_chunks)} new documents")
-            new_chunk_ids = [chunk.metadata["id"] for chunk in new_chunks]
-            db.add_documents(new_chunks, ids=new_chunk_ids)
-            db.persist()
-        else:
-            logger.info("No new documents to add")
-
+        # Pre-process security-specific content
+        content = doc.page_content
+        
+        # Normalize bullet points and numbered lists
+        content = re.sub(r'^\s*[-•]\s*', '• ', content, flags=re.MULTILINE)
+        content = re.sub(r'^\s*(\d+\.)\s*', r'\1 ', content, flags=re.MULTILINE)
+        
+        # Ensure consistent formatting for code blocks
+        content = re.sub(r'```(\w+)?\n', r'```\n', content)
+        
+        # Update document content
+        doc.page_content = content
+        
+        # Split the document
+        doc_chunks = text_splitter.split_documents([doc])
+        
+        # Process each chunk with LLM metadata extraction
+        processed_chunks = []
+        for chunk in doc_chunks:
+            # Extract LLM-based metadata
+            llm_metadata = extract_metadata_llm(chunk.page_content)
+            chunk.metadata.update(llm_metadata)
+            
+            # Add file-based metadata
+            chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
+            
+            processed_chunks.append(chunk)
+            
+        return processed_chunks
+            
     except Exception as e:
-        logger.error(f"Error adding documents to Chroma: {str(e)}")
-        raise
+        logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
+        return []
 
-def calculate_chunk_ids(chunks):
-
-    # This will create IDs like "data/monopoly.pdf:6:2"
-    # Page Source : Page Number : Chunk Index
-
-    last_page_id = None
-    current_chunk_index = 0
-
-    for chunk in chunks:
-        source = chunk.metadata.get("source")
-        page = chunk.metadata.get("page")
-        current_page_id = f"{source}:{page}"
-
-        # If the page ID is the same as the last one, increment the index.
-        if current_page_id == last_page_id:
-            current_chunk_index += 1
+def process_document(doc: Document) -> None:
+    """Process a single document and update the vectorstore."""
+    embeddings = get_embedding_function()
+    
+    # Split document into chunks
+    chunks = split_document(doc)
+    if not chunks:
+        logger.warning(f"No valid chunks created for document: {doc.metadata.get('source', 'unknown')}")
+        return
+    
+    # Initialize or update vectorstore
+    try:
+        if os.path.exists(VECTORSTORE_PATH) and os.path.exists(os.path.join(VECTORSTORE_PATH, "chroma.sqlite3")):
+            logger.info("Loading existing vectorstore")
+            vectorstore = Chroma.load_local(VECTORSTORE_PATH, embeddings)
         else:
-            current_chunk_index = 0
+            logger.info("Creating new vectorstore")
+            vectorstore = Chroma.from_documents(chunks, embeddings)
+    except Exception as e:
+        logger.warning(f"Failed to load existing vectorstore: {str(e)}")
+        vectorstore = Chroma.from_documents(chunks, embeddings)
+    
+    # Add new chunks to vectorstore
+    vectorstore.add_documents(chunks)
+    
+    # Save after each document processing
+    os.makedirs(RAG_DB_DIR, exist_ok=True)
+    vectorstore.save_local(VECTORSTORE_PATH)
+    logger.info(f"Updated vectorstore saved to {VECTORSTORE_PATH}")
 
-        # Calculate the chunk ID.
-        chunk_id = f"{current_page_id}:{current_chunk_index}"
-        last_page_id = current_page_id
-
-        # Add it to the page meta-data.
-        chunk.metadata["id"] = chunk_id
-
-    return chunks
-
-def clear_database():
+def clear_vectorstore():
     """Clear the RAG database."""
     if os.path.exists(RAG_DB_DIR):
-        shutil.rmtree(RAG_DB_DIR)
+        for file in os.listdir(RAG_DB_DIR):
+            os.remove(os.path.join(RAG_DB_DIR, file))
         logger.info("Cleared RAG database")
 
+def process_file_to_vectorstore(file_path: Path) -> None:
+    """Process a single file and update the vectorstore."""
+    try:
+        # Load documents from the file
+        documents = process_single_file(file_path)
+        if not documents:
+            logger.warning(f"No valid documents found in file: {file_path.name}")
+            return
+            
+        # Process each document
+        for doc in documents:
+            try:
+                process_document(doc)
+            except Exception as e:
+                logger.error(f"Error processing document in {file_path.name}: {str(e)}")
+                continue
+                
+    except Exception as e:
+        logger.error(f"Error processing file {file_path.name}: {str(e)}")
+
 def main():
+    """Main function to populate the RAG database file by file."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--reset", action="store_true", help="Reset the database.")
+    parser.add_argument("--reset", action="store_true", help="Reset the database before populating")
     args = parser.parse_args()
     
     if args.reset:
-        logger.info("Clearing Database")
-        clear_database()
+        clear_vectorstore()
+        logger.info("Cleared existing RAG database")
 
     try:
-        documents = load_documents()
-        if not documents:
+        # Get all documents using load_documents functionality
+        all_documents = load_documents()
+        
+        if not all_documents:
             logger.error("No valid documents found to process")
             return
             
-        chunks = split_documents(documents)
-        if not chunks:
-            logger.error("No valid chunks created")
-            return
+        total_docs = len(all_documents)
+        processed_docs = 0
+        failed_docs = 0
             
-        add_to_chroma(chunks)
-        logger.info("Database population completed successfully")
+        # Process documents one by one
+        for doc in tqdm(all_documents, desc="Processing documents", total=total_docs):
+            try:
+                logger.info(f"Processing document {processed_docs + 1}/{total_docs}")
+                process_document(doc)
+                processed_docs += 1
+                    
+            except Exception as e:
+                logger.error(f"Error processing document from {doc.metadata.get('source', 'unknown')}: {str(e)}")
+                failed_docs += 1
+                continue
+        
+        # Log final statistics
+        logger.info(f"RAG database population completed:")
+        logger.info(f"- Total documents: {total_docs}")
+        logger.info(f"- Successfully processed documents: {processed_docs}")
+        logger.info(f"- Failed documents: {failed_docs}")
+        
+        if processed_docs == 0:
+            logger.error("No documents were successfully processed")
+        else:
+            logger.info("Successfully populated RAG database")
         
     except Exception as e:
-        logger.error(f"Error in main process: {str(e)}")
+        logger.error(f"Error in database population: {str(e)}")
         raise
 
 if __name__ == "__main__":
