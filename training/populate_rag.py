@@ -17,24 +17,18 @@ The standard implementation provides:
 
 import os
 import logging
-from typing import List, Dict, Any
+from typing import List
 from pathlib import Path
 from tqdm import tqdm
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
-from langchain_community.vectorstores import Chroma
-from langchain.chains import RetrievalQA
-from langchain.llms.base import LLM
-from get_embedding_function import get_embedding_function
-from extract_metadata_llm import extract_metadata_llm
-import requests
+from langchain_chroma import Chroma
+from .get_embedding_function import get_embedding_function
+from .extract_metadata_llm import extract_metadata_llm
+from query.database_paths import CHROMA_PATH, RAG_DB_DIR
+from .load_documents import load_documents, extract_metadata, process_single_file
 import re
-from backend.database_paths import VECTORSTORE_PATH, RAG_DB_DIR
-from backend.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
-from config import DATA_DIR
-from load_documents import load_documents, extract_metadata, process_single_file
 import argparse
-from langchain.document_loaders import PyPDFLoader, TextLoader, UnstructuredMarkdownLoader
 
 # Configure logging
 logging.basicConfig(
@@ -56,8 +50,8 @@ def split_document(doc: Document) -> List[Document]:
             "\n\n#### ",  # Sub-subheaders
             "\n```",  # Code blocks
             "\n\n",     # Double newlines
-            "\n",       # Single newlines
             "\n**",
+            "\n",       # Single newlines
             " ",        # Spaces
             ""         # No separator
         ],
@@ -111,29 +105,41 @@ def process_document(doc: Document) -> None:
     
     # Initialize or update vectorstore
     try:
-        if os.path.exists(VECTORSTORE_PATH) and os.path.exists(os.path.join(VECTORSTORE_PATH, "chroma.sqlite3")):
+        vectorstore_path = str(CHROMA_PATH)
+        if os.path.exists(vectorstore_path) and os.path.exists(os.path.join(vectorstore_path, "chroma.sqlite3")):
             logger.info("Loading existing vectorstore")
-            vectorstore = Chroma.load_local(VECTORSTORE_PATH, embeddings)
+            vectorstore = Chroma(persist_directory=vectorstore_path, embedding_function=embeddings)
+            
+            # Check for duplicates before adding
+            existing_docs = vectorstore.get()
+            existing_sources = set(doc.metadata.get("source", "") for doc in existing_docs["documents"])
+            new_chunks = [chunk for chunk in chunks if chunk.metadata.get("source", "") not in existing_sources]
+            
+            if new_chunks:
+                vectorstore.add_documents(new_chunks)
+                logger.info(f"Added {len(new_chunks)} new chunks to vectorstore")
+            else:
+                logger.info("No new chunks to add - all chunks already exist in vectorstore")
         else:
             logger.info("Creating new vectorstore")
-            vectorstore = Chroma.from_documents(chunks, embeddings)
+            vectorstore = Chroma.from_documents(chunks, embeddings, persist_directory=vectorstore_path)
     except Exception as e:
         logger.warning(f"Failed to load existing vectorstore: {str(e)}")
-        vectorstore = Chroma.from_documents(chunks, embeddings)
-    
-    # Add new chunks to vectorstore
-    vectorstore.add_documents(chunks)
+        vectorstore = Chroma.from_documents(chunks, embeddings, persist_directory=vectorstore_path)
     
     # Save after each document processing
     os.makedirs(RAG_DB_DIR, exist_ok=True)
-    vectorstore.save_local(VECTORSTORE_PATH)
-    logger.info(f"Updated vectorstore saved to {VECTORSTORE_PATH}")
+    vectorstore.persist_directory = vectorstore_path  # Set persist directory
+    logger.info(f"Updated vectorstore saved to {vectorstore_path}")
 
 def clear_vectorstore():
     """Clear the RAG database."""
     if os.path.exists(RAG_DB_DIR):
-        for file in os.listdir(RAG_DB_DIR):
-            os.remove(os.path.join(RAG_DB_DIR, file))
+        for root, dirs, files in os.walk(RAG_DB_DIR, topdown=False):
+            for name in files:
+                os.remove(os.path.join(root, name))
+            for name in dirs:
+                os.rmdir(os.path.join(root, name))
         logger.info("Cleared RAG database")
 
 def process_file_to_vectorstore(file_path: Path) -> None:

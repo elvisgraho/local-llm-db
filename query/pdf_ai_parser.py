@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Set
 import PyPDF2
 from tqdm import tqdm
-from backend.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
+from global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
 
 # Configure logging
 logging.basicConfig(

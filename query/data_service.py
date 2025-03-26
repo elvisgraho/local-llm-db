@@ -5,23 +5,26 @@ This service handles loading and managing all data resources used by the RAG sys
 including vector stores, graphs, and embedding functions. It provides a singleton
 interface to access these resources efficiently.
 """
-
-import os
 import json
 import networkx as nx
-from typing import Optional, Dict, Any
+from typing import Optional
 from langchain_chroma import Chroma
 from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from langchain.llms.base import LLM
-from get_embedding_function import get_embedding_function, LMStudioEmbeddings
-from backend.database_paths import (
-    CHROMA_PATH,
-    KAG_GRAPH_PATH,
-    GRAPHRAG_GRAPH_PATH,
-    VECTORSTORE_PATH
-)
-from training.populate_lightrag import LMStudioLLM
+from query.database_paths import CHROMA_PATH, GRAPHRAG_GRAPH_PATH, KAG_GRAPH_PATH, VECTORSTORE_PATH
+from query.llm_service import get_llm_response
+from training.get_embedding_function import get_embedding_function, LMStudioEmbeddings
+
+class CustomLLM(LLM):
+    """Custom LLM class that uses our LLM service."""
+    
+    def _call(self, prompt: str, stop: Optional[list[str]] = None) -> str:
+        return get_llm_response(prompt)
+
+    @property
+    def _llm_type(self) -> str:
+        return "custom"
 
 class DataService:
     _instance = None
@@ -54,7 +57,7 @@ class DataService:
         """Get or initialize the Chroma database."""
         if self._chroma_db is None:
             self._chroma_db = Chroma(
-                persist_directory=CHROMA_PATH,
+                persist_directory=str(CHROMA_PATH),
                 embedding_function=self.embedding_function
             )
         return self._chroma_db
@@ -65,7 +68,8 @@ class DataService:
         if self._vectorstore is None:
             self._vectorstore = FAISS.load_local(
                 VECTORSTORE_PATH,
-                self.embedding_function
+                self.embedding_function,
+                allow_dangerous_deserialization=True  # Safe since we created the file ourselves
             )
         return self._vectorstore
 
@@ -101,7 +105,7 @@ class DataService:
     def qa_chain(self) -> RetrievalQA:
         """Get or initialize the QA chain."""
         if self._qa_chain is None:
-            llm = LMStudioLLM()
+            llm = CustomLLM()
             self._qa_chain = RetrievalQA.from_chain_type(
                 llm=llm,
                 chain_type="stuff",
@@ -119,6 +123,18 @@ class DataService:
         self._graphrag_graph = None
         self._kag_graph = None
         self._qa_chain = None
+
+def initialize_data_service():
+    """Initialize the data service by pre-loading resources."""
+    print("Initializing data service...")
+    # Access properties to trigger lazy loading
+    _ = data_service.embedding_function
+    _ = data_service.chroma_db
+    _ = data_service.vectorstore
+    _ = data_service.graphrag_graph
+    _ = data_service.kag_graph
+    _ = data_service.qa_chain
+    print("Data service initialized successfully!")
 
 # Create a singleton instance
 data_service = DataService() 

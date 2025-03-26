@@ -20,22 +20,17 @@ on speed and efficiency over complex relationship modeling.
 
 import os
 import logging
-from typing import List, Dict, Any
+from typing import List
 from pathlib import Path
 from tqdm import tqdm
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
 from langchain_community.vectorstores import FAISS
-from langchain.chains import RetrievalQA
-from langchain.llms.base import LLM
-from get_embedding_function import get_embedding_function
-from extract_metadata_llm import extract_metadata_llm, extract_metadata
-import requests
-import re
+from .get_embedding_function import get_embedding_function
+from .extract_metadata_llm import extract_metadata_llm
 from backend.database_paths import VECTORSTORE_PATH, LIGHT_RAG_DB_DIR
-from backend.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
-from config import DATA_DIR
-from load_documents import process_single_file
+from .load_documents import load_documents, process_single_file, extract_metadata
+import re
 import argparse
 
 # Configure logging
@@ -103,7 +98,8 @@ def split_document(doc: Document) -> List[Document]:
 
 def process_document(doc: Document) -> None:
     """Process a single document and update the vectorstore."""
-    embeddings = get_embedding_function()
+    # Get embedding function
+    embedding_function = get_embedding_function()
     
     # Split document into chunks
     chunks = split_document(doc)
@@ -113,18 +109,23 @@ def process_document(doc: Document) -> None:
     
     # Initialize or update vectorstore
     try:
-        if os.path.exists(VECTORSTORE_PATH):
+        # Check if the vectorstore directory exists and has the required files
+        if os.path.exists(VECTORSTORE_PATH) and os.path.exists(os.path.join(VECTORSTORE_PATH, "index.faiss")):
             logger.info("Loading existing vectorstore")
-            vectorstore = FAISS.load_local(VECTORSTORE_PATH, embeddings)
+            vectorstore = FAISS.load_local(
+                VECTORSTORE_PATH, 
+                embedding_function,
+                allow_dangerous_deserialization=True  # Safe since we created the file ourselves
+            )
+            # Add new chunks to existing vectorstore
+            vectorstore.add_documents(chunks)
         else:
             logger.info("Creating new vectorstore")
-            vectorstore = FAISS.from_documents(chunks, embeddings)
+            vectorstore = FAISS.from_documents(chunks, embedding_function)
     except Exception as e:
         logger.warning(f"Failed to load existing vectorstore: {str(e)}")
-        vectorstore = FAISS.from_documents(chunks, embeddings)
-    
-    # Add new chunks to vectorstore
-    vectorstore.add_documents(chunks)
+        # If loading fails, create a new vectorstore with current chunks
+        vectorstore = FAISS.from_documents(chunks, embedding_function)
     
     # Save after each document processing
     os.makedirs(LIGHT_RAG_DB_DIR, exist_ok=True)
@@ -169,39 +170,38 @@ def main():
         logger.info("Cleared existing LightRAG database")
 
     try:
-        # Get list of all files to process
-        all_files = []
-        for ext in {'.pdf', '.txt', '.md'}:
-            all_files.extend(list(DATA_DIR.glob(f"**/*{ext}")))
+        # Get all documents using load_documents functionality
+        all_documents = load_documents()
         
-        if not all_files:
-            logger.error("No supported files found to process")
+        if not all_documents:
+            logger.error("No valid documents found to process")
             return
             
-        total_files = len(all_files)
-        processed_files = 0
-        failed_files = 0
+        total_docs = len(all_documents)
+        processed_docs = 0
+        failed_docs = 0
             
         # Process files one by one
-        for file_path in tqdm(all_files, desc="Processing files", total=total_files):
+        for doc in tqdm(all_documents, desc="Processing documents", total=total_docs):
             try:
-                logger.info(f"Processing file {processed_files + 1}/{total_files}: {file_path.name}")
-                process_file_to_vectorstore(file_path)
-                processed_files += 1
+                logger.info(f"Processing document {processed_docs + 1}/{total_docs}")
+                # Use process_file_to_vectorstore for LightRAG implementation
+                process_file_to_vectorstore(Path(doc.metadata.get("source", "")))
+                processed_docs += 1
                     
             except Exception as e:
-                logger.error(f"Error processing file {file_path.name}: {str(e)}")
-                failed_files += 1
+                logger.error(f"Error processing document from {doc.metadata.get('source', 'unknown')}: {str(e)}")
+                failed_docs += 1
                 continue
         
         # Log final statistics
         logger.info(f"LightRAG database population completed:")
-        logger.info(f"- Total files: {total_files}")
-        logger.info(f"- Successfully processed files: {processed_files}")
-        logger.info(f"- Failed files: {failed_files}")
+        logger.info(f"- Total documents: {total_docs}")
+        logger.info(f"- Successfully processed documents: {processed_docs}")
+        logger.info(f"- Failed documents: {failed_docs}")
         
-        if processed_files == 0:
-            logger.error("No files were successfully processed")
+        if processed_docs == 0:
+            logger.error("No documents were successfully processed")
         else:
             logger.info("Successfully populated LightRAG database")
         

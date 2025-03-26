@@ -17,7 +17,7 @@
 </head>
 <body>
     <div class="app-container">
-        <aside class="sidebar">
+        <aside class="settings-sidebar">
             <div class="sidebar-header">
                 <h1>RAG Assistant</h1>
             </div>
@@ -44,8 +44,12 @@
                 </label>
                 <span class="toggle-label">Hybrid Mode</span>
             </div>
-            <div class="sidebar-footer">
-                <button class="new-chat-btn" onclick="clearChat()">
+            <div class="chat-history-section">
+                <h2>Chat History</h2>
+                <div class="chat-history-list" id="chatHistoryList">
+                    <!-- Chat history items will be inserted here -->
+                </div>
+                <button class="new-chat-btn" onclick="createNewChat()">
                     <span class="icon">+</span>
                     New Chat
                 </button>

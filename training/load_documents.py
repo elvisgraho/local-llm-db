@@ -15,11 +15,10 @@ from pathlib import Path
 from langchain_community.document_loaders import (
     PyPDFLoader,
     TextLoader,
-    UnstructuredMarkdownLoader,
-    DirectoryLoader
+    UnstructuredMarkdownLoader
 )
 from langchain.schema.document import Document
-from config import DATA_DIR
+from .config import DATA_DIR
 import re
 
 logger = logging.getLogger(__name__)
@@ -36,12 +35,16 @@ def extract_metadata(file_path: str) -> Dict[str, Any]:
     """
     try:
         path = Path(file_path)
-        return {
+        metadata = {
             "source": str(path),
             "file_name": path.name,
             "file_extension": path.suffix,
             "file_type": path.suffix[1:].upper() if path.suffix else "UNKNOWN"
         }
+        # Remove producer field if it exists
+        if "producer" in metadata:
+            del metadata["producer"]
+        return metadata
     except Exception as e:
         logger.error(f"Error extracting file metadata: {str(e)}")
         return {
@@ -77,21 +80,47 @@ def process_single_file(file_path: Path) -> List[Document]:
     try:
         if file_path.suffix.lower() == '.pdf':
             loader = PyPDFLoader(str(file_path))
+            documents = loader.load()
+            if not documents:
+                return []
+            
+            # Combine all pages into a single document
+            combined_content = "\n".join(doc.page_content for doc in documents)
+            combined_metadata = documents[0].metadata.copy()
+            combined_metadata.update(extract_metadata(str(file_path)))
+            # Remove page-specific metadata
+            combined_metadata.pop('page', None)
+            combined_metadata.pop('page_label', None)
+            combined_metadata.pop('total_pages', None)
+            
+            documents = [Document(
+                page_content=combined_content,
+                metadata=combined_metadata
+            )]
         elif file_path.suffix.lower() == '.txt':
             loader = TextLoader(str(file_path))
+            documents = loader.load()
         elif file_path.suffix.lower() == '.md':
             loader = UnstructuredMarkdownLoader(str(file_path))
+            documents = loader.load()
         else:
             logger.warning(f"Unsupported file type: {file_path.suffix}")
             return []
 
-        documents = loader.load()
         if not documents:
             return []
 
         # Preprocess and validate documents
         valid_docs = []
         for doc in documents:
+            # Remove producer field from metadata if it exists
+            if "producer" in doc.metadata:
+                del doc.metadata["producer"]
+            
+            # Remove creator field if it's longer than 60 characters
+            if "creator" in doc.metadata and len(doc.metadata["creator"]) > 60:
+                del doc.metadata["creator"]
+                
             doc.page_content = preprocess_text(doc.page_content)
             if validate_document(doc):
                 doc.metadata.update(extract_metadata(str(file_path)))
@@ -144,6 +173,6 @@ def load_documents() -> List[Document]:
     logger.info(f"- Total files: {total_files}")
     logger.info(f"- Successfully processed files: {processed_files}")
     logger.info(f"- Failed files: {failed_files}")
-    logger.info(f"- Total documents loaded: {len(all_documents)}")
+    logger.info(f"- Total chunks loaded: {len(all_documents)}")
     
     return all_documents 

@@ -1,24 +1,15 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from waitress import serve
-from query_data import query_rag, query_direct, query_hybrid, query_graph, optimize_query, query_lightrag, query_kag
-from backend.data_service import data_service
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from query.query_data import query_direct, query_graph, query_kag, query_lightrag, query_rag
+from query.llm_service import optimize_query
 import traceback
 
 app = Flask(__name__)
 CORS(app)
-
-def initialize_data_service():
-    """Initialize the data service by pre-loading resources."""
-    print("Initializing data service...")
-    # Access properties to trigger lazy loading
-    _ = data_service.embedding_function
-    _ = data_service.chroma_db
-    _ = data_service.vectorstore
-    _ = data_service.graphrag_graph
-    _ = data_service.kag_graph
-    _ = data_service.qa_chain
-    print("Data service initialized successfully!")
 
 @app.route('/query', methods=['POST'])
 def handle_query():
@@ -115,7 +106,7 @@ def clear_cache():
 
 if __name__ == '__main__':
     print("🚀 Initializing server...")
-    initialize_data_service()
+    #initialize_data_service()
     print("🚀 Server is running on http://127.0.0.1:5000/")
     print("Available endpoints:")
     print("- POST /query - Query the RAG system")

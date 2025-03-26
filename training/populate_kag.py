@@ -21,23 +21,18 @@ and semantic relationships.
 import argparse
 import os
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List
 from pathlib import Path
 from tqdm import tqdm
-import networkx as nx
-import json
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
-import re
-from datetime import datetime
 from get_embedding_function import get_embedding_function
-import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from backend.database_paths import KAG_GRAPH_PATH, KAG_DB_DIR
-from extract_metadata_llm import extract_metadata_llm, extract_metadata
-from config import DATA_DIR
-from load_documents import process_single_file
-
+from extract_metadata_llm import extract_metadata_llm
+from load_documents import load_documents, process_single_file, extract_metadata
+import re
+import argparse
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -90,8 +85,8 @@ def split_document(doc: Document) -> List[Document]:
             "\n\n#### ",  # Sub-subheaders
             "\n```",  # Code blocks
             "\n\n",     # Double newlines
-            "\n",       # Single newlines
             "\n**",
+            "\n",       # Single newlines
             " ",        # Spaces
             ""         # No separator
         ],
@@ -295,37 +290,34 @@ def main():
         logger.info("Cleared existing KAG database")
 
     try:
-        # Get all supported files
-        supported_extensions = {'.pdf', '.txt', '.md'}
-        all_files = []
-        for ext in supported_extensions:
-            all_files.extend(list(DATA_DIR.glob(f"**/*{ext}")))
+        # Get all documents using load_documents functionality
+        all_documents = load_documents()
         
-        if not all_files:
-            logger.error("No supported files found to process")
+        if not all_documents:
+            logger.error("No valid documents found to process")
             return
             
-        total_files = len(all_files)
-        processed_files = 0
-        failed_files = 0
+        total_docs = len(all_documents)
+        processed_docs = 0
+        failed_docs = 0
             
         # Process files one by one
-        for file_path in tqdm(all_files, desc="Processing files", total=total_files):
+        for doc in tqdm(all_documents, desc="Processing documents", total=total_docs):
             try:
-                logger.info(f"Processing file {processed_files + 1}/{total_files}: {file_path.name}")
-                process_file_to_graph(file_path)
+                logger.info(f"Processing file {processed_files + 1}/{total_docs}: {doc.name}")
+                process_file_to_graph(doc)
                 processed_files += 1
                     
             except Exception as e:
-                logger.error(f"Error processing file {file_path.name}: {str(e)}")
+                logger.error(f"Error processing file {doc.name}: {str(e)}")
                 failed_files += 1
                 continue
         
         # Log final statistics
         logger.info(f"KAG database population completed:")
-        logger.info(f"- Total files: {total_files}")
-        logger.info(f"- Successfully processed files: {processed_files}")
-        logger.info(f"- Failed files: {failed_files}")
+        logger.info(f"- Total documents: {total_docs}")
+        logger.info(f"- Successfully processed documents: {processed_docs}")
+        logger.info(f"- Failed documents: {failed_docs}")
         
         if processed_files == 0:
             logger.error("No files were successfully processed")

@@ -1,20 +1,17 @@
 import argparse
-import requests
-import json
 import networkx as nx
 from langchain.prompts import ChatPromptTemplate
 from sklearn.metrics.pairwise import cosine_similarity
-from backend.data_service import data_service
-from backend.templates import (
+from query.data_service import data_service
+from query.templates import (
     RAG_ONLY_TEMPLATE,
     KAG_TEMPLATE,
     HYBRID_TEMPLATE,
     DIRECT_TEMPLATE,
-    QUERY_OPTIMIZATION_TEMPLATE,
     LIGHTRAG_HYBRID_TEMPLATE,
     KAG_HYBRID_TEMPLATE
 )
-from backend.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
+from query.llm_service import get_llm_response, optimize_query
 
 def main():
     # Create CLI.
@@ -50,7 +47,7 @@ def query_direct(query_text: str):
     prompt_template = ChatPromptTemplate.from_template(DIRECT_TEMPLATE)
     prompt = prompt_template.format(question=query_text)
     
-    response_text = _get_llm_response(prompt)
+    response_text = get_llm_response(prompt)
     return {"text": response_text, "sources": []}
 
 def query_hybrid(query_text: str):
@@ -64,7 +61,7 @@ def query_hybrid(query_text: str):
     prompt = prompt_template.format(context=context_text, question=query_text)
     
     # Get response
-    response_text = _get_llm_response(prompt)
+    response_text = get_llm_response(prompt)
     sources = [doc.metadata.get("id", None) for doc, _score in results]
     
     return {"text": response_text, "sources": sources}
@@ -82,7 +79,7 @@ def query_rag(query_text: str, hybrid: bool = False):
     prompt = prompt_template.format(context=context_text, question=query_text)
 
     # Get response
-    response_text = _get_llm_response(prompt)
+    response_text = get_llm_response(prompt)
     sources = [doc.metadata.get("id", None) for doc, _score in results]
     return {"text": response_text, "sources": sources}
 
@@ -145,7 +142,7 @@ def query_graph(query_text: str, hybrid: bool = False):
     prompt_template = ChatPromptTemplate.from_template(template)
     prompt = prompt_template.format(context=context_text, question=query_text)
     
-    response_text = _get_llm_response(prompt)
+    response_text = get_llm_response(prompt)
     return {"text": response_text, "sources": list(sources)}
 
 def query_lightrag(query_text: str, hybrid: bool = False):
@@ -160,7 +157,7 @@ def query_lightrag(query_text: str, hybrid: bool = False):
         if hybrid:
             prompt_template = ChatPromptTemplate.from_template(LIGHTRAG_HYBRID_TEMPLATE)
             prompt = prompt_template.format(context=context_text, question=query_text)
-            response_text = _get_llm_response(prompt)
+            response_text = get_llm_response(prompt)
         else:
             # Use regular QA chain for non-hybrid mode
             response_text = data_service.qa_chain.invoke({"query": query_text})["result"]
@@ -264,38 +261,8 @@ def query_kag(query_text: str, hybrid: bool = False):
         question=query_text
     )
     
-    response_text = _get_llm_response(prompt)
+    response_text = get_llm_response(prompt)
     return {"text": response_text, "sources": list(sources)}
-
-def optimize_query(query_text: str) -> str:
-    """Optimize the query using a separate LLM call."""
-    prompt_template = ChatPromptTemplate.from_template(QUERY_OPTIMIZATION_TEMPLATE)
-    prompt = prompt_template.format(query=query_text)
-    
-    # Use a different model for optimization
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "model": LOCAL_MAIN_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3  # Lower temperature for more focused optimization
-    }
-    response = requests.post(LOCAL_LLM_API_URL, json=payload, headers=headers)
-    response_data = response.json()
-    optimized_query = response_data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-    
-    return optimized_query if optimized_query else query_text
-
-def _get_llm_response(prompt: str) -> str:
-    """Helper function to get response from LLM."""
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "model": LOCAL_MAIN_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7
-    }
-    response = requests.post(LOCAL_LLM_API_URL, json=payload, headers=headers)
-    response_data = response.json()
-    return response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
 if __name__ == "__main__":
     main()
