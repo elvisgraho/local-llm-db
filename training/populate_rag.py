@@ -17,6 +17,7 @@ from get_embedding_function import get_embedding_function
 from langchain_chroma import Chroma
 import re
 from backend.database_paths import CHROMA_PATH, RAG_DB_DIR
+from extract_metadata_llm import extract_metadata_llm
 
 # Configure logging
 logging.basicConfig(
@@ -128,25 +129,14 @@ def split_documents(documents: List[Document]) -> List[Document]:
             # Split the document
             doc_chunks = text_splitter.split_documents([doc])
             
-            # Post-process chunks to ensure they maintain context
+            # Process each chunk with LLM metadata extraction
             for chunk in doc_chunks:
-                # Add section context if available
-                if "Scenario:" in chunk.page_content:
-                    chunk.metadata["section_type"] = "scenario"
-                elif "Mitigation" in chunk.page_content:
-                    chunk.metadata["section_type"] = "mitigation"
-                elif "Impact:" in chunk.page_content:
-                    chunk.metadata["section_type"] = "impact"
-                elif "Steps to Reproduce:" in chunk.page_content:
-                    chunk.metadata["section_type"] = "reproduction"
-                elif "Proof of Concept:" in chunk.page_content:
-                    chunk.metadata["section_type"] = "poc"
+                # Extract LLM-based metadata
+                llm_metadata = extract_metadata_llm(chunk.page_content)
+                chunk.metadata.update(llm_metadata)
                 
-                # Add technical indicators
-                if "```" in chunk.page_content:
-                    chunk.metadata["has_code"] = True
-                if "Payload:" in chunk.page_content or "Example Payloads:" in chunk.page_content:
-                    chunk.metadata["has_payload"] = True
+                # Add file-based metadata
+                chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
                 
                 chunks.append(chunk)
                 

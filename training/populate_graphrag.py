@@ -37,6 +37,7 @@ from get_embedding_function import get_embedding_function
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from backend.database_paths import GRAPHRAG_GRAPH_PATH, GRAPHRAG_DB_DIR
+from extract_metadata_llm import add_metadata_to_document
 
 # Configure logging
 logging.basicConfig(
@@ -136,50 +137,8 @@ def split_documents(documents: List[Document]) -> List[Document]:
             doc_chunks = text_splitter.split_documents([doc])
             
             for chunk in doc_chunks:
-                content = chunk.page_content.lower()  # Convert to lowercase for case-insensitive matching
-                
-                # Define regex patterns for different section types
-                section_patterns = {
-                    "scenario": r"(?:^|\n)\s*(?:scenario|case|example|situation|context):",
-                    "mitigation": r"(?:^|\n)\s*(?:mitigation|solution|fix|remediation|prevention|how to prevent|how to fix):",
-                    "impact": r"(?:^|\n)\s*(?:impact|consequence|effect|severity|risk level|criticality):",
-                    "reproduction": r"(?:^|\n)\s*(?:steps? to reproduce|reproduction steps?|how to reproduce|repro steps?|reproduce):",
-                    "poc": r"(?:^|\n)\s*(?:proof of concept|poc|exploit|demonstration|example exploit):"
-                }
-                
-                # Check for section types using regex
-                for section_type, pattern in section_patterns.items():
-                    if re.search(pattern, content, re.IGNORECASE | re.MULTILINE):
-                        chunk.metadata["section_type"] = section_type
-                        break
-                
-                # Check for code blocks with more flexible patterns
-                code_patterns = [
-                    r"```[\s\S]*?```",  # Standard code blocks
-                    r"<code>[\s\S]*?</code>",  # HTML code blocks
-                    r"\[code\][\s\S]*?\[\/code\]",  # BBCode style
-                    r"^\s*[a-zA-Z0-9_]+\([^)]*\)\s*{[\s\S]*?}",  # Function definitions
-                    r"^\s*[a-zA-Z0-9_]+\s*=[\s\S]*?;",  # Variable assignments
-                ]
-                
-                chunk.metadata["has_code"] = any(
-                    re.search(pattern, content, re.MULTILINE) 
-                    for pattern in code_patterns
-                )
-                
-                # Check for payloads with more flexible patterns
-                payload_patterns = [
-                    r"(?:^|\n)\s*(?:payload|example payloads?|attack payload|malicious input):",
-                    r"(?:^|\n)\s*(?:example:|examples?:)",
-                    r"(?:^|\n)\s*(?:input:|inputs?:)",
-                    r"(?:^|\n)\s*(?:test data:|test cases?:)",
-                ]
-                
-                chunk.metadata["has_payload"] = any(
-                    re.search(pattern, content, re.IGNORECASE | re.MULTILINE) 
-                    for pattern in payload_patterns
-                )
-                
+                # Add LLM-extracted metadata to each chunk
+                chunk = add_metadata_to_document(chunk)
                 chunks.append(chunk)
                 
         except Exception as e:

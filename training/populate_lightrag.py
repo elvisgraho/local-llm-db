@@ -35,9 +35,12 @@ from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from langchain.llms.base import LLM
 from get_embedding_function import get_embedding_function
+from extract_metadata_llm import extract_metadata_llm
 import requests
 import re
 from backend.database_paths import VECTORSTORE_PATH, LIGHT_RAG_DB_DIR
+from extract_metadata_llm import extract_metadata
+from backend.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
 import argparse
 
 # Configure logging
@@ -67,13 +70,13 @@ class LMStudioLLM(LLM):
     def _call(self, prompt: str, stop: List[str] = None) -> str:
         headers = {"Content-Type": "application/json"}
         payload = {
-            "model": "deepseek-r1-distill-qwen-14b",
+            "model": LOCAL_MAIN_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.7
         }
         
         try:
-            response = requests.post(LM_STUDIO_API_URL, json=payload, headers=headers)
+            response = requests.post(LOCAL_LLM_API_URL, json=payload, headers=headers)
             response_data = response.json()
             raw_response = response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
             return self._clean_response(raw_response)
@@ -145,7 +148,18 @@ def split_documents(documents: List[Document]) -> List[Document]:
     for doc in tqdm(documents, desc="Splitting documents"):
         try:
             doc_chunks = text_splitter.split_documents([doc])
-            chunks.extend(doc_chunks)
+            
+            # Process each chunk with LLM metadata extraction
+            for chunk in doc_chunks:
+                # Extract LLM-based metadata
+                llm_metadata = extract_metadata_llm(chunk.page_content)
+                chunk.metadata.update(llm_metadata)
+                
+                # Add file-based metadata
+                chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
+                
+                chunks.append(chunk)
+                
         except Exception as e:
             logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
     

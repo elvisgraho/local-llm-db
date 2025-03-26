@@ -2,20 +2,9 @@ import argparse
 import requests
 import json
 import networkx as nx
-from langchain_chroma import Chroma
 from langchain.prompts import ChatPromptTemplate
 from sklearn.metrics.pairwise import cosine_similarity
-from langchain_community.vectorstores import FAISS
-from langchain.chains import RetrievalQA
-from langchain.llms.base import LLM
-from training.populate_lightrag import LMStudioLLM, load_vectorstore, create_qa_chain
-from backend.database_paths import (
-    CHROMA_PATH, 
-    KAG_GRAPH_PATH,
-    GRAPHRAG_GRAPH_PATH,
-    VECTORSTORE_PATH
-)
-from get_embedding_function import get_embedding_function
+from backend.data_service import data_service
 from backend.templates import (
     RAG_ONLY_TEMPLATE,
     KAG_TEMPLATE,
@@ -25,6 +14,7 @@ from backend.templates import (
     LIGHTRAG_HYBRID_TEMPLATE,
     KAG_HYBRID_TEMPLATE
 )
+from backend.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
 
 def main():
     # Create CLI.
@@ -65,10 +55,8 @@ def query_direct(query_text: str):
 
 def query_hybrid(query_text: str):
     """Query using both RAG context and the model's knowledge."""
-    # Prepare the DB and get relevant documents
-    embedding_function = get_embedding_function()
-    db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
-    results = db.similarity_search_with_score(query_text, k=5)
+    # Get relevant documents from Chroma
+    results = data_service.chroma_db.similarity_search_with_score(query_text, k=5)
     
     # Format context and create prompt
     context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in results])
@@ -83,12 +71,8 @@ def query_hybrid(query_text: str):
 
 def query_rag(query_text: str, hybrid: bool = False):
     """Query using only RAG context."""
-    # Prepare the DB.
-    embedding_function = get_embedding_function()
-    db = Chroma(persist_directory=CHROMA_PATH, embedding_function=embedding_function)
-
-    # Search the DB.
-    results = db.similarity_search_with_score(query_text, k=5)
+    # Get relevant documents from Chroma
+    results = data_service.chroma_db.similarity_search_with_score(query_text, k=5)
 
     context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in results])
     
@@ -104,16 +88,8 @@ def query_rag(query_text: str, hybrid: bool = False):
 
 def query_graph(query_text: str, hybrid: bool = False):
     """Query using the graph structure with semantic search."""
-    # Load the graph
     try:
-        with open(GRAPHRAG_GRAPH_PATH, 'r') as f:
-            graph_data = json.load(f)
-        
-        G = nx.DiGraph()
-        for node in graph_data['nodes']:
-            G.add_node(node['id'], **node['data'])
-        for edge in graph_data['edges']:
-            G.add_edge(edge['source'], edge['target'], **edge['data'])
+        G = data_service.graphrag_graph
     except Exception as e:
         print(f"Error loading graph: {e}")
         return {"text": "Error loading graph structure", "sources": []}
@@ -123,8 +99,7 @@ def query_graph(query_text: str, hybrid: bool = False):
     chunk_nodes = [n for n, d in G.nodes(data=True) if d.get('type') == 'chunk']
     
     # Get query embedding
-    embedding_function = get_embedding_function()
-    query_embedding = embedding_function.embed_query(query_text)
+    query_embedding = data_service.embedding_function.embed_query(query_text)
     
     for node in chunk_nodes:
         node_data = G.nodes[node]
@@ -176,11 +151,8 @@ def query_graph(query_text: str, hybrid: bool = False):
 def query_lightrag(query_text: str, hybrid: bool = False):
     """Query using the light RAG implementation."""
     try:
-        # Load vectorstore and create QA chain using helper functions
-        vectorstore = load_vectorstore()
-        
         # Get relevant documents
-        results = vectorstore.similarity_search_with_score(query_text, k=3)
+        results = data_service.vectorstore.similarity_search_with_score(query_text, k=3)
         context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in results])
         sources = [doc.metadata.get("source", "unknown") for doc, _score in results]
         
@@ -191,8 +163,7 @@ def query_lightrag(query_text: str, hybrid: bool = False):
             response_text = _get_llm_response(prompt)
         else:
             # Use regular QA chain for non-hybrid mode
-            qa_chain = create_qa_chain(vectorstore)
-            response_text = qa_chain.invoke({"query": query_text})["result"]
+            response_text = data_service.qa_chain.invoke({"query": query_text})["result"]
         
         return {"text": response_text, "sources": sources}
     except Exception as e:
@@ -202,22 +173,13 @@ def query_lightrag(query_text: str, hybrid: bool = False):
 def query_kag(query_text: str, hybrid: bool = False):
     """Query using Knowledge-Augmented Generation (KAG) approach."""
     try:
-        # Load the graph
-        with open(KAG_GRAPH_PATH, 'r') as f:
-            graph_data = json.load(f)
-        
-        G = nx.DiGraph()
-        for node in graph_data['nodes']:
-            G.add_node(node['id'], **node['data'])
-        for edge in graph_data['edges']:
-            G.add_edge(edge['source'], edge['target'], **edge['data'])
+        G = data_service.kag_graph
     except Exception as e:
         print(f"Error loading graph: {e}")
         return {"text": "Error loading knowledge graph", "sources": []}
 
     # Get query embedding
-    embedding_function = get_embedding_function()
-    query_embedding = embedding_function.embed_query(query_text)
+    query_embedding = data_service.embedding_function.embed_query(query_text)
     
     # Find relevant nodes based on semantic similarity
     relevant_nodes = []
@@ -287,7 +249,7 @@ def query_kag(query_text: str, hybrid: bool = False):
         traverse_graph(node)
 
     # Sort context parts by relevance
-    context_parts.sort(key=lambda x: cosine_similarity([query_embedding], [embedding_function.embed_query(x)])[0][0], reverse=True)
+    context_parts.sort(key=lambda x: cosine_similarity([query_embedding], [data_service.embedding_function.embed_query(x)])[0][0], reverse=True)
     
     # Format the final context
     context_text = "\n\n---\n\n".join(context_parts[:5])  # Take top 5 most relevant parts
@@ -311,14 +273,13 @@ def optimize_query(query_text: str) -> str:
     prompt = prompt_template.format(query=query_text)
     
     # Use a different model for optimization
-    api_url = "http://localhost:1234/v1/chat/completions"
     headers = {"Content-Type": "application/json"}
     payload = {
-        "model": "deepseek-r1-distill-qwen-14b",  # You can use a different model for optimization
+        "model": LOCAL_MAIN_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3  # Lower temperature for more focused optimization
     }
-    response = requests.post(api_url, json=payload, headers=headers)
+    response = requests.post(LOCAL_LLM_API_URL, json=payload, headers=headers)
     response_data = response.json()
     optimized_query = response_data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
     
@@ -326,15 +287,13 @@ def optimize_query(query_text: str) -> str:
 
 def _get_llm_response(prompt: str) -> str:
     """Helper function to get response from LLM."""
-    # ---- LM Studio API Call ----
-    api_url = "http://localhost:1234/v1/chat/completions"  # Change port if needed
     headers = {"Content-Type": "application/json"}
     payload = {
-        "model": "deepseek-r1-distill-qwen-14b",  # Replace with your actual model name
+        "model": LOCAL_MAIN_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7
     }
-    response = requests.post(api_url, json=payload, headers=headers)
+    response = requests.post(LOCAL_LLM_API_URL, json=payload, headers=headers)
     response_data = response.json()
     return response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
 

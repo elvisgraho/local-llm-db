@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Set
 import PyPDF2
 from tqdm import tqdm
+from backend.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
 
 # Configure logging
 logging.basicConfig(
@@ -65,15 +66,14 @@ def read_pdf(file_path: str) -> str:
 
 def get_llm_response(prompt: str) -> str:
     """Get response from local LLM."""
-    api_url = "http://localhost:1234/v1/chat/completions"
     headers = {"Content-Type": "application/json"}
     payload = {
-        "model": "deepseek-r1-distill-qwen-14b-uncensored",
+        "model": LOCAL_MAIN_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3
     }
     try:
-        response = requests.post(api_url, json=payload, headers=headers)
+        response = requests.post(LOCAL_LLM_API_URL, json=payload, headers=headers)
         response.raise_for_status()
         response_data = response.json()
         return response_data.get("choices", [{}])[0].get("message", {}).get("content", "")
