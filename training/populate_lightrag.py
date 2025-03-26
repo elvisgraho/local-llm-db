@@ -40,10 +40,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def split_document(doc: Document) -> List[Document]:
+def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: int = 1000) -> List[Document]:
     """Split a single document into chunks with improved parameters for security documentation."""
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1500,
+        chunk_size=max_chunk_size,
         chunk_overlap=200,
         length_function=len,
         is_separator_regex=False,
@@ -78,17 +78,26 @@ def split_document(doc: Document) -> List[Document]:
         # Split the document
         doc_chunks = text_splitter.split_documents([doc])
         
+        # Limit total number of chunks if document is too large
+        if len(doc_chunks) > max_total_chunks:
+            logger.warning(f"Document {doc.metadata.get('source', 'unknown')} has too many chunks ({len(doc_chunks)}). Limiting to {max_total_chunks} chunks.")
+            doc_chunks = doc_chunks[:max_total_chunks]
+        
         # Process each chunk with LLM metadata extraction
         processed_chunks = []
         for chunk in doc_chunks:
-            # Extract LLM-based metadata
-            llm_metadata = extract_metadata_llm(chunk.page_content)
-            chunk.metadata.update(llm_metadata)
-            
-            # Add file-based metadata
-            chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
-            
-            processed_chunks.append(chunk)
+            try:
+                # Extract LLM-based metadata
+                llm_metadata = extract_metadata_llm(chunk.page_content)
+                chunk.metadata.update(llm_metadata)
+                
+                # Add file-based metadata
+                chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
+                
+                processed_chunks.append(chunk)
+            except Exception as e:
+                logger.error(f"Error processing chunk from {doc.metadata.get('source', 'unknown')}: {str(e)}")
+                continue
             
         return processed_chunks
             
@@ -96,7 +105,7 @@ def split_document(doc: Document) -> List[Document]:
         logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
         return []
 
-def process_document(doc: Document) -> None:
+def process_document(doc: Document, batch_size: int = 100) -> None:
     """Process a single document and update the vectorstore."""
     # Get embedding function
     embedding_function = get_embedding_function()
@@ -117,11 +126,15 @@ def process_document(doc: Document) -> None:
                 embedding_function,
                 allow_dangerous_deserialization=True  # Safe since we created the file ourselves
             )
-            # Add new chunks to existing vectorstore
-            vectorstore.add_documents(chunks)
         else:
             logger.info("Creating new vectorstore")
-            vectorstore = FAISS.from_documents(chunks, embedding_function)
+            vectorstore = FAISS.from_documents([], embedding_function)
+            
+        # Process chunks in batches
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
+            vectorstore.add_documents(batch)
+            
     except Exception as e:
         logger.warning(f"Failed to load existing vectorstore: {str(e)}")
         # If loading fails, create a new vectorstore with current chunks
@@ -163,6 +176,7 @@ def main():
     """Main function to populate the LightRAG database file by file."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--reset", action="store_true", help="Reset the database before populating")
+    parser.add_argument("--batch-size", type=int, default=100, help="Batch size for processing documents")
     args = parser.parse_args()
     
     if args.reset:
@@ -180,25 +194,41 @@ def main():
         total_docs = len(all_documents)
         processed_docs = 0
         failed_docs = 0
+        total_chunks = 0
             
-        # Process files one by one
-        for doc in tqdm(all_documents, desc="Processing documents", total=total_docs):
-            try:
-                logger.info(f"Processing document {processed_docs + 1}/{total_docs}")
-                # Use process_file_to_vectorstore for LightRAG implementation
-                process_file_to_vectorstore(Path(doc.metadata.get("source", "")))
-                processed_docs += 1
+        # Process files one by one with progress tracking
+        with tqdm(total=total_docs, desc="Processing documents", unit="doc") as pbar:
+            for doc in all_documents:
+                try:
+                    # Process document and get number of chunks
+                    chunks = split_document(doc)
+                    if chunks:
+                        total_chunks += len(chunks)
+                        process_document(doc, batch_size=args.batch_size)
+                        processed_docs += 1
+                    else:
+                        failed_docs += 1
+                        logger.warning(f"No valid chunks created for document: {doc.metadata.get('source', 'unknown')}")
                     
-            except Exception as e:
-                logger.error(f"Error processing document from {doc.metadata.get('source', 'unknown')}: {str(e)}")
-                failed_docs += 1
-                continue
+                    # Update progress bar
+                    pbar.update(1)
+                    pbar.set_postfix({
+                        "processed": processed_docs,
+                        "failed": failed_docs,
+                        "total_chunks": total_chunks
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Error processing document from {doc.metadata.get('source', 'unknown')}: {str(e)}")
+                    failed_docs += 1
+                    continue
         
         # Log final statistics
         logger.info(f"LightRAG database population completed:")
         logger.info(f"- Total documents: {total_docs}")
         logger.info(f"- Successfully processed documents: {processed_docs}")
         logger.info(f"- Failed documents: {failed_docs}")
+        logger.info(f"- Total chunks created: {total_chunks}")
         
         if processed_docs == 0:
             logger.error("No documents were successfully processed")

@@ -21,6 +21,8 @@ and semantic relationships.
 import argparse
 import os
 import logging
+import json
+import networkx as nx
 from typing import List
 from pathlib import Path
 from tqdm import tqdm
@@ -32,7 +34,7 @@ from query.database_paths import KAG_GRAPH_PATH, KAG_DB_DIR
 from extract_metadata_llm import extract_metadata_llm
 from load_documents import load_documents, process_single_file, extract_metadata
 import re
-import argparse
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -130,119 +132,127 @@ def split_document(doc: Document) -> List[Document]:
 
 def process_document(doc: Document) -> None:
     """Process a single document and update the knowledge graph."""
-    # Load existing graph
-    graph = load_graph()
-    
-    # Split document into chunks
-    chunks = split_document(doc)
-    if not chunks:
-        logger.warning(f"No valid chunks created for document: {doc.metadata.get('source', 'unknown')}")
-        return
-    
-    # Get embeddings for new chunks
-    embedding_function = get_embedding_function()
-    chunk_texts = [chunk.page_content for chunk in chunks]
-    chunk_embeddings = embedding_function.embed_documents(chunk_texts)
-    
-    # Add new document nodes with embeddings
-    for chunk, embedding in zip(chunks, chunk_embeddings):
-        chunk_id = f"{chunk.metadata.get('source', 'unknown')}:{chunk.metadata.get('page', 0)}"
+    try:
+        # Load existing graph
+        graph = load_graph()
         
-        # Skip if node already exists
-        if graph.has_node(chunk_id):
-            logger.info(f"Skipping existing chunk: {chunk_id}")
-            continue
+        # Split document into chunks
+        chunks = split_document(doc)
+        if not chunks:
+            logger.warning(f"No valid chunks created for document: {doc.metadata.get('source', 'unknown')}")
+            return
         
-        # Get LLM metadata
-        llm_metadata = chunk.metadata.get("llm_metadata", {})
+        # Get embeddings for new chunks
+        try:
+            embedding_function = get_embedding_function()
+            chunk_texts = [chunk.page_content for chunk in chunks]
+            chunk_embeddings = embedding_function.embed_documents(chunk_texts)
+        except Exception as e:
+            logger.error(f"Error getting embeddings for document {doc.metadata.get('source', 'unknown')}: {str(e)}")
+            return
         
-        # Add chunk node with metadata and embedding
-        graph.add_node(chunk_id, 
-                      content=chunk.page_content,
-                      metadata={
-                          "source": chunk.metadata.get("source", "unknown"),
-                          "page": chunk.metadata.get("page", 0),
-                          "content_type": llm_metadata.get("content_type", "unknown"),
-                          "main_topic": llm_metadata.get("main_topic", "unknown"),
-                          "key_concepts": llm_metadata.get("key_concepts", ""),
-                          "has_code": llm_metadata.get("has_code", False),
-                          "has_instructions": llm_metadata.get("has_instructions", False),
-                          "is_tutorial": llm_metadata.get("is_tutorial", False),
-                          "is_reference": llm_metadata.get("is_reference", False),
-                          "section_type": llm_metadata.get("section_type", "unknown")
-                      },
-                      embedding=embedding,
-                      type="chunk")
+        # Add new document nodes with embeddings
+        for chunk, embedding in zip(chunks, chunk_embeddings):
+            chunk_id = f"{chunk.metadata.get('source', 'unknown')}:{chunk.metadata.get('page', 0)}"
+            
+            # Skip if node already exists
+            if graph.has_node(chunk_id):
+                logger.info(f"Skipping existing chunk: {chunk_id}")
+                continue
+            
+            # Get LLM metadata
+            llm_metadata = chunk.metadata.get("llm_metadata", {})
+            
+            # Add chunk node with metadata and embedding
+            graph.add_node(chunk_id, 
+                          content=chunk.page_content,
+                          metadata={
+                              "source": chunk.metadata.get("source", "unknown"),
+                              "page": chunk.metadata.get("page", 0),
+                              "content_type": llm_metadata.get("content_type", "unknown"),
+                              "main_topic": llm_metadata.get("main_topic", "unknown"),
+                              "key_concepts": llm_metadata.get("key_concepts", ""),
+                              "has_code": llm_metadata.get("has_code", False),
+                              "has_instructions": llm_metadata.get("has_instructions", False),
+                              "is_tutorial": llm_metadata.get("is_tutorial", False),
+                              "section_type": llm_metadata.get("section_type", "unknown")
+                          },
+                          embedding=embedding,
+                          type="chunk")
+            
+            # Add file node and connect to chunk
+            file_path = chunk.metadata.get('source', 'unknown')
+            if not graph.has_node(file_path):
+                graph.add_node(file_path, type="file")
+            graph.add_edge(file_path, chunk_id, relation="contains")
+            
+            # Add section type nodes and connect
+            section_type = llm_metadata.get("section_type")
+            if section_type:
+                if not graph.has_node(section_type):
+                    graph.add_node(section_type, type="section")
+                graph.add_edge(chunk_id, section_type, relation="belongs_to")
+            
+            # Add content type nodes and connect
+            content_type = llm_metadata.get("content_type")
+            if content_type:
+                if not graph.has_node(content_type):
+                    graph.add_node(content_type, type="content_type")
+                graph.add_edge(chunk_id, content_type, relation="has_type")
+            
+            # Add main topic nodes and connect
+            main_topic = llm_metadata.get("main_topic")
+            if main_topic:
+                if not graph.has_node(main_topic):
+                    graph.add_node(main_topic, type="topic")
+                graph.add_edge(chunk_id, main_topic, relation="about")
+            
+            # Add key concepts nodes and connect
+            key_concepts = llm_metadata.get("key_concepts", "").split(",")
+            for concept in key_concepts:
+                concept = concept.strip()
+                if concept:
+                    if not graph.has_node(concept):
+                        graph.add_node(concept, type="concept")
+                    graph.add_edge(chunk_id, concept, relation="relates_to")
+            
+            # Add code block nodes if present
+            if llm_metadata.get("has_code"):
+                code_node_id = f"{chunk_id}_code"
+                graph.add_node(code_node_id, type="code_block")
+                graph.add_edge(chunk_id, code_node_id, relation="contains_code")
+            
+            # Add instruction nodes if present
+            if llm_metadata.get("has_instructions"):
+                instruction_node_id = f"{chunk_id}_instructions"
+                graph.add_node(instruction_node_id, type="instructions")
+                graph.add_edge(chunk_id, instruction_node_id, relation="contains_instructions")
         
-        # Add file node and connect to chunk
-        file_path = chunk.metadata.get('source', 'unknown')
-        if not graph.has_node(file_path):
-            graph.add_node(file_path, type="file")
-        graph.add_edge(file_path, chunk_id, relation="contains")
+        # Add semantic relationships between new chunks and existing chunks
+        chunk_nodes = [n for n, d in graph.nodes(data=True) if d.get('type') == 'chunk']
+        chunk_embeddings = [graph.nodes[n]['embedding'] for n in chunk_nodes]
         
-        # Add section type nodes and connect
-        section_type = llm_metadata.get("section_type")
-        if section_type:
-            if not graph.has_node(section_type):
-                graph.add_node(section_type, type="section")
-            graph.add_edge(chunk_id, section_type, relation="belongs_to")
+        # Calculate similarity matrix
+        similarity_matrix = cosine_similarity(chunk_embeddings)
         
-        # Add content type nodes and connect
-        content_type = llm_metadata.get("content_type")
-        if content_type:
-            if not graph.has_node(content_type):
-                graph.add_node(content_type, type="content_type")
-            graph.add_edge(chunk_id, content_type, relation="has_type")
+        # Add edges for chunks with high semantic similarity
+        similarity_threshold = 0.7  # Adjust this threshold as needed
+        for i, node1 in enumerate(chunk_nodes):
+            for j, node2 in enumerate(chunk_nodes[i+1:], i+1):
+                if similarity_matrix[i, j] > similarity_threshold:
+                    graph.add_edge(node1, node2, 
+                                  relation="semantically_similar",
+                                  similarity=float(similarity_matrix[i, j]))
+                    graph.add_edge(node2, node1, 
+                                  relation="semantically_similar",
+                                  similarity=float(similarity_matrix[i, j]))
         
-        # Add main topic nodes and connect
-        main_topic = llm_metadata.get("main_topic")
-        if main_topic:
-            if not graph.has_node(main_topic):
-                graph.add_node(main_topic, type="topic")
-            graph.add_edge(chunk_id, main_topic, relation="about")
+        # Save the updated graph
+        save_graph(graph)
         
-        # Add key concepts nodes and connect
-        key_concepts = llm_metadata.get("key_concepts", "").split(",")
-        for concept in key_concepts:
-            concept = concept.strip()
-            if concept:
-                if not graph.has_node(concept):
-                    graph.add_node(concept, type="concept")
-                graph.add_edge(chunk_id, concept, relation="relates_to")
-        
-        # Add code block nodes if present
-        if llm_metadata.get("has_code"):
-            code_node_id = f"{chunk_id}_code"
-            graph.add_node(code_node_id, type="code_block")
-            graph.add_edge(chunk_id, code_node_id, relation="contains_code")
-        
-        # Add instruction nodes if present
-        if llm_metadata.get("has_instructions"):
-            instruction_node_id = f"{chunk_id}_instructions"
-            graph.add_node(instruction_node_id, type="instructions")
-            graph.add_edge(chunk_id, instruction_node_id, relation="contains_instructions")
-    
-    # Add semantic relationships between new chunks and existing chunks
-    chunk_nodes = [n for n, d in graph.nodes(data=True) if d.get('type') == 'chunk']
-    chunk_embeddings = [graph.nodes[n]['embedding'] for n in chunk_nodes]
-    
-    # Calculate similarity matrix
-    similarity_matrix = cosine_similarity(chunk_embeddings)
-    
-    # Add edges for chunks with high semantic similarity
-    similarity_threshold = 0.7  # Adjust this threshold as needed
-    for i, node1 in enumerate(chunk_nodes):
-        for j, node2 in enumerate(chunk_nodes[i+1:], i+1):
-            if similarity_matrix[i, j] > similarity_threshold:
-                graph.add_edge(node1, node2, 
-                              relation="semantically_similar",
-                              similarity=float(similarity_matrix[i, j]))
-                graph.add_edge(node2, node1, 
-                              relation="semantically_similar",
-                              similarity=float(similarity_matrix[i, j]))
-    
-    # Save the updated graph
-    save_graph(graph)
+    except Exception as e:
+        logger.error(f"Error processing document {doc.metadata.get('source', 'unknown')}: {str(e)}")
+        raise
 
 def clear_graph():
     """Clear the KAG database."""
@@ -301,16 +311,16 @@ def main():
         processed_docs = 0
         failed_docs = 0
             
-        # Process files one by one
+        # Process documents one by one
         for doc in tqdm(all_documents, desc="Processing documents", total=total_docs):
             try:
-                logger.info(f"Processing file {processed_files + 1}/{total_docs}: {doc.name}")
-                process_file_to_graph(doc)
-                processed_files += 1
+                logger.info(f"Processing document {processed_docs + 1}/{total_docs}")
+                process_document(doc)
+                processed_docs += 1
                     
             except Exception as e:
-                logger.error(f"Error processing file {doc.name}: {str(e)}")
-                failed_files += 1
+                logger.error(f"Error processing document: {str(e)}")
+                failed_docs += 1
                 continue
         
         # Log final statistics
@@ -319,8 +329,8 @@ def main():
         logger.info(f"- Successfully processed documents: {processed_docs}")
         logger.info(f"- Failed documents: {failed_docs}")
         
-        if processed_files == 0:
-            logger.error("No files were successfully processed")
+        if processed_docs == 0:
+            logger.error("No documents were successfully processed")
         else:
             logger.info("Successfully populated KAG database")
         

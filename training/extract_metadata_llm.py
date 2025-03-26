@@ -35,7 +35,6 @@ class DocumentMetadata(BaseModel):
     has_code: bool = Field(description="Whether the content contains code examples")
     has_instructions: bool = Field(description="Whether the content contains instructions, commands, or step-by-step guidance")
     is_tutorial: bool = Field(description="Whether the content is tutorial-like")
-    is_reference: bool = Field(description="Whether the content is reference material")
     
     # Graph-specific metadata
     section_type: str = Field(description="Type of section (e.g., 'scenario', 'mitigation', 'impact', 'explanation')")
@@ -58,7 +57,6 @@ For each field:
 - has_code: true/false
 - has_instructions: true/false (contains commands, steps, or guidance)
 - is_tutorial: true/false
-- is_reference: true/false
 - section_type: One word (scenario/mitigation/impact/explanation)
 
 Example format:
@@ -69,7 +67,6 @@ Example format:
     "has_code": true,
     "has_instructions": true,
     "is_tutorial": true,
-    "is_reference": false,
     "section_type": "explanation"
 }
 
@@ -166,7 +163,7 @@ def validate_metadata_field(field_name: str, value: Any) -> Any:
             return "unknown"
         elif field_name == "key_concepts":
             return ""
-        elif field_name in ["has_code", "has_instructions", "is_tutorial", "is_reference"]:
+        elif field_name in ["has_code", "has_instructions", "is_tutorial"]:
             return False
         elif field_name == "complexity_level":
             return "unknown"
@@ -210,7 +207,6 @@ def extract_metadata_llm(text: str) -> Dict[str, Any]:
                 "has_code": False,
                 "has_instructions": False,
                 "is_tutorial": False,
-                "is_reference": False,
                 "section_type": "unknown"
             }
         
@@ -250,7 +246,6 @@ def extract_metadata_llm(text: str) -> Dict[str, Any]:
                     "has_code": False,
                     "has_instructions": False,
                     "is_tutorial": False,
-                    "is_reference": False,
                     "section_type": "unknown"
                 }
             
@@ -264,7 +259,6 @@ def extract_metadata_llm(text: str) -> Dict[str, Any]:
             "has_code": False,
             "has_instructions": False,
             "is_tutorial": False,
-            "is_reference": False,
             "section_type": "unknown"
         }
 

@@ -17,7 +17,7 @@ The standard implementation provides:
 
 import os
 import logging
-from typing import List
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 from tqdm import tqdm
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -29,6 +29,11 @@ from query.database_paths import CHROMA_PATH, RAG_DB_DIR
 from load_documents import load_documents, extract_metadata, process_single_file
 import re
 import argparse
+from dataclasses import dataclass
+from typing import List, Optional
+import requests
+import shutil
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -36,6 +41,177 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+@dataclass
+class RAGResponse:
+    """Container for RAG query responses."""
+    answer: str
+    sources: List[Dict[str, Any]]
+    metadata: Dict[str, Any]
+
+class RAGSystem:
+    """Main RAG system class for document processing and querying."""
+    
+    def __init__(self, chunk_size: int = 1500, chunk_overlap: int = 200, batch_size: int = 32):
+        """Initialize the RAG system with configurable parameters."""
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.batch_size = batch_size
+        self.embeddings = get_embedding_function()
+        self.vectorstore = None
+        self._load_vectorstore()
+        self._setup_backup()
+    
+    def _setup_backup(self) -> None:
+        """Setup backup directory for vectorstore."""
+        self.backup_dir = Path(CHROMA_PATH).parent / "backups"
+        self.backup_dir.mkdir(exist_ok=True)
+    
+    def _backup_vectorstore(self) -> None:
+        """Create a backup of the vectorstore."""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = self.backup_dir / f"chroma_backup_{timestamp}"
+            shutil.copytree(CHROMA_PATH, backup_path)
+            logger.info(f"Created vectorstore backup at {backup_path}")
+        except Exception as e:
+            logger.error(f"Failed to create vectorstore backup: {str(e)}")
+    
+    def _load_vectorstore(self) -> None:
+        """Load or create the vectorstore with error handling."""
+        vectorstore_path = str(CHROMA_PATH)
+        try:
+            if os.path.exists(vectorstore_path) and os.path.exists(os.path.join(vectorstore_path, "chroma.sqlite3")):
+                logger.info("Loading existing vectorstore")
+                self.vectorstore = Chroma(persist_directory=vectorstore_path, embedding_function=self.embeddings)
+            else:
+                logger.info("Creating new vectorstore")
+                self.vectorstore = Chroma(embedding_function=self.embeddings, persist_directory=vectorstore_path)
+        except Exception as e:
+            logger.error(f"Error loading vectorstore: {str(e)}")
+            self._backup_vectorstore()  # Backup before creating new
+            self.vectorstore = Chroma(embedding_function=self.embeddings, persist_directory=vectorstore_path)
+    
+    def process_documents(self, documents: List[Document]) -> None:
+        """Process documents in batches for better performance."""
+        try:
+            # Split documents into chunks
+            all_chunks = []
+            for doc in documents:
+                chunks = split_document(doc)
+                all_chunks.extend(chunks)
+            
+            # Process chunks in batches
+            for i in range(0, len(all_chunks), self.batch_size):
+                batch = all_chunks[i:i + self.batch_size]
+                self._process_chunk_batch(batch)
+                
+            # Save after processing all documents
+            self.vectorstore.persist()
+            
+        except Exception as e:
+            logger.error(f"Error processing documents: {str(e)}")
+            self._backup_vectorstore()
+            raise
+    
+    def _process_chunk_batch(self, chunks: List[Document]) -> None:
+        """Process a batch of chunks efficiently."""
+        try:
+            # Get embeddings for the batch
+            texts = [chunk.page_content for chunk in chunks]
+            embeddings = self.embeddings.embed_documents(texts)
+            
+            # Add to vectorstore
+            self.vectorstore.add_documents(chunks)
+            
+        except Exception as e:
+            logger.error(f"Error processing chunk batch: {str(e)}")
+            raise
+    
+    def query(self, query: str, k: int = 4, temperature: float = 0.7) -> RAGResponse:
+        """
+        Process a query and return relevant information with improved error handling.
+        
+        Args:
+            query: The query string
+            k: Number of relevant documents to retrieve
+            temperature: Temperature for LLM response generation
+            
+        Returns:
+            RAGResponse containing answer and sources
+        """
+        try:
+            if not self.vectorstore:
+                self._load_vectorstore()
+            
+            # Retrieve relevant documents
+            docs = self.vectorstore.similarity_search(query, k=k)
+            
+            # Extract sources and content
+            sources = []
+            context = []
+            for doc in docs:
+                source = {
+                    "source": doc.metadata.get("source", "unknown"),
+                    "content": doc.page_content,
+                    "metadata": doc.metadata,
+                    "relevance_score": doc.metadata.get("relevance_score", 0.0)
+                }
+                sources.append(source)
+                context.append(doc.page_content)
+            
+            # Generate answer using LLM
+            prompt = self._create_prompt(query, context)
+            answer = self._get_llm_response(prompt, temperature)
+            
+            return RAGResponse(
+                answer=answer,
+                sources=sources,
+                metadata={
+                    "query": query,
+                    "k": k,
+                    "temperature": temperature,
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Error processing query: {str(e)}")
+            return RAGResponse(
+                answer="I apologize, but I encountered an error while processing your query.",
+                sources=[],
+                metadata={"error": str(e)}
+            )
+    
+    def _get_llm_response(self, prompt: str, temperature: float = 0.7) -> str:
+        """Get response from local LLM with improved error handling."""
+        try:
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "model": "local-model",  # Update with your model name
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature,
+                "max_tokens": 1000  # Limit response length
+            }
+            
+            response = requests.post(
+                "http://localhost:1234/v1/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=30  # Add timeout
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+            
+        except requests.Timeout:
+            logger.error("LLM request timed out")
+            return "I apologize, but the request timed out. Please try again."
+        except requests.RequestException as e:
+            logger.error(f"LLM request failed: {str(e)}")
+            return "I apologize, but I encountered an error while processing your query."
+        except Exception as e:
+            logger.error(f"Unexpected error in LLM response: {str(e)}")
+            return "I apologize, but I encountered an unexpected error."
 
 def split_document(doc: Document) -> List[Document]:
     """Split a single document into chunks with improved parameters for security documentation."""
