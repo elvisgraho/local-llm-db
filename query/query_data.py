@@ -2,6 +2,7 @@ import argparse
 import networkx as nx
 from langchain.prompts import ChatPromptTemplate
 from sklearn.metrics.pairwise import cosine_similarity
+from database_paths import CHROMA_PATH
 from query.data_service import data_service
 from query.templates import (
     RAG_ONLY_TEMPLATE,
@@ -12,6 +13,7 @@ from query.templates import (
     KAG_HYBRID_TEMPLATE
 )
 from query.llm_service import get_llm_response, optimize_query
+import os
 
 def main():
     # Create CLI.
@@ -44,48 +46,55 @@ def main():
 
 def query_direct(query_text: str):
     """Query the model directly without using RAG."""
-    prompt_template = ChatPromptTemplate.from_template(DIRECT_TEMPLATE)
-    prompt = prompt_template.format(question=query_text)
-    
-    response_text = get_llm_response(prompt)
-    return {"text": response_text, "sources": []}
+    try:
+        # No data service initialization needed for direct queries
+        prompt_template = ChatPromptTemplate.from_template(DIRECT_TEMPLATE)
+        prompt = prompt_template.format(question=query_text)
+        
+        response_text = get_llm_response(prompt)
+        return {"text": response_text, "sources": []}
+    except Exception as e:
+        print(f"Error in direct query: {e}")
+        return {"text": "Error processing direct query", "sources": []}
 
 def query_hybrid(query_text: str):
     """Query using both RAG context and the model's knowledge."""
-    # Get relevant documents from Chroma
-    results = data_service.chroma_db.similarity_search_with_score(query_text, k=5)
-    
-    # Format context and create prompt
-    context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in results])
-    prompt_template = ChatPromptTemplate.from_template(HYBRID_TEMPLATE)
-    prompt = prompt_template.format(context=context_text, question=query_text)
-    
-    # Get response
-    response_text = get_llm_response(prompt)
-    sources = [doc.metadata.get("id", None) for doc, _score in results]
-    
-    return {"text": response_text, "sources": sources}
-
-def query_rag(query_text: str, hybrid: bool = False):
-    """Query using only RAG context."""
-    # Get relevant documents from Chroma
-    results = data_service.chroma_db.similarity_search_with_score(query_text, k=5)
-
-    context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in results])
-    
-    # Use hybrid template if hybrid mode is enabled
-    template = HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE
-    prompt_template = ChatPromptTemplate.from_template(template)
-    prompt = prompt_template.format(context=context_text, question=query_text)
-
-    # Get response
-    response_text = get_llm_response(prompt)
-    sources = [doc.metadata.get("id", None) for doc, _score in results]
-    return {"text": response_text, "sources": sources}
+    try:
+        # Initialize only Chroma DB and embedding function
+        _ = data_service.embedding_function
+        _ = data_service.chroma_db
+        
+        # Get relevant documents from Chroma with scores
+        results = data_service.chroma_db.similarity_search_with_score(query_text, k=5)
+        
+        if not results:
+            return {"text": "No relevant information found in the database", "sources": []}
+            
+        # Filter results by similarity score (threshold of 0.5)
+        filtered_results = [(doc, score) for doc, score in results if score >= 0.5]
+        
+        if not filtered_results:
+            return {"text": "No sufficiently relevant information found in the database", "sources": []}
+        
+        # Format context and create prompt
+        context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in filtered_results])
+        prompt_template = ChatPromptTemplate.from_template(HYBRID_TEMPLATE)
+        prompt = prompt_template.format(context=context_text, question=query_text)
+        
+        # Get response
+        response_text = get_llm_response(prompt)
+        sources = [doc.metadata.get("id", None) for doc, _score in filtered_results]
+        
+        return {"text": response_text, "sources": sources}
+    except Exception as e:
+        print(f"Error in hybrid query: {e}")
+        return {"text": "Error processing hybrid query", "sources": []}
 
 def query_graph(query_text: str, hybrid: bool = False):
     """Query using the graph structure with semantic search."""
     try:
+        # Initialize only GraphRAG graph and embedding function
+        _ = data_service.embedding_function
         G = data_service.graphrag_graph
     except Exception as e:
         print(f"Error loading graph: {e}")
@@ -145,9 +154,56 @@ def query_graph(query_text: str, hybrid: bool = False):
     response_text = get_llm_response(prompt)
     return {"text": response_text, "sources": list(sources)}
 
+
+def query_rag(query_text: str, hybrid: bool = False):
+    """Query using only RAG context."""
+    try:
+        # Initialize only Chroma DB and embedding function
+        _ = data_service.embedding_function
+        db = data_service.chroma_db
+        
+        # Verify database exists and has data
+        if not os.path.exists(os.path.join(str(CHROMA_PATH), "chroma.sqlite3")):
+            return {"text": "RAG database not found. Please run populate_rag.py first.", "sources": []}
+            
+        # Get relevant documents from Chroma with scores
+        results = db.similarity_search_with_score(query_text, k=3)
+        
+        if not results:
+            return {"text": "No relevant information found in the database", "sources": []}
+            
+        # Filter results by similarity score (threshold of 0.5)
+        filtered_results = [(doc, score) for doc, score in results if score >= 0.5]
+        
+        if not filtered_results:
+            return {"text": "No sufficiently relevant information found in the database", "sources": []}
+
+        context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in filtered_results])
+        
+        # Use hybrid template if hybrid mode is enabled
+        template = HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE
+        prompt_template = ChatPromptTemplate.from_template(template)
+        prompt = prompt_template.format(context=context_text, question=query_text)
+
+        # Get response
+        response_text = get_llm_response(prompt)
+        sources = [doc.metadata.get("id", None) for doc, _score in filtered_results]
+        
+        # Ensure database is persisted after query
+        data_service.persist_chroma_db()
+        
+        return {"text": response_text, "sources": sources}
+    except Exception as e:
+        print(f"Error in RAG query: {e}")
+        return {"text": "Error processing RAG query", "sources": []}
+
 def query_lightrag(query_text: str, hybrid: bool = False):
     """Query using the light RAG implementation."""
     try:
+        # Initialize only vectorstore and QA chain
+        _ = data_service.vectorstore
+        _ = data_service.qa_chain
+        
         # Get relevant documents
         results = data_service.vectorstore.similarity_search_with_score(query_text, k=3)
         context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in results])
@@ -170,6 +226,8 @@ def query_lightrag(query_text: str, hybrid: bool = False):
 def query_kag(query_text: str, hybrid: bool = False):
     """Query using Knowledge-Augmented Generation (KAG) approach."""
     try:
+        # Initialize only KAG graph and embedding function
+        _ = data_service.embedding_function
         G = data_service.kag_graph
     except Exception as e:
         print(f"Error loading graph: {e}")

@@ -2,6 +2,9 @@ import requests
 from langchain.prompts import ChatPromptTemplate
 from query.global_vars import LOCAL_LLM_API_URL, LOCAL_MAIN_MODEL
 from query.templates import QUERY_OPTIMIZATION_TEMPLATE
+import re
+import time
+import json
 
 def get_llm_response(prompt: str, temperature: float = 0.7) -> str:
     """Helper function to get response from LLM."""
@@ -19,7 +22,12 @@ def optimize_query(query_text: str) -> str:
     """Optimize the query using a separate LLM call."""
     prompt_template = ChatPromptTemplate.from_template(QUERY_OPTIMIZATION_TEMPLATE)
     prompt = prompt_template.format(query=query_text)
-    
-    # Use a different model for optimization
+    # Use a different model for optimization with lower temperature
     optimized_query = get_llm_response(prompt, temperature=0.3).strip()
+
+    # Filter out <think> tags if present
+    if optimized_query:
+        # Remove any <think> tags and their contents
+        optimized_query = re.sub(r'<think>.*?</think>', '', optimized_query, flags=re.DOTALL).strip()
+        
     return optimized_query if optimized_query else query_text 

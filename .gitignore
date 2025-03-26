@@ -7,5 +7,4 @@ data/
 __pycache__/
 pdfs/
 training/data
-results.txt
-results.txt.progress.txt
+training/database/

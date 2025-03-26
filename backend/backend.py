@@ -40,37 +40,47 @@ def handle_query():
         
         # Optimize query if requested
         if optimize:
-            optimized_query = optimize_query(query_text)
-            response = {
-                'original_query': query_text,
-                'optimized_query': optimized_query,
-                'optimization_applied': True
-            }
+            try:
+                # Wait for complete optimization response
+                optimized_query = optimize_query(query_text)
+                if not optimized_query or optimized_query.startswith('<think>'):
+                    raise ValueError("Incomplete query optimization response")
+            except Exception as e:
+                print(f"Error during query optimization: {str(e)}")
+                optimized_query = query_text
         else:
             optimized_query = query_text
-            response = {
-                'original_query': query_text,
-                'optimization_applied': False
-            }
-        
         # Call appropriate query function based on mode
-        if query_mode == 'direct':
-            query_response = query_direct(optimized_query)
-        elif query_mode == 'graph':
-            query_response = query_graph(optimized_query, hybrid)
-        elif query_mode == 'lightrag':
-            query_response = query_lightrag(optimized_query, hybrid)
-        elif query_mode == 'kag':
-            query_response = query_kag(optimized_query, hybrid)
-        else:
-            query_response = query_rag(optimized_query, hybrid)
-        
-        response.update({
-            'status': 'success',
-            'data': query_response
-        })
-        
-        return jsonify(response)
+        try:
+            if query_mode == 'direct':
+                query_response = query_direct(optimized_query)
+            elif query_mode == 'graph':
+                query_response = query_graph(optimized_query, hybrid)
+            elif query_mode == 'lightrag':
+                query_response = query_lightrag(optimized_query, hybrid)
+            elif query_mode == 'kag':
+                query_response = query_kag(optimized_query, hybrid)
+            else:
+                query_response = query_rag(optimized_query, hybrid)
+            
+            # Validate query response
+            if not query_response or not query_response.get('text'):
+                raise ValueError("Empty or invalid query response")
+            
+            response = {
+                'status': 'success',
+                'data': query_response
+            }
+            
+            return jsonify(response)
+            
+        except Exception as e:
+            print(f"Error during query processing: {str(e)}")
+            return jsonify({
+                'error': str(e),
+                'status': 'error',
+                'traceback': traceback.format_exc()
+            }), 500
 
     except Exception as e:
         error_trace = traceback.format_exc()
@@ -106,7 +116,6 @@ def clear_cache():
 
 if __name__ == '__main__':
     print("🚀 Initializing server...")
-    #initialize_data_service()
     print("🚀 Server is running on http://127.0.0.1:5000/")
     print("Available endpoints:")
     print("- POST /query - Query the RAG system")

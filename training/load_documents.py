@@ -18,8 +18,8 @@ from langchain_community.document_loaders import (
     UnstructuredMarkdownLoader
 )
 from langchain.schema.document import Document
-from .config import DATA_DIR
 import re
+from config import DATA_DIR
 
 logger = logging.getLogger(__name__)
 

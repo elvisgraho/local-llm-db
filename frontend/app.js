@@ -227,7 +227,9 @@ async function sendQuery() {
                 mode: queryMode.value,
                 optimize: document.getElementById('optimizeToggle').checked,
                 hybrid: document.getElementById('hybridToggle').checked
-            })
+            }),
+            // Add timeout of 5 minutes (300000ms)
+            signal: AbortSignal.timeout(300000)
         });
         
         const data = await response.json();
@@ -251,14 +253,30 @@ async function sendQuery() {
         // Add sources if present
         if (data.data.sources && data.data.sources.length > 0) {
             uniq = [...new Set(data.data.sources)];
-            const sourcesText = uniq.map(source => {
-                // Extract just the filename from the full path
+            const sourcesList = document.createElement('ul');
+            sourcesList.className = 'sources-list';
+            
+            uniq.forEach(source => {
                 if (typeof(source) === 'string') {
                     const filename = source.split('\\').pop();
-                    return `<a href="${source}">${filename}</a>`;
+                    const listItem = document.createElement('li');
+                    const link = document.createElement('a');
+                    link.href = source;
+                    link.textContent = filename;
+                    link.onclick = (e) => {
+                        e.preventDefault();
+                        openLocalFile(source);
+                    };
+                    listItem.appendChild(link);
+                    sourcesList.appendChild(listItem);
                 }
-            }).join('\n');
-            addMessage(`**Sources:**\n${sourcesText}`);
+            });
+            
+            const sourcesDiv = document.createElement('div');
+            sourcesDiv.className = 'message assistant-message';
+            sourcesDiv.innerHTML = '<strong>Sources:</strong>';
+            sourcesDiv.appendChild(sourcesList);
+            document.getElementById('chatContainer').appendChild(sourcesDiv);
         }
         
     } catch (error) {
@@ -282,4 +300,25 @@ document.addEventListener('DOMContentLoaded', () => {
         );
         switchChat(mostRecentChat.id);
     }
-}); 
+});
+
+// Add this function at the end of the file, before the DOMContentLoaded event listener
+async function openLocalFile(filePath) {
+    try {
+        const response = await fetch('http://localhost:5000/open_file', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ file_path: filePath })
+        });
+        
+        const data = await response.json();
+        if (data.status === 'error') {
+            throw new Error(data.error || 'Failed to open file');
+        }
+    } catch (error) {
+        console.error('Error opening file:', error);
+        alert('Failed to open file. Please check if the file exists and you have permission to access it.');
+    }
+} 

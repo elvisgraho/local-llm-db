@@ -22,7 +22,7 @@ import logging
 current_dir = Path(__file__).parent.absolute()
 sys.path.insert(0, str(current_dir.parent))
 
-from backend.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
+from query.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
 
 logger = logging.getLogger(__name__)
 

@@ -26,10 +26,10 @@ from tqdm import tqdm
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
 from langchain_community.vectorstores import FAISS
-from .get_embedding_function import get_embedding_function
-from .extract_metadata_llm import extract_metadata_llm
-from backend.database_paths import VECTORSTORE_PATH, LIGHT_RAG_DB_DIR
-from .load_documents import load_documents, process_single_file, extract_metadata
+from get_embedding_function import get_embedding_function
+from extract_metadata_llm import extract_metadata_llm
+from query.database_paths import VECTORSTORE_PATH, LIGHT_RAG_DB_DIR
+from load_documents import load_documents, process_single_file, extract_metadata
 import re
 import argparse
 

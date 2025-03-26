@@ -23,10 +23,10 @@ from tqdm import tqdm
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
 from langchain_chroma import Chroma
-from .get_embedding_function import get_embedding_function
-from .extract_metadata_llm import extract_metadata_llm
+from get_embedding_function import get_embedding_function
+from extract_metadata_llm import extract_metadata_llm
 from query.database_paths import CHROMA_PATH, RAG_DB_DIR
-from .load_documents import load_documents, extract_metadata, process_single_file
+from load_documents import load_documents, extract_metadata, process_single_file
 import re
 import argparse
 
@@ -69,15 +69,22 @@ def split_document(doc: Document) -> List[Document]:
         # Ensure consistent formatting for code blocks
         content = re.sub(r'```(\w+)?\n', r'```\n', content)
         
-        # Update document content
-        doc.page_content = content
+        # Create a copy of the document with processed content
+        processed_doc = Document(
+            page_content=content,
+            metadata=doc.metadata.copy()  # Make a copy of metadata
+        )
         
         # Split the document
-        doc_chunks = text_splitter.split_documents([doc])
+        doc_chunks = text_splitter.split_documents([processed_doc])
         
         # Process each chunk with LLM metadata extraction
         processed_chunks = []
         for chunk in doc_chunks:
+            # Ensure source metadata is preserved
+            if not chunk.metadata.get("source") and doc.metadata.get("source"):
+                chunk.metadata["source"] = doc.metadata["source"]
+            
             # Extract LLM-based metadata
             llm_metadata = extract_metadata_llm(chunk.page_content)
             chunk.metadata.update(llm_metadata)
@@ -97,6 +104,11 @@ def process_document(doc: Document) -> None:
     """Process a single document and update the vectorstore."""
     embeddings = get_embedding_function()
     
+    # Ensure source metadata exists
+    if not doc.metadata.get("source"):
+        logger.warning(f"Document missing source metadata: {doc.metadata}")
+        return
+    
     # Split document into chunks
     chunks = split_document(doc)
     if not chunks:
@@ -113,7 +125,16 @@ def process_document(doc: Document) -> None:
             # Check for duplicates before adding
             existing_docs = vectorstore.get()
             existing_sources = set(doc.metadata.get("source", "") for doc in existing_docs["documents"])
-            new_chunks = [chunk for chunk in chunks if chunk.metadata.get("source", "") not in existing_sources]
+            new_chunks = []
+            
+            for chunk in chunks:
+                # Ensure chunk has source metadata
+                if not chunk.metadata.get("source"):
+                    chunk.metadata["source"] = doc.metadata["source"]
+                
+                # Only add if source is not in existing sources
+                if chunk.metadata["source"] not in existing_sources:
+                    new_chunks.append(chunk)
             
             if new_chunks:
                 vectorstore.add_documents(new_chunks)
@@ -130,7 +151,7 @@ def process_document(doc: Document) -> None:
     # Save after each document processing
     os.makedirs(RAG_DB_DIR, exist_ok=True)
     vectorstore.persist_directory = vectorstore_path  # Set persist directory
-    logger.info(f"Updated vectorstore saved to {vectorstore_path}")
+    logger.debug(f"Updated vectorstore saved to {vectorstore_path}")
 
 def clear_vectorstore():
     """Clear the RAG database."""
@@ -184,11 +205,12 @@ def main():
         processed_docs = 0
         failed_docs = 0
             
-        # Process documents one by one
+        # Process files one by one
         for doc in tqdm(all_documents, desc="Processing documents", total=total_docs):
             try:
                 logger.info(f"Processing document {processed_docs + 1}/{total_docs}")
-                process_document(doc)
+                # Use process_file_to_vectorstore for RAG implementation
+                process_file_to_vectorstore(Path(doc.metadata.get("source", "")))
                 processed_docs += 1
                     
             except Exception as e:

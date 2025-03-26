@@ -19,7 +19,6 @@ class LMStudioEmbeddings(Embeddings):
         payload = {"model": EMBEDDING_MODEL_NAME, "input": texts}
 
         try:
-            logger.info(f"Sending request to LM Studio API at {LM_STUDIO_API_URL}")
             response = requests.post(LM_STUDIO_API_URL, json=payload, headers=headers)
             response.raise_for_status()  # Raise an exception for bad status codes
             
@@ -30,7 +29,7 @@ class LMStudioEmbeddings(Embeddings):
                 raise ValueError("Invalid response format from LM Studio API: " + str(response_data))
 
             embeddings = [item["embedding"] for item in response_data["data"] if "embedding" in item]
-            logger.info(f"Successfully generated {len(embeddings)} embeddings")
+            logger.debug(f"Successfully generated {len(embeddings)} embeddings")
             return embeddings
             
         except requests.exceptions.ConnectionError:

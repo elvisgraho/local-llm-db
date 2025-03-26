@@ -7,6 +7,7 @@ interface to access these resources efficiently.
 """
 import json
 import networkx as nx
+import os
 from typing import Optional
 from langchain_chroma import Chroma
 from langchain_community.vectorstores import FAISS
@@ -56,11 +57,41 @@ class DataService:
     def chroma_db(self) -> Chroma:
         """Get or initialize the Chroma database."""
         if self._chroma_db is None:
-            self._chroma_db = Chroma(
-                persist_directory=str(CHROMA_PATH),
-                embedding_function=self.embedding_function
-            )
+            # Ensure the database directory exists
+            os.makedirs(str(CHROMA_PATH), exist_ok=True)
+            
+            # Check if database exists
+            db_exists = os.path.exists(str(CHROMA_PATH)) and os.path.exists(os.path.join(str(CHROMA_PATH), "chroma.sqlite3"))
+            
+            try:
+                if db_exists:
+                    # Load existing database
+                    self._chroma_db = Chroma(
+                        persist_directory=str(CHROMA_PATH),
+                        embedding_function=self.embedding_function
+                    )
+                else:
+                    # Create new database
+                    self._chroma_db = Chroma(
+                        persist_directory=str(CHROMA_PATH),
+                        embedding_function=self.embedding_function
+                    )
+                    # Ensure the database is created
+                    self._chroma_db.persist()
+            except Exception as e:
+                print(f"Error initializing Chroma database: {e}")
+                raise
+                
         return self._chroma_db
+
+    def persist_chroma_db(self):
+        """Explicitly persist the Chroma database."""
+        if self._chroma_db is not None:
+            try:
+                self._chroma_db.persist()
+            except Exception as e:
+                print(f"Error persisting Chroma database: {e}")
+                raise
 
     @property
     def vectorstore(self) -> FAISS:

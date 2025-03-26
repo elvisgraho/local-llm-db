@@ -84,22 +84,31 @@ Question: {question}
 Answer:
 """
 
-# Template for query optimization
+# Strict template for query optimization
 QUERY_OPTIMIZATION_TEMPLATE = """
-You are a query optimization specialist.
-Your role is to improve queries to be more precise and effective for information retrieval.
+You are NOT an assistant. You are a query optimization engine.
 
-Instructions:
-1. Keep the core intent of the query
-2. Make the query more specific and focused
-3. Add relevant keywords that might improve retrieval
-4. Remove any ambiguity
-5. Ensure the optimized query is still natural and understandable
+Your ONLY task is to rewrite the input query to improve its effectiveness for information retrieval — not to answer it.
 
-Original query: {query}
+Strict instructions:
+- Do NOT answer the query.
+- Do NOT explain anything.
+- Do NOT include any tags or metadata.
+- Do NOT output anything except the optimized query.
+
+Optimization steps:
+1. Analyze the original query to understand its intent.
+2. Identify and emphasize key concepts and important terms.
+3. Add relevant synonyms or related terms to improve recall.
+4. Remove vague, ambiguous, or irrelevant parts.
+5. Restructure the query for clarity and precision.
+6. Preserve the original meaning exactly.
+
+Input query: {query}
 
 Optimized query:
 """
+
 
 # Template for LightRAG hybrid mode
 LIGHTRAG_HYBRID_TEMPLATE = """
