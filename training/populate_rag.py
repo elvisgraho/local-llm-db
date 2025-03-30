@@ -24,7 +24,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
 from langchain_chroma import Chroma
 from get_embedding_function import get_embedding_function
-from extract_metadata_llm import extract_metadata_llm
+from extract_metadata_llm import add_metadata_to_document, format_source_filename
 from query.database_paths import CHROMA_PATH, RAG_DB_DIR
 from load_documents import load_documents, extract_metadata, process_single_file
 import re
@@ -147,18 +147,32 @@ class RAGSystem:
             # Retrieve relevant documents
             docs = self.vectorstore.similarity_search(query, k=k)
             
-            # Extract sources and content
+            # Extract sources and content with improved source handling
             sources = []
             context = []
             for doc in docs:
-                source = {
-                    "source": doc.metadata.get("source", "unknown"),
+                # Ensure source exists and is not null
+                source = doc.metadata.get("source")
+                if not source:
+                    logger.warning(f"Document missing source metadata: {doc.metadata}")
+                    continue
+                    
+                source_info = {
+                    "source": source,
                     "content": doc.page_content,
                     "metadata": doc.metadata,
                     "relevance_score": doc.metadata.get("relevance_score", 0.0)
                 }
-                sources.append(source)
+                sources.append(source_info)
                 context.append(doc.page_content)
+            
+            if not sources:
+                logger.warning("No valid sources found for query")
+                return RAGResponse(
+                    answer="I apologize, but I couldn't find any relevant sources for your query.",
+                    sources=[],
+                    metadata={"error": "No valid sources found"}
+                )
             
             # Generate answer using LLM
             prompt = self._create_prompt(query, context)
@@ -256,19 +270,25 @@ def split_document(doc: Document) -> List[Document]:
         
         # Process each chunk with LLM metadata extraction
         processed_chunks = []
-        for chunk in doc_chunks:
-            # Ensure source metadata is preserved
-            if not chunk.metadata.get("source") and doc.metadata.get("source"):
-                chunk.metadata["source"] = doc.metadata["source"]
+        total_chunks = len(doc_chunks)
+        source = doc.metadata.get("source", "unknown")
+        # Truncate source filename for display
+        display_source = format_source_filename(source)
             
-            # Extract LLM-based metadata
-            llm_metadata = extract_metadata_llm(chunk.page_content)
-            chunk.metadata.update(llm_metadata)
-            
-            # Add file-based metadata
-            chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
-            
-            processed_chunks.append(chunk)
+        with tqdm(total=total_chunks, desc=f"Processing {display_source}", unit="chunk", leave=False) as pbar:
+            for chunk in doc_chunks:
+                # Ensure source metadata is preserved
+                if not chunk.metadata.get("source") and doc.metadata.get("source"):
+                    chunk.metadata["source"] = doc.metadata["source"]
+                
+                # Add LLM-based metadata using the helper function
+                chunk = add_metadata_to_document(chunk)
+                
+                # Add file-based metadata
+                chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
+                
+                processed_chunks.append(chunk)
+                pbar.update(1)
             
         return processed_chunks
             
@@ -280,15 +300,21 @@ def process_document(doc: Document) -> None:
     """Process a single document and update the vectorstore."""
     embeddings = get_embedding_function()
     
-    # Ensure source metadata exists
-    if not doc.metadata.get("source"):
+    # Validate and ensure source metadata exists
+    source = doc.metadata.get("source")
+    if not source:
         logger.warning(f"Document missing source metadata: {doc.metadata}")
+        return
+    
+    # Ensure source is a valid string
+    if not isinstance(source, str) or not source.strip():
+        logger.warning(f"Invalid source metadata: {source}")
         return
     
     # Split document into chunks
     chunks = split_document(doc)
     if not chunks:
-        logger.warning(f"No valid chunks created for document: {doc.metadata.get('source', 'unknown')}")
+        logger.warning(f"No valid chunks created for document: {source}")
         return
     
     # Initialize or update vectorstore
@@ -304,9 +330,11 @@ def process_document(doc: Document) -> None:
             new_chunks = []
             
             for chunk in chunks:
-                # Ensure chunk has source metadata
+                # Ensure chunk has valid source metadata
                 if not chunk.metadata.get("source"):
-                    chunk.metadata["source"] = doc.metadata["source"]
+                    chunk.metadata["source"] = source
+                elif not isinstance(chunk.metadata["source"], str) or not chunk.metadata["source"].strip():
+                    chunk.metadata["source"] = source
                 
                 # Only add if source is not in existing sources
                 if chunk.metadata["source"] not in existing_sources:
@@ -397,8 +425,8 @@ def main():
         # Log final statistics
         logger.info(f"RAG database population completed:")
         logger.info(f"- Total documents: {total_docs}")
-        logger.info(f"- Successfully processed documents: {processed_docs}")
-        logger.info(f"- Failed documents: {failed_docs}")
+        if failed_docs > 0:
+            logger.info(f"- Failed documents: {failed_docs}")
         
         if processed_docs == 0:
             logger.error("No documents were successfully processed")

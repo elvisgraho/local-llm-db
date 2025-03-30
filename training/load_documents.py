@@ -153,7 +153,7 @@ def load_documents() -> List[Document]:
     # Process files one by one
     for file_path in all_files:
         try:
-            logger.info(f"Processing file {processed_files + 1}/{total_files}: {file_path.name}")
+            logger.debug(f"Processing file {processed_files + 1}/{total_files}: {file_path.name}")
             documents = process_single_file(file_path)
             
             if documents:
@@ -169,10 +169,8 @@ def load_documents() -> List[Document]:
             continue
     
     # Log final statistics
-    logger.info(f"Document loading completed:")
-    logger.info(f"- Total files: {total_files}")
-    logger.info(f"- Successfully processed files: {processed_files}")
-    logger.info(f"- Failed files: {failed_files}")
-    logger.info(f"- Total chunks loaded: {len(all_documents)}")
+    logger.info(f"Total files: {total_files}")
+    if failed_files > 0:
+        logger.info(f"Failed files: {failed_files}")
     
     return all_documents 

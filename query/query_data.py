@@ -247,7 +247,15 @@ def query_rag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, Lis
 
         # Get response
         response_text = get_llm_response(prompt)
-        sources = [doc.metadata.get("id", None) for doc, _score in filtered_results]
+        
+        # Extract sources from metadata, ensuring they are valid file paths
+        sources = []
+        for doc, _score in filtered_results:
+            source = doc.metadata.get("source")
+            if source and isinstance(source, str) and source.strip():
+                sources.append(source)
+            else:
+                logger.warning(f"Invalid or missing source in document metadata: {doc.metadata}")
         
         # Ensure database is persisted after query
         data_service.persist_chroma_db()
@@ -259,6 +267,12 @@ def query_rag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, Lis
 
 def query_lightrag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, List[str]]]:
     """Query using the light RAG implementation.
+    
+    LightRAG is a simplified version of RAG that focuses on speed and efficiency:
+    1. Uses FAISS for faster similarity search
+    2. Simpler document processing
+    3. Optional QA chain for faster responses
+    4. Less strict filtering and validation
     
     Args:
         query_text (str): The query text.
@@ -275,8 +289,29 @@ def query_lightrag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str
         
         # Get relevant documents
         results = data_service.vectorstore.similarity_search_with_score(query_text, k=RAG_MAX_DOCUMENTS)
-        context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in results])
-        sources = [doc.metadata.get("source", "unknown") for doc, _score in results]
+        
+        if not results:
+            logger.warning("No relevant information found in the database")
+            return {"text": "No relevant information found in the database", "sources": []}
+        
+        # Filter results by similarity score (optional for LightRAG)
+        filtered_results = [(doc, score) for doc, score in results if score >= RAG_SIMILARITY_THRESHOLD]
+        
+        if not filtered_results:
+            logger.warning("No sufficiently relevant information found in the database")
+            return {"text": "No sufficiently relevant information found in the database", "sources": []}
+        
+        # Format context
+        context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in filtered_results])
+        
+        # Extract sources with basic validation
+        sources = []
+        for doc, _score in filtered_results:
+            source = doc.metadata.get("source")
+            if source and isinstance(source, str):
+                sources.append(source)
+            else:
+                logger.debug(f"Missing or invalid source in document metadata: {doc.metadata}")
         
         # Use hybrid template if enabled
         if hybrid:
@@ -284,7 +319,7 @@ def query_lightrag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str
             prompt = prompt_template.format(context=context_text, question=query_text)
             response_text = get_llm_response(prompt)
         else:
-            # Use regular QA chain for non-hybrid mode
+            # Use regular QA chain for non-hybrid mode (faster)
             response_text = data_service.qa_chain.invoke({"query": query_text})["result"]
         
         return {"text": response_text, "sources": sources}

@@ -27,11 +27,12 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
 from langchain_community.vectorstores import FAISS
 from get_embedding_function import get_embedding_function
-from extract_metadata_llm import extract_metadata_llm
+from extract_metadata_llm import add_metadata_to_document, format_source_filename
 from query.database_paths import VECTORSTORE_PATH, LIGHT_RAG_DB_DIR
 from load_documents import load_documents, process_single_file, extract_metadata
 import re
 import argparse
+import shutil
 
 # Configure logging
 logging.basicConfig(
@@ -51,8 +52,8 @@ def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: 
             "\n\n## ",  # Main headers
             "\n\n### ",  # Subheaders
             "\n\n#### ",  # Sub-subheaders
-            "\n```",  # Code blocks
             "\n\n",     # Double newlines
+            "\n```",  # Code blocks
             "\n",       # Single newlines
             "\n**",
             " ",        # Spaces
@@ -85,19 +86,25 @@ def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: 
         
         # Process each chunk with LLM metadata extraction
         processed_chunks = []
-        for chunk in doc_chunks:
-            try:
-                # Extract LLM-based metadata
-                llm_metadata = extract_metadata_llm(chunk.page_content)
-                chunk.metadata.update(llm_metadata)
-                
-                # Add file-based metadata
-                chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
-                
-                processed_chunks.append(chunk)
-            except Exception as e:
-                logger.error(f"Error processing chunk from {doc.metadata.get('source', 'unknown')}: {str(e)}")
-                continue
+        total_chunks = len(doc_chunks)
+        source = doc.metadata.get("source", "unknown")
+        # Truncate source filename for display
+        display_source = format_source_filename(source)
+        
+        with tqdm(total=total_chunks, desc=f"Processing {display_source}", unit="chunk", leave=False) as pbar:
+            for chunk in doc_chunks:
+                try:
+                    # Add LLM-based metadata using the helper function
+                    chunk = add_metadata_to_document(chunk)
+                    
+                    # Add file-based metadata
+                    chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
+                    
+                    processed_chunks.append(chunk)
+                    pbar.update(1)
+                except Exception as e:
+                    logger.error(f"Error processing chunk from {source}: {str(e)}")
+                    continue
             
         return processed_chunks
             
@@ -105,45 +112,47 @@ def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: 
         logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
         return []
 
-def process_document(doc: Document, batch_size: int = 100) -> None:
-    """Process a single document and update the vectorstore."""
-    # Get embedding function
-    embedding_function = get_embedding_function()
+def process_document(doc: Document, vectorstore: FAISS, reset: bool = False) -> None:
+    """Process a single document and add it to the vectorstore.
     
-    # Split document into chunks
-    chunks = split_document(doc)
-    if not chunks:
-        logger.warning(f"No valid chunks created for document: {doc.metadata.get('source', 'unknown')}")
-        return
+    LightRAG uses a simplified document processing approach:
+    1. Basic metadata validation
+    2. Simple chunking without complex validation
+    3. Direct FAISS indexing without duplicate checks
+    4. No explicit persistence (handled by FAISS)
     
-    # Initialize or update vectorstore
+    Args:
+        doc (Document): The document to process
+        vectorstore (FAISS): The FAISS vectorstore
+        reset (bool): Whether to reset the vectorstore
+    """
     try:
-        # Check if the vectorstore directory exists and has the required files
-        if os.path.exists(VECTORSTORE_PATH) and os.path.exists(os.path.join(VECTORSTORE_PATH, "index.faiss")):
-            logger.info("Loading existing vectorstore")
-            vectorstore = FAISS.load_local(
-                VECTORSTORE_PATH, 
-                embedding_function,
-                allow_dangerous_deserialization=True  # Safe since we created the file ourselves
-            )
-        else:
-            logger.info("Creating new vectorstore")
-            vectorstore = FAISS.from_documents([], embedding_function)
+        # Basic metadata validation
+        if not doc.metadata or not isinstance(doc.metadata, dict):
+            logger.warning(f"Invalid metadata for document: {doc}")
+            return
             
-        # Process chunks in batches
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i + batch_size]
-            vectorstore.add_documents(batch)
+        # Extract source with basic validation
+        source = doc.metadata.get("source")
+        if not source or not isinstance(source, str):
+            logger.debug(f"Missing or invalid source in document metadata: {doc.metadata}")
+            return
+            
+        # Split document into chunks
+        chunks = split_document(doc)
+        
+        # Add chunks to vectorstore
+        for chunk in chunks:
+            # Ensure chunk has source metadata
+            if not chunk.metadata:
+                chunk.metadata = {}
+            chunk.metadata["source"] = source
+            
+            # Add to vectorstore
+            vectorstore.add_documents([chunk])
             
     except Exception as e:
-        logger.warning(f"Failed to load existing vectorstore: {str(e)}")
-        # If loading fails, create a new vectorstore with current chunks
-        vectorstore = FAISS.from_documents(chunks, embedding_function)
-    
-    # Save after each document processing
-    os.makedirs(LIGHT_RAG_DB_DIR, exist_ok=True)
-    vectorstore.save_local(VECTORSTORE_PATH)
-    logger.info(f"Updated vectorstore saved to {VECTORSTORE_PATH}")
+        logger.error(f"Error processing document: {str(e)}", exc_info=True)
 
 def clear_vectorstore():
     """Clear the Light RAG database."""
@@ -173,70 +182,44 @@ def process_file_to_vectorstore(file_path: Path) -> None:
         logger.error(f"Error processing file {file_path.name}: {str(e)}")
 
 def main():
-    """Main function to populate the LightRAG database file by file."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--reset", action="store_true", help="Reset the database before populating")
-    parser.add_argument("--batch-size", type=int, default=100, help="Batch size for processing documents")
+    """Main function to populate the LightRAG database."""
+    parser = argparse.ArgumentParser(description="Populate LightRAG database with documents")
+    parser.add_argument("--reset", action="store_true", help="Reset the vectorstore before processing")
     args = parser.parse_args()
     
-    if args.reset:
-        clear_vectorstore()
-        logger.info("Cleared existing LightRAG database")
-
     try:
-        # Get all documents using load_documents functionality
-        all_documents = load_documents()
-        
-        if not all_documents:
-            logger.error("No valid documents found to process")
-            return
-            
-        total_docs = len(all_documents)
-        processed_docs = 0
-        failed_docs = 0
-        total_chunks = 0
-            
-        # Process files one by one with progress tracking
-        with tqdm(total=total_docs, desc="Processing documents", unit="doc") as pbar:
-            for doc in all_documents:
-                try:
-                    # Process document and get number of chunks
-                    chunks = split_document(doc)
-                    if chunks:
-                        total_chunks += len(chunks)
-                        process_document(doc, batch_size=args.batch_size)
-                        processed_docs += 1
-                    else:
-                        failed_docs += 1
-                        logger.warning(f"No valid chunks created for document: {doc.metadata.get('source', 'unknown')}")
-                    
-                    # Update progress bar
-                    pbar.update(1)
-                    pbar.set_postfix({
-                        "processed": processed_docs,
-                        "failed": failed_docs,
-                        "total_chunks": total_chunks
-                    })
-                    
-                except Exception as e:
-                    logger.error(f"Error processing document from {doc.metadata.get('source', 'unknown')}: {str(e)}")
-                    failed_docs += 1
-                    continue
-        
-        # Log final statistics
-        logger.info(f"LightRAG database population completed:")
-        logger.info(f"- Total documents: {total_docs}")
-        logger.info(f"- Successfully processed documents: {processed_docs}")
-        logger.info(f"- Failed documents: {failed_docs}")
-        logger.info(f"- Total chunks created: {total_chunks}")
-        
-        if processed_docs == 0:
-            logger.error("No documents were successfully processed")
+        # Initialize vectorstore
+        if args.reset:
+            logger.info("Resetting vectorstore...")
+            if os.path.exists(VECTORSTORE_PATH):
+                shutil.rmtree(VECTORSTORE_PATH)
+            vectorstore = FAISS.from_texts(
+                ["Initial empty document"],
+                embedding_function=get_embedding_function(),
+                metadatas=[{"source": "initial"}]
+            )
         else:
-            logger.info("Successfully populated LightRAG database")
+            try:
+                vectorstore = FAISS.load_local(VECTORSTORE_PATH, get_embedding_function())
+                logger.info("Loaded existing vectorstore")
+            except Exception as e:
+                logger.warning(f"Could not load existing vectorstore: {str(e)}")
+                vectorstore = FAISS.from_texts(
+                    ["Initial empty document"],
+                    embedding_function=get_embedding_function(),
+                    metadatas=[{"source": "initial"}]
+                )
+        
+        # Process documents
+        for doc in load_documents():
+            process_document(doc, vectorstore, args.reset)
+            
+        # Save vectorstore
+        vectorstore.save_local(VECTORSTORE_PATH)
+        logger.info("LightRAG database populated successfully")
         
     except Exception as e:
-        logger.error(f"Error in database population: {str(e)}")
+        logger.error(f"Error populating LightRAG database: {str(e)}", exc_info=True)
         raise
 
 if __name__ == "__main__":

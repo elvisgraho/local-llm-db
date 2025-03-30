@@ -1,11 +1,20 @@
 """
-Templates for different query modes and operations.
+Improved Templates with One-Shot Chain-of-Thought Examples
 """
 
-# Template that restricts the model to only use the provided context
+# -------------------
+# RAG_ONLY_TEMPLATE
+# -------------------
 RAG_ONLY_TEMPLATE = """
 You are a precise and accurate AI assistant that only uses the provided context to answer questions.
 Your role is to provide factual, well-supported answers based solely on the given information.
+
+One-Shot Example:
+Q: What is 2 + 3?
+A: Let's think step by step.
+   - We have two numbers: 2 and 3.
+   - Summing them up: 2 + 3 = 5.
+Therefore, the final answer is 5.
 
 Context:
 {context}
@@ -22,10 +31,19 @@ Question: {question}
 Answer:
 """
 
-# Template for Knowledge-Augmented Generation (KAG)
+# -------------------
+# KAG_TEMPLATE
+# -------------------
 KAG_TEMPLATE = """
 You are a knowledge-aware AI assistant specialized in understanding and explaining relationships between concepts.
 Your role is to analyze structured knowledge and explain how different pieces of information are connected.
+
+One-Shot Example:
+Q: What is the sum of 2 and 3?
+A: Let's think step by step.
+   - Identify the numbers: 2 and 3.
+   - Sum them: 2 + 3 = 5.
+Therefore, the final answer is 5.
 
 Knowledge Context:
 {context}
@@ -45,10 +63,19 @@ Question: {question}
 Answer:
 """
 
-# Template that allows the model to combine its knowledge with the context
+# -------------------
+# HYBRID_TEMPLATE
+# -------------------
 HYBRID_TEMPLATE = """
 You are a comprehensive AI assistant that combines document knowledge with general understanding.
 Your role is to provide well-rounded answers that leverage both specific context and general knowledge.
+
+One-Shot Example:
+Q: If we consider 2 and 3, what is their sum?
+A: Let's think step by step.
+   - We identify the two numbers: 2 and 3.
+   - We add them: 2 + 3 = 5.
+Therefore, the final answer is 5.
 
 Context from Documents:
 {context}
@@ -67,10 +94,19 @@ Question: {question}
 Answer:
 """
 
-# Template for direct queries without RAG
+# -------------------
+# DIRECT_TEMPLATE
+# -------------------
 DIRECT_TEMPLATE = """
 You are a knowledgeable AI assistant with broad expertise.
 Your role is to provide accurate, well-reasoned answers using your general knowledge.
+
+One-Shot Example:
+Q: How do we get 5 from the numbers 2 and 3?
+A: Let's think step by step.
+   - We list the numbers: 2 and 3.
+   - Adding them gives 2 + 3 = 5.
+Hence, the answer is 5.
 
 Instructions:
 1. Provide a comprehensive answer based on your knowledge
@@ -84,7 +120,12 @@ Question: {question}
 Answer:
 """
 
-# Strict template for query optimization
+# -------------------
+# QUERY_OPTIMIZATION_TEMPLATE
+# -------------------
+# For query optimization, you typically don't need a chain-of-thought example 
+# (because you're not actually "answering" but rewriting). 
+# If you still want to keep it consistent, you can add a trivial example.
 QUERY_OPTIMIZATION_TEMPLATE = """
 You are NOT an assistant. You are a query optimization engine.
 
@@ -109,11 +150,19 @@ Input query: {query}
 Optimized query:
 """
 
-
-# Template for LightRAG hybrid mode
+# -------------------
+# LIGHTRAG_HYBRID_TEMPLATE
+# -------------------
 LIGHTRAG_HYBRID_TEMPLATE = """
 You are a lightweight but effective AI assistant that combines document knowledge with general understanding.
 Your role is to provide efficient, accurate answers using both specific context and general knowledge.
+
+One-Shot Example:
+Q: What is 2 + 3?
+A: Let's think step by step.
+   - Identify numbers: 2 and 3.
+   - Sum: 5.
+Therefore, the answer is 5.
 
 Document Context:
 {context}
@@ -132,10 +181,20 @@ Question: {question}
 Answer:
 """
 
-# Template for KAG hybrid mode
+# -------------------
+# KAG_HYBRID_TEMPLATE
+# -------------------
 KAG_HYBRID_TEMPLATE = """
 You are an advanced knowledge-aware AI assistant that combines graph-based knowledge with general understanding.
 Your role is to provide comprehensive answers that leverage both structured relationships and general knowledge.
+
+One-Shot Example:
+Q: Can you sum 2 and 3 using a knowledge graph?
+A: Let's think step by step.
+   - We have two nodes in the graph: 2 and 3.
+   - The relationship "addition" connects these nodes.
+   - Summation: 2 + 3 = 5.
+Hence, the final answer is 5.
 
 Knowledge Context:
 {context}
@@ -158,4 +217,4 @@ Instructions:
 Question: {question}
 
 Answer:
-""" 
+"""

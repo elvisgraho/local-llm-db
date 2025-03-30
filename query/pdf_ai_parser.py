@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Set
 import PyPDF2
 from tqdm import tqdm
 from global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
+import re
 
 # Configure logging
 logging.basicConfig(
@@ -140,15 +141,24 @@ def process_pdf_content(text: str, search_type: str) -> Dict[str, Any]:
     except json.JSONDecodeError:
         # If that failed, try cleaning the response
         try:
-            # Remove any markdown code blocks
-            if "```json" in response:
-                response = response.split("```json")[1]
-            elif "```" in response:
-                response = response.split("```")[1]
-            
             # Remove any thinking process or explanations
-            if "<think>" in response:
-                response = response.split("</think>")[-1]
+            tags_to_remove = [
+                r'<think>.*?</think>',
+                r'<reasoning>.*?</reasoning>',
+                r'<step>.*?</step>',
+                r'<analysis>.*?</analysis>',
+                r'<explanation>.*?</explanation>',
+                r'<solution>.*?</solution>',
+                r'<approach>.*?</approach>',
+                r'<conclusion>.*?</conclusion>',
+                r'<summary>.*?</summary>',
+                r'<evaluation>.*?</evaluation>',
+                r'<consideration>.*?</consideration>',
+                r'<implementation>.*?</implementation>'
+            ]
+            
+            for tag_pattern in tags_to_remove:
+                response = re.sub(tag_pattern, '', response, flags=re.DOTALL)
             
             # Clean up any remaining whitespace and newlines
             response = response.strip()

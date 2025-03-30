@@ -8,12 +8,12 @@ including model parameters, API endpoints, and system paths.
 import os
 from pathlib import Path
 from typing import Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass
 class LLMConfig:
     """Configuration for LLM-related settings."""
-    model_name: str = "claude-3.7-sonnet-reasoning-gemma3-12b"
+    model_name: str = "reka-flash-3-21b-reasoning-uncensored-max-neo-imatrix"
     api_url: str = "http://localhost:1234/v1/chat/completions"
     temperature: float = 0.7
     max_retries: int = 3
@@ -24,8 +24,8 @@ class LLMConfig:
 class RAGConfig:
     """Configuration for RAG-related settings."""
     similarity_threshold: float = 0.5
-    max_documents: int = 5
-    chunk_size: int = 1000
+    max_documents: int = 10
+    chunk_size: int = 1500
     chunk_overlap: int = 200
 
 @dataclass
@@ -38,9 +38,9 @@ class GraphConfig:
 @dataclass
 class SystemConfig:
     """Main system configuration."""
-    llm: LLMConfig = LLMConfig()
-    rag: RAGConfig = RAGConfig()
-    graph: GraphConfig = GraphConfig()
+    llm: LLMConfig = field(default_factory=LLMConfig)
+    rag: RAGConfig = field(default_factory=RAGConfig)
+    graph: GraphConfig = field(default_factory=GraphConfig)
     
     @classmethod
     def from_env(cls) -> 'SystemConfig':

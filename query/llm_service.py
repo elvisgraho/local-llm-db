@@ -76,10 +76,12 @@ def optimize_query(query_text: str) -> str:
         # Use a different model for optimization with lower temperature
         optimized_query = get_llm_response(prompt, temperature=0.3).strip()
 
-        # Filter out <think> tags if present
+        # Filter out <think> and <reasoning> tags if present
         if optimized_query:
-            # Remove any <think> tags and their contents
-            optimized_query = re.sub(r'<think>.*?</think>', '', optimized_query, flags=re.DOTALL).strip()
+            # Remove any <think> and <reasoning> tags and their contents
+            optimized_query = re.sub(r'<think>.*?</think>', '', optimized_query, flags=re.DOTALL)
+            optimized_query = re.sub(r'<reasoning>.*?</reasoning>', '', optimized_query, flags=re.DOTALL)
+            optimized_query = optimized_query.strip()
             
         return optimized_query if optimized_query else query_text
         

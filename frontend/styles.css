@@ -435,6 +435,21 @@ textarea::placeholder {
     font-size: 0.85rem;
 }
 
+/* Thinking and Reasoning Section */
+.thinking-section,
+.reasoning-section {
+    background-color: rgba(16, 163, 127, 0.1);
+    border-left: 3px solid var(--accent-color);
+    padding: 1rem;
+    margin-bottom: 1rem;
+    border-radius: 4px;
+    font-style: italic;
+}
+
+.main-response {
+    margin-top: 1rem;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
     .chat-history-sidebar,

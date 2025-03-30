@@ -1,0 +1,195 @@
+/* Reasoning section styles */
+.reasoning-section {
+    position: relative;
+    margin: 10px 0;
+    padding: 15px;
+    background-color: rgba(245, 245, 245, 0.8);
+    border-left: 4px solid #e0e0e0;
+    transform: skew(-5deg);
+    transform-origin: left;
+    transition: all 0.3s ease;
+}
+
+.reasoning-section > * {
+    transform: skew(5deg);
+}
+
+.reasoning-section .hamburger {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%) skew(5deg);
+    cursor: pointer;
+    width: 24px;
+    height: 20px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    z-index: 2;
+}
+
+.reasoning-section .hamburger span {
+    display: block;
+    width: 100%;
+    height: 2px;
+    background-color: #666;
+    transition: all 0.3s ease;
+}
+
+.reasoning-section.collapsed {
+    max-height: 0;
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+    opacity: 0;
+}
+
+.reasoning-section.collapsed .hamburger span:nth-child(1) {
+    transform: translateY(9px) rotate(45deg);
+}
+
+.reasoning-section.collapsed .hamburger span:nth-child(2) {
+    opacity: 0;
+}
+
+.reasoning-section.collapsed .hamburger span:nth-child(3) {
+    transform: translateY(-9px) rotate(-45deg);
+}
+
+/* Similar styles for other special sections */
+.thinking-section,
+.step-section,
+.analysis-section,
+.explanation-section,
+.solution-section,
+.approach-section,
+.conclusion-section,
+.summary-section,
+.evaluation-section,
+.consideration-section,
+.implementation-section {
+    position: relative;
+    margin: 10px 0;
+    padding: 15px;
+    background-color: rgba(245, 245, 245, 0.8);
+    border-left: 4px solid #e0e0e0;
+    transform: skew(-5deg);
+    transform-origin: left;
+    transition: all 0.3s ease;
+}
+
+.thinking-section > *,
+.step-section > *,
+.analysis-section > *,
+.explanation-section > *,
+.solution-section > *,
+.approach-section > *,
+.conclusion-section > *,
+.summary-section > *,
+.evaluation-section > *,
+.consideration-section > *,
+.implementation-section > * {
+    transform: skew(5deg);
+}
+
+.thinking-section .hamburger,
+.step-section .hamburger,
+.analysis-section .hamburger,
+.explanation-section .hamburger,
+.solution-section .hamburger,
+.approach-section .hamburger,
+.conclusion-section .hamburger,
+.summary-section .hamburger,
+.evaluation-section .hamburger,
+.consideration-section .hamburger,
+.implementation-section .hamburger {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%) skew(5deg);
+    cursor: pointer;
+    width: 24px;
+    height: 20px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    z-index: 2;
+}
+
+.thinking-section .hamburger span,
+.step-section .hamburger span,
+.analysis-section .hamburger span,
+.explanation-section .hamburger span,
+.solution-section .hamburger span,
+.approach-section .hamburger span,
+.conclusion-section .hamburger span,
+.summary-section .hamburger span,
+.evaluation-section .hamburger span,
+.consideration-section .hamburger span,
+.implementation-section .hamburger span {
+    display: block;
+    width: 100%;
+    height: 2px;
+    background-color: #666;
+    transition: all 0.3s ease;
+}
+
+.thinking-section.collapsed,
+.step-section.collapsed,
+.analysis-section.collapsed,
+.explanation-section.collapsed,
+.solution-section.collapsed,
+.approach-section.collapsed,
+.conclusion-section.collapsed,
+.summary-section.collapsed,
+.evaluation-section.collapsed,
+.consideration-section.collapsed,
+.implementation-section.collapsed {
+    max-height: 0;
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+    opacity: 0;
+}
+
+.thinking-section.collapsed .hamburger span:nth-child(1),
+.step-section.collapsed .hamburger span:nth-child(1),
+.analysis-section.collapsed .hamburger span:nth-child(1),
+.explanation-section.collapsed .hamburger span:nth-child(1),
+.solution-section.collapsed .hamburger span:nth-child(1),
+.approach-section.collapsed .hamburger span:nth-child(1),
+.conclusion-section.collapsed .hamburger span:nth-child(1),
+.summary-section.collapsed .hamburger span:nth-child(1),
+.evaluation-section.collapsed .hamburger span:nth-child(1),
+.consideration-section.collapsed .hamburger span:nth-child(1),
+.implementation-section.collapsed .hamburger span:nth-child(1) {
+    transform: translateY(9px) rotate(45deg);
+}
+
+.thinking-section.collapsed .hamburger span:nth-child(2),
+.step-section.collapsed .hamburger span:nth-child(2),
+.analysis-section.collapsed .hamburger span:nth-child(2),
+.explanation-section.collapsed .hamburger span:nth-child(2),
+.solution-section.collapsed .hamburger span:nth-child(2),
+.approach-section.collapsed .hamburger span:nth-child(2),
+.conclusion-section.collapsed .hamburger span:nth-child(2),
+.summary-section.collapsed .hamburger span:nth-child(2),
+.evaluation-section.collapsed .hamburger span:nth-child(2),
+.consideration-section.collapsed .hamburger span:nth-child(2),
+.implementation-section.collapsed .hamburger span:nth-child(2) {
+    opacity: 0;
+}
+
+.thinking-section.collapsed .hamburger span:nth-child(3),
+.step-section.collapsed .hamburger span:nth-child(3),
+.analysis-section.collapsed .hamburger span:nth-child(3),
+.explanation-section.collapsed .hamburger span:nth-child(3),
+.solution-section.collapsed .hamburger span:nth-child(3),
+.approach-section.collapsed .hamburger span:nth-child(3),
+.conclusion-section.collapsed .hamburger span:nth-child(3),
+.summary-section.collapsed .hamburger span:nth-child(3),
+.evaluation-section.collapsed .hamburger span:nth-child(3),
+.consideration-section.collapsed .hamburger span:nth-child(3),
+.implementation-section.collapsed .hamburger span:nth-child(3) {
+    transform: translateY(-9px) rotate(-45deg);
+} 

@@ -90,8 +90,24 @@ def _get_llm_response(prompt: str) -> str:
         if not content:
             return ""
             
-        # Remove <think> tags and their content
-        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+        # Remove common LLM reasoning tags and their content
+        tags_to_remove = [
+            r'<think>.*?</think>',
+            r'<reasoning>.*?</reasoning>',
+            r'<step>.*?</step>',
+            r'<analysis>.*?</analysis>',
+            r'<explanation>.*?</explanation>',
+            r'<solution>.*?</solution>',
+            r'<approach>.*?</approach>',
+            r'<conclusion>.*?</conclusion>',
+            r'<summary>.*?</summary>',
+            r'<evaluation>.*?</evaluation>',
+            r'<consideration>.*?</consideration>',
+            r'<implementation>.*?</implementation>'
+        ]
+        
+        for tag_pattern in tags_to_remove:
+            content = re.sub(tag_pattern, '', content, flags=re.DOTALL)
         
         # Clean up the response text
         content = content.strip()
@@ -279,9 +295,19 @@ def add_metadata_to_document(doc: Document, max_chars: int = 5000) -> Document:
     # Extract metadata
     metadata = extract_metadata_llm(preview_text)
     
-    # Add metadata to document
-    if "llm_metadata" not in doc.metadata:
-        doc.metadata["llm_metadata"] = {}
-    doc.metadata["llm_metadata"].update(metadata)
+    # Add metadata directly to document
+    doc.metadata.update(metadata)
     
     return doc 
+
+def format_source_filename(source: str) -> str:
+    """Format the source filename for display."""
+    if "\\" in source:
+        display_source = source.split("\\")[-1]
+    else:
+        display_source = source.split("/")[-1]
+    
+    if len(display_source) > 20:
+        display_source = display_source[:20] + "..."
+        
+    return display_source

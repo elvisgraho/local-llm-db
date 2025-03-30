@@ -244,11 +244,175 @@ async function sendQuery() {
         // Process response
         let responseText = data.data.text;
         
-        // Remove all thinking sections
-        let formattedResponse = responseText.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+        // Extract thinking and reasoning sections
+        let thinkingMatch = responseText.match(/<think>([\s\S]*?)<\/think>/);
+        let reasoningMatch = responseText.match(/<reasoning>([\s\S]*?)<\/reasoning>/);
+        let stepMatch = responseText.match(/<step>([\s\S]*?)<\/step>/);
+        let analysisMatch = responseText.match(/<analysis>([\s\S]*?)<\/analysis>/);
+        let explanationMatch = responseText.match(/<explanation>([\s\S]*?)<\/explanation>/);
+        let solutionMatch = responseText.match(/<solution>([\s\S]*?)<\/solution>/);
+        let approachMatch = responseText.match(/<approach>([\s\S]*?)<\/approach>/);
+        let conclusionMatch = responseText.match(/<conclusion>([\s\S]*?)<\/conclusion>/);
+        let summaryMatch = responseText.match(/<summary>([\s\S]*?)<\/summary>/);
+        let evaluationMatch = responseText.match(/<evaluation>([\s\S]*?)<\/evaluation>/);
+        let considerationMatch = responseText.match(/<consideration>([\s\S]*?)<\/consideration>/);
+        let implementationMatch = responseText.match(/<implementation>([\s\S]*?)<\/implementation>/);
         
-        // Add main response
-        addMessage(formattedResponse);
+        let thinkingText = thinkingMatch ? thinkingMatch[1].trim() : "";
+        let reasoningText = reasoningMatch ? reasoningMatch[1].trim() : "";
+        let stepText = stepMatch ? stepMatch[1].trim() : "";
+        let analysisText = analysisMatch ? analysisMatch[1].trim() : "";
+        let explanationText = explanationMatch ? explanationMatch[1].trim() : "";
+        let solutionText = solutionMatch ? solutionMatch[1].trim() : "";
+        let approachText = approachMatch ? approachMatch[1].trim() : "";
+        let conclusionText = conclusionMatch ? conclusionMatch[1].trim() : "";
+        let summaryText = summaryMatch ? summaryMatch[1].trim() : "";
+        let evaluationText = evaluationMatch ? evaluationMatch[1].trim() : "";
+        let considerationText = considerationMatch ? considerationMatch[1].trim() : "";
+        let implementationText = implementationMatch ? implementationMatch[1].trim() : "";
+        
+        // Remove all special sections from main response
+        let formattedResponse = responseText
+            .replace(/<think>[\s\S]*?<\/think>/g, "")
+            .replace(/<reasoning>[\s\S]*?<\/reasoning>/g, "")
+            .replace(/<step>[\s\S]*?<\/step>/g, "")
+            .replace(/<analysis>[\s\S]*?<\/analysis>/g, "")
+            .replace(/<explanation>[\s\S]*?<\/explanation>/g, "")
+            .replace(/<solution>[\s\S]*?<\/solution>/g, "")
+            .replace(/<approach>[\s\S]*?<\/approach>/g, "")
+            .replace(/<conclusion>[\s\S]*?<\/conclusion>/g, "")
+            .replace(/<summary>[\s\S]*?<\/summary>/g, "")
+            .replace(/<evaluation>[\s\S]*?<\/evaluation>/g, "")
+            .replace(/<consideration>[\s\S]*?<\/consideration>/g, "")
+            .replace(/<implementation>[\s\S]*?<\/implementation>/g, "")
+            .trim();
+        
+        // Format special sections
+        let thinkingHTML = thinkingText ? 
+            `<div class="thinking-section">
+                <div class="hamburger">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                ${thinkingText}
+            </div>` : "";
+        let reasoningHTML = reasoningText ? 
+            `<div class="reasoning-section">
+                <div class="hamburger">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                ${reasoningText}
+            </div>` : "";
+        let stepHTML = stepText ? 
+            `<div class="step-section">
+                <div class="hamburger">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                ${stepText}
+            </div>` : "";
+        let analysisHTML = analysisText ? 
+            `<div class="analysis-section">
+                <div class="hamburger">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                ${analysisText}
+            </div>` : "";
+        let explanationHTML = explanationText ? 
+            `<div class="explanation-section">
+                <div class="hamburger">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                ${explanationText}
+            </div>` : "";
+        let solutionHTML = solutionText ? 
+            `<div class="solution-section">
+                <div class="hamburger">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                ${solutionText}
+            </div>` : "";
+        let approachHTML = approachText ? 
+            `<div class="approach-section">
+                <div class="hamburger">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                ${approachText}
+            </div>` : "";
+        let conclusionHTML = conclusionText ? 
+            `<div class="conclusion-section">
+                <div class="hamburger">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                ${conclusionText}
+            </div>` : "";
+        let summaryHTML = summaryText ? 
+            `<div class="summary-section">
+                <div class="hamburger">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                ${summaryText}
+            </div>` : "";
+        let evaluationHTML = evaluationText ? 
+            `<div class="evaluation-section">
+                <div class="hamburger">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                ${evaluationText}
+            </div>` : "";
+        let considerationHTML = considerationText ? 
+            `<div class="consideration-section">
+                <div class="hamburger">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                ${considerationText}
+            </div>` : "";
+        let implementationHTML = implementationText ? 
+            `<div class="implementation-section">
+                <div class="hamburger">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                ${implementationText}
+            </div>` : "";
+        
+        // Add main response with all special sections
+        addMessage(`
+            ${thinkingHTML}
+            ${reasoningHTML}
+            ${stepHTML}
+            ${analysisHTML}
+            ${explanationHTML}
+            ${solutionHTML}
+            ${approachHTML}
+            ${conclusionHTML}
+            ${summaryHTML}
+            ${evaluationHTML}
+            ${considerationHTML}
+            ${implementationHTML}
+            <div class="main-response">${formattedResponse}</div>
+        `);
         
         // Add sources if present
         if (data.data.sources && data.data.sources.length > 0) {
@@ -278,6 +442,17 @@ async function sendQuery() {
             sourcesDiv.appendChild(sourcesList);
             document.getElementById('chatContainer').appendChild(sourcesDiv);
         }
+        
+        // Add event listeners for hamburger menus
+        const sections = document.querySelectorAll('.thinking-section, .reasoning-section, .step-section, .analysis-section, .explanation-section, .solution-section, .approach-section, .conclusion-section, .summary-section, .evaluation-section, .consideration-section, .implementation-section');
+        sections.forEach(section => {
+            const hamburger = section.querySelector('.hamburger');
+            if (hamburger) {
+                hamburger.addEventListener('click', () => {
+                    section.classList.toggle('collapsed');
+                });
+            }
+        });
         
     } catch (error) {
         // Remove thinking indicator
