@@ -21,6 +21,9 @@
             <div class="sidebar-header">
                 <h1>RAG Assistant</h1>
             </div>
+            <div class="search-container">
+                <input type="text" id="searchInput" class="search-input" placeholder="Search messages...">
+            </div>
             <div class="query-mode-selector">
                 <select id="queryMode" class="mode-select">
                     <option value="rag">RAG Mode</option>
@@ -63,11 +66,20 @@
 
             <div class="input-container">
                 <div class="input-wrapper">
-                    <textarea 
-                        id="queryInput" 
-                        placeholder="Type your message here..." 
-                        rows="1"
-                        onkeydown="handleKeyDown(event)"></textarea>
+                    <div class="input-controls">
+                        <div class="context-info">
+                            <span id="contextLength">0 tokens</span>
+                            <label class="history-toggle">
+                                <input type="checkbox" id="includeHistory">
+                                <span class="toggle-label">Include conversation history</span>
+                            </label>
+                        </div>
+                        <textarea 
+                            id="queryInput" 
+                            placeholder="Type your message here..." 
+                            rows="1"
+                            onkeydown="handleKeyDown(event)"></textarea>
+                    </div>
                     <button class="send-button" onclick="sendQuery()">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                             <path d="M7 11L12 6L17 11M12 18V7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -77,6 +89,15 @@
             </div>
         </main>
     </div>
+
+    <!-- Export Button -->
+    <button class="export-button" id="exportButton" title="Export chat">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 4V16M12 16L8 12M12 16L16 12M4 13V18C4 19.1046 4.89543 20 6 20H18C19.1046 20 20 19.1046 20 18V13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Export
+    </button>
+
     <script src="app.js"></script>
 </body>
 </html> 

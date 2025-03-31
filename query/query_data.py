@@ -2,7 +2,7 @@ import argparse
 import networkx as nx
 from langchain.prompts import ChatPromptTemplate
 from sklearn.metrics.pairwise import cosine_similarity
-from database_paths import CHROMA_PATH
+from query.database_paths import CHROMA_PATH
 from query.data_service import data_service
 from query.templates import (
     RAG_ONLY_TEMPLATE,

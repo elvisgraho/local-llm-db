@@ -6,18 +6,49 @@ const md = window.markdownit({
     highlight: function (str, lang) {
         if (lang && Prism.languages[lang]) {
             try {
-                return `<pre class="line-numbers"><code class="language-${lang}">${Prism.highlight(str, Prism.languages[lang], lang)}</code></pre>`;
+                return `<pre class="line-numbers" data-language="${lang}"><code class="language-${lang}">${Prism.highlight(str, Prism.languages[lang], lang)}</code></pre>`;
             } catch (__) {}
         }
-        return `<pre class="line-numbers"><code class="language-plaintext">${md.utils.escapeHtml(str)}</code></pre>`;
+        return `<pre class="line-numbers" data-language="plaintext"><code class="language-plaintext">${md.utils.escapeHtml(str)}</code></pre>`;
     }
 });
+
+// Rough estimation of tokens (4 characters per token on average)
+function estimateTokens(text) {
+    return Math.ceil(text.length / 4);
+}
+
+// Update context length display
+function updateContextLength() {
+    const queryInput = document.getElementById('queryInput');
+    const includeHistory = document.getElementById('includeHistory');
+    const contextLengthDisplay = document.getElementById('contextLength');
+    
+    let totalTokens = estimateTokens(queryInput.value);
+    
+    if (includeHistory.checked && currentChatId) {
+        const chat = chats.find(c => c.id === currentChatId);
+        if (chat) {
+            const historyText = chat.messages
+                .map(msg => msg.content)
+                .join('\n');
+            totalTokens += estimateTokens(historyText);
+        }
+    }
+    
+    contextLengthDisplay.textContent = `${totalTokens} tokens`;
+}
+
+// Add event listeners for context length updates
+document.getElementById('queryInput').addEventListener('input', updateContextLength);
+document.getElementById('includeHistory').addEventListener('change', updateContextLength);
 
 // Auto-resize textarea
 const textarea = document.getElementById('queryInput');
 textarea.addEventListener('input', function() {
     this.style.height = 'auto';
-    this.style.height = (this.scrollHeight) + 'px';
+    this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+    updateContextLength();
 });
 
 // Handle Enter key (Shift+Enter for new line)
@@ -59,9 +90,9 @@ function switchChat(chatId) {
     const chatContainer = document.getElementById('chatContainer');
     chatContainer.innerHTML = '';
     
-    // Load messages
+    // Load messages with their saved timestamps
     chat.messages.forEach(msg => {
-        addMessage(msg.content, msg.isUser);
+        addMessage(msg.content, msg.isUser, msg.messageId, msg.timestamp);
     });
     
     // Update chat history UI
@@ -119,13 +150,137 @@ function updateChatHistoryUI() {
     });
 }
 
-// Add message to chat
-function addMessage(content, isUser = false) {
+// Message Search
+const searchInput = document.getElementById('searchInput');
+let searchTimeout;
+
+searchInput.addEventListener('input', (e) => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+        const searchTerm = e.target.value.toLowerCase();
+        const messages = document.querySelectorAll('.message');
+        
+        messages.forEach(message => {
+            const content = message.textContent.toLowerCase();
+            const isMatch = content.includes(searchTerm);
+            
+            message.style.display = isMatch ? 'block' : 'none';
+            
+            if (isMatch && searchTerm) {
+                highlightText(message, searchTerm);
+            } else {
+                removeHighlights(message);
+            }
+        });
+    }, 300);
+});
+
+function highlightText(element, searchTerm) {
+    const content = element.textContent;
+    const regex = new RegExp(`(${searchTerm})`, 'gi');
+    element.innerHTML = content.replace(regex, '<span class="highlight">$1</span>');
+}
+
+function removeHighlights(element) {
+    const highlights = element.querySelectorAll('.highlight');
+    highlights.forEach(highlight => {
+        const text = highlight.textContent;
+        highlight.replaceWith(text);
+    });
+}
+
+// Code Block Copy Button
+function addCopyButtons() {
+    document.querySelectorAll('pre code').forEach(block => {
+        const pre = block.parentElement;
+        const language = pre.getAttribute('data-language');
+        
+        // Only add copy button for code blocks with a language specified
+        if (language && language !== 'plaintext') {
+            const header = document.createElement('div');
+            header.className = 'code-block-header';
+            
+            const languageSpan = document.createElement('span');
+            languageSpan.className = 'code-block-language';
+            languageSpan.textContent = language;
+            
+            const copyButton = document.createElement('button');
+            copyButton.className = 'copy-button';
+            copyButton.textContent = 'Copy';
+            copyButton.onclick = async () => {
+                try {
+                    await navigator.clipboard.writeText(block.textContent);
+                    copyButton.textContent = 'Copied!';
+                    setTimeout(() => {
+                        copyButton.textContent = 'Copy';
+                    }, 2000);
+                } catch (err) {
+                    console.error('Failed to copy text:', err);
+                }
+            };
+            
+            header.appendChild(languageSpan);
+            header.appendChild(copyButton);
+            pre.insertBefore(header, block);
+        }
+    });
+}
+
+// Export Chat
+const exportButton = document.getElementById('exportButton');
+
+exportButton.addEventListener('click', () => {
+    if (!currentChatId) return;
+    
+    const chat = chats.find(c => c.id === currentChatId);
+    if (!chat) return;
+    
+    const exportData = {
+        title: chat.title,
+        messages: chat.messages,
+        timestamp: chat.timestamp
+    };
+    
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `chat-${chat.title.toLowerCase().replace(/\s+/g, '-')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+});
+
+// Update addMessage function to include new features
+function addMessage(content, isUser = false, messageId = null, savedTimestamp = null) {
     if (!currentChatId) return;
     
     const chatContainer = document.getElementById('chatContainer');
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
+    
+    // Use provided messageId or generate new one
+    messageDiv.dataset.messageId = messageId || Date.now().toString();
+    
+    // Add message header with timestamp
+    const header = document.createElement('div');
+    header.className = 'message-header';
+    
+    const timestamp = document.createElement('span');
+    timestamp.className = 'message-timestamp';
+    // Use saved timestamp if available, otherwise use current time
+    timestamp.textContent = savedTimestamp ? new Date(savedTimestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+    
+    const status = document.createElement('div');
+    status.className = 'message-status';
+    const statusIndicator = document.createElement('span');
+    statusIndicator.className = 'status-indicator';
+    status.appendChild(statusIndicator);
+    
+    header.appendChild(timestamp);
+    header.appendChild(status);
+    messageDiv.appendChild(header);
     
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
@@ -140,27 +295,73 @@ function addMessage(content, isUser = false) {
     // Scroll to bottom
     chatContainer.scrollTop = chatContainer.scrollHeight;
     
-    // Apply syntax highlighting
+    // Apply syntax highlighting and add copy buttons
     messageDiv.querySelectorAll('pre code').forEach((block) => {
         Prism.highlightElement(block);
     });
+    addCopyButtons();
 
-    // Save to chat history
-    const chat = chats.find(c => c.id === currentChatId);
-    if (chat) {
-        chat.messages.push({
-            content,
-            isUser,
-            timestamp: new Date().toISOString()
+    // Only save to chat history if this is a new message (not loading from history)
+    if (!messageId) {
+        const chat = chats.find(c => c.id === currentChatId);
+        if (chat) {
+            chat.messages.push({
+                content,
+                isUser,
+                timestamp: new Date().toISOString(),
+                messageId: messageDiv.dataset.messageId
+            });
+            
+            // Update chat title if it's the first message
+            if (chat.messages.length === 1 && !isUser) {
+                chat.title = content.substring(0, 30) + (content.length > 30 ? '...' : '');
+            }
+            
+            localStorage.setItem('chats', JSON.stringify(chats));
+            updateChatHistoryUI();
+        }
+    }
+}
+
+// Initialize the app
+document.addEventListener('DOMContentLoaded', () => {
+    // Clear any existing messages in the chat container
+    const chatContainer = document.getElementById('chatContainer');
+    chatContainer.innerHTML = '';
+    
+    // Create initial chat if none exists
+    if (chats.length === 0) {
+        createNewChat();
+    } else {
+        // Switch to the most recent chat
+        const mostRecentChat = chats.reduce((latest, current) => 
+            new Date(current.timestamp) > new Date(latest.timestamp) ? current : latest
+        );
+        switchChat(mostRecentChat.id);
+    }
+    
+    // Add copy buttons to existing code blocks
+    addCopyButtons();
+});
+
+// Add this function at the end of the file, before the DOMContentLoaded event listener
+async function openLocalFile(filePath) {
+    try {
+        const response = await fetch('http://localhost:5000/open_file', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ file_path: filePath })
         });
         
-        // Update chat title if it's the first message
-        if (chat.messages.length === 1 && !isUser) {
-            chat.title = content.substring(0, 30) + (content.length > 30 ? '...' : '');
+        const data = await response.json();
+        if (data.status === 'error') {
+            throw new Error(data.error || 'Failed to open file');
         }
-        
-        localStorage.setItem('chats', JSON.stringify(chats));
-        updateChatHistoryUI();
+    } catch (error) {
+        console.error('Error opening file:', error);
+        alert('Failed to open file. Please check if the file exists and you have permission to access it.');
     }
 }
 
@@ -194,7 +395,22 @@ function removeThinkingIndicator() {
     }
 }
 
-// Send query to backend
+// Toggle section visibility
+function toggleSection(section) {
+    section.classList.toggle('collapsed');
+}
+
+// Add click handlers for section toggles
+document.addEventListener('click', function(e) {
+    if (e.target.closest('.hamburger')) {
+        const section = e.target.closest('.special-section');
+        if (section) {
+            toggleSection(section);
+        }
+    }
+});
+
+// Update sendQuery function to include history
 async function sendQuery() {
     if (!currentChatId) {
         createNewChat();
@@ -202,6 +418,7 @@ async function sendQuery() {
     
     const queryInput = document.getElementById('queryInput');
     const queryMode = document.getElementById('queryMode');
+    const includeHistory = document.getElementById('includeHistory');
     const query = queryInput.value.trim();
     
     if (!query) return;
@@ -212,23 +429,37 @@ async function sendQuery() {
     // Clear input and reset height
     queryInput.value = '';
     queryInput.style.height = 'auto';
+    updateContextLength();
     
     // Add thinking indicator
     addThinkingIndicator();
     
     try {
+        let requestBody = {
+            query_text: query,
+            mode: queryMode.value,
+            optimize: document.getElementById('optimizeToggle').checked,
+            hybrid: document.getElementById('hybridToggle').checked
+        };
+
+        // Include conversation history if requested
+        if (includeHistory.checked) {
+            const chat = chats.find(c => c.id === currentChatId);
+            if (chat) {
+                requestBody.conversation_history = chat.messages
+                    .map(msg => ({
+                        role: msg.isUser ? 'user' : 'assistant',
+                        content: msg.content
+                    }));
+            }
+        }
+
         const response = await fetch('http://localhost:5000/query', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                query_text: query,
-                mode: queryMode.value,
-                optimize: document.getElementById('optimizeToggle').checked,
-                hybrid: document.getElementById('hybridToggle').checked
-            }),
-            // Add timeout of 5 minutes (300000ms)
+            body: JSON.stringify(requestBody),
             signal: AbortSignal.timeout(300000)
         });
         
@@ -244,179 +475,68 @@ async function sendQuery() {
         // Process response
         let responseText = data.data.text;
         
-        // Extract thinking and reasoning sections
-        let thinkingMatch = responseText.match(/<think>([\s\S]*?)<\/think>/);
-        let reasoningMatch = responseText.match(/<reasoning>([\s\S]*?)<\/reasoning>/);
-        let stepMatch = responseText.match(/<step>([\s\S]*?)<\/step>/);
-        let analysisMatch = responseText.match(/<analysis>([\s\S]*?)<\/analysis>/);
-        let explanationMatch = responseText.match(/<explanation>([\s\S]*?)<\/explanation>/);
-        let solutionMatch = responseText.match(/<solution>([\s\S]*?)<\/solution>/);
-        let approachMatch = responseText.match(/<approach>([\s\S]*?)<\/approach>/);
-        let conclusionMatch = responseText.match(/<conclusion>([\s\S]*?)<\/conclusion>/);
-        let summaryMatch = responseText.match(/<summary>([\s\S]*?)<\/summary>/);
-        let evaluationMatch = responseText.match(/<evaluation>([\s\S]*?)<\/evaluation>/);
-        let considerationMatch = responseText.match(/<consideration>([\s\S]*?)<\/consideration>/);
-        let implementationMatch = responseText.match(/<implementation>([\s\S]*?)<\/implementation>/);
+        // If response is an error message, display it directly without processing
+        if (responseText.includes('Error processing')) {
+            addMessage(responseText);
+            return;
+        }
         
-        let thinkingText = thinkingMatch ? thinkingMatch[1].trim() : "";
-        let reasoningText = reasoningMatch ? reasoningMatch[1].trim() : "";
-        let stepText = stepMatch ? stepMatch[1].trim() : "";
-        let analysisText = analysisMatch ? analysisMatch[1].trim() : "";
-        let explanationText = explanationMatch ? explanationMatch[1].trim() : "";
-        let solutionText = solutionMatch ? solutionMatch[1].trim() : "";
-        let approachText = approachMatch ? approachMatch[1].trim() : "";
-        let conclusionText = conclusionMatch ? conclusionMatch[1].trim() : "";
-        let summaryText = summaryMatch ? summaryMatch[1].trim() : "";
-        let evaluationText = evaluationMatch ? evaluationMatch[1].trim() : "";
-        let considerationText = considerationMatch ? considerationMatch[1].trim() : "";
-        let implementationText = implementationMatch ? implementationMatch[1].trim() : "";
+        // Extract special sections
+        const specialSections = {
+            'think': responseText.match(/<think>([\s\S]*?)<\/think>/),
+            'reasoning': responseText.match(/<reasoning>([\s\S]*?)<\/reasoning>/),
+            'step': responseText.match(/<step>([\s\S]*?)<\/step>/),
+            'analysis': responseText.match(/<analysis>([\s\S]*?)<\/analysis>/),
+            'explanation': responseText.match(/<explanation>([\s\S]*?)<\/explanation>/),
+            'solution': responseText.match(/<solution>([\s\S]*?)<\/solution>/),
+            'approach': responseText.match(/<approach>([\s\S]*?)<\/approach>/),
+            'conclusion': responseText.match(/<conclusion>([\s\S]*?)<\/conclusion>/),
+            'summary': responseText.match(/<summary>([\s\S]*?)<\/summary>/),
+            'evaluation': responseText.match(/<evaluation>([\s\S]*?)<\/evaluation>/),
+            'consideration': responseText.match(/<consideration>([\s\S]*?)<\/consideration>/),
+            'implementation': responseText.match(/<implementation>([\s\S]*?)<\/implementation>/)
+        };
         
         // Remove all special sections from main response
-        let formattedResponse = responseText
-            .replace(/<think>[\s\S]*?<\/think>/g, "")
-            .replace(/<reasoning>[\s\S]*?<\/reasoning>/g, "")
-            .replace(/<step>[\s\S]*?<\/step>/g, "")
-            .replace(/<analysis>[\s\S]*?<\/analysis>/g, "")
-            .replace(/<explanation>[\s\S]*?<\/explanation>/g, "")
-            .replace(/<solution>[\s\S]*?<\/solution>/g, "")
-            .replace(/<approach>[\s\S]*?<\/approach>/g, "")
-            .replace(/<conclusion>[\s\S]*?<\/conclusion>/g, "")
-            .replace(/<summary>[\s\S]*?<\/summary>/g, "")
-            .replace(/<evaluation>[\s\S]*?<\/evaluation>/g, "")
-            .replace(/<consideration>[\s\S]*?<\/consideration>/g, "")
-            .replace(/<implementation>[\s\S]*?<\/implementation>/g, "")
-            .trim();
+        let formattedResponse = responseText;
+        Object.keys(specialSections).forEach(tag => {
+            formattedResponse = formattedResponse.replace(new RegExp(`<${tag}>[\\s\\S]*?<\\/${tag}>`, 'g'), "");
+        });
+        formattedResponse = formattedResponse.trim();
         
         // Format special sections
-        let thinkingHTML = thinkingText ? 
-            `<div class="thinking-section">
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                ${thinkingText}
-            </div>` : "";
-        let reasoningHTML = reasoningText ? 
-            `<div class="reasoning-section">
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                ${reasoningText}
-            </div>` : "";
-        let stepHTML = stepText ? 
-            `<div class="step-section">
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                ${stepText}
-            </div>` : "";
-        let analysisHTML = analysisText ? 
-            `<div class="analysis-section">
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                ${analysisText}
-            </div>` : "";
-        let explanationHTML = explanationText ? 
-            `<div class="explanation-section">
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                ${explanationText}
-            </div>` : "";
-        let solutionHTML = solutionText ? 
-            `<div class="solution-section">
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                ${solutionText}
-            </div>` : "";
-        let approachHTML = approachText ? 
-            `<div class="approach-section">
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                ${approachText}
-            </div>` : "";
-        let conclusionHTML = conclusionText ? 
-            `<div class="conclusion-section">
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                ${conclusionText}
-            </div>` : "";
-        let summaryHTML = summaryText ? 
-            `<div class="summary-section">
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                ${summaryText}
-            </div>` : "";
-        let evaluationHTML = evaluationText ? 
-            `<div class="evaluation-section">
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                ${evaluationText}
-            </div>` : "";
-        let considerationHTML = considerationText ? 
-            `<div class="consideration-section">
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                ${considerationText}
-            </div>` : "";
-        let implementationHTML = implementationText ? 
-            `<div class="implementation-section">
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                </div>
-                ${implementationText}
-            </div>` : "";
+        let specialSectionsHTML = Object.entries(specialSections)
+            .map(([tag, match]) => {
+                if (!match) return "";
+                const content = match[1].trim();
+                return `
+                    <div class="special-section">
+                        <div class="hamburger">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
+                        ${content}
+                    </div>
+                `;
+            })
+            .join("");
         
-        // Add main response with all special sections
+        // Calculate tokens per second
+        const totalTokens = estimateTokens(responseText);
+        const totalTime = data.stats.total_time;
+        const tokensPerSecond = totalTime > 0 ? (totalTokens / totalTime).toFixed(1) : '0.0';
+        
+        // Add main response with all special sections and token speed
         addMessage(`
-            ${thinkingHTML}
-            ${reasoningHTML}
-            ${stepHTML}
-            ${analysisHTML}
-            ${explanationHTML}
-            ${solutionHTML}
-            ${approachHTML}
-            ${conclusionHTML}
-            ${summaryHTML}
-            ${evaluationHTML}
-            ${considerationHTML}
-            ${implementationHTML}
+            ${specialSectionsHTML}
             <div class="main-response">${formattedResponse}</div>
+            <div class="token-speed">${tokensPerSecond} tokens/s</div>
         `);
         
         // Add sources if present
         if (data.data.sources && data.data.sources.length > 0) {
-            uniq = [...new Set(data.data.sources)];
+            const uniq = [...new Set(data.data.sources)];
             const sourcesList = document.createElement('ul');
             sourcesList.className = 'sources-list';
             
@@ -444,8 +564,8 @@ async function sendQuery() {
         }
         
         // Add event listeners for hamburger menus
-        const sections = document.querySelectorAll('.thinking-section, .reasoning-section, .step-section, .analysis-section, .explanation-section, .solution-section, .approach-section, .conclusion-section, .summary-section, .evaluation-section, .consideration-section, .implementation-section');
-        sections.forEach(section => {
+        const specialSectionElements = document.querySelectorAll('.special-section');
+        specialSectionElements.forEach(section => {
             const hamburger = section.querySelector('.hamburger');
             if (hamburger) {
                 hamburger.addEventListener('click', () => {
@@ -460,40 +580,5 @@ async function sendQuery() {
         
         // Show error message
         addMessage(`Error: ${error.message}`);
-    }
-}
-
-// Initialize the app
-document.addEventListener('DOMContentLoaded', () => {
-    // Create initial chat if none exists
-    if (chats.length === 0) {
-        createNewChat();
-    } else {
-        // Switch to the most recent chat
-        const mostRecentChat = chats.reduce((latest, current) => 
-            new Date(current.timestamp) > new Date(latest.timestamp) ? current : latest
-        );
-        switchChat(mostRecentChat.id);
-    }
-});
-
-// Add this function at the end of the file, before the DOMContentLoaded event listener
-async function openLocalFile(filePath) {
-    try {
-        const response = await fetch('http://localhost:5000/open_file', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ file_path: filePath })
-        });
-        
-        const data = await response.json();
-        if (data.status === 'error') {
-            throw new Error(data.error || 'Failed to open file');
-        }
-    } catch (error) {
-        console.error('Error opening file:', error);
-        alert('Failed to open file. Please check if the file exists and you have permission to access it.');
     }
 } 
