@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from waitress import serve
 import sys
@@ -22,13 +22,23 @@ logging.basicConfig(
     ]
 )
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='../frontend')
 CORS(app)
 
 # Debug mode flag
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
 
-@app.route('/query', methods=['POST'])
+# Frontend routes
+@app.route('/')
+def serve_frontend():
+    return send_from_directory(app.static_folder, 'index.html')
+
+@app.route('/<path:path>')
+def serve_static(path):
+    return send_from_directory(app.static_folder, path)
+
+# API routes
+@app.route('/api/query', methods=['POST'])
 def handle_query():
     start_time = time.time()
     request_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
@@ -141,7 +151,7 @@ def handle_query():
             'traceback': traceback.format_exc() if DEBUG_MODE else None
         }), 500
 
-@app.route('/health', methods=['GET'])
+@app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint to verify server status"""
     return jsonify({
@@ -151,7 +161,7 @@ def health_check():
         'debug_mode': DEBUG_MODE
     })
 
-@app.route('/clear_cache', methods=['POST'])
+@app.route('/api/clear_cache', methods=['POST'])
 def clear_cache():
     """Clear the data service cache"""
     try:
@@ -176,7 +186,8 @@ if __name__ == '__main__':
     logging.info(f"Debug mode: {DEBUG_MODE}")
     logging.info("🚀 Server is running on http://127.0.0.1:5000/")
     logging.info("Available endpoints:")
-    logging.info("- POST /query - Query the RAG system")
-    logging.info("- GET /health - Health check endpoint")
-    logging.info("- POST /clear_cache - Clear data service cache")
+    logging.info("- POST /api/query - Query the RAG system")
+    logging.info("- GET /api/health - Health check endpoint")
+    logging.info("- POST /api/clear_cache - Clear data service cache")
+    logging.info("- GET / - Frontend application")
     serve(app, host="0.0.0.0", port=5000, threads=10)
