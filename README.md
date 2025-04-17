@@ -17,6 +17,7 @@ A comprehensive implementation of different RAG (Retrieval Augmented Generation)
 ## Setup
 
 1. Install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -24,6 +25,7 @@ pip install -r requirements.txt
 2. Place your documents in the `training/data` directory
 
 3. Run the desired RAG implementation:
+
 ```bash
 # Standard RAG
 python training/populate_rag.py
@@ -39,8 +41,9 @@ python training/populate_lightrag.py
 ```
 
 4. Start the web interface:
+
 ```bash
-uvicorn query.main:app --reload
+flask --app backend.backend run --reload
 ```
 
 ## Project Structure

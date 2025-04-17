@@ -1,5 +1,6 @@
 import argparse
 import networkx as nx
+from typing import Any, Optional, List, Dict, Union # Added for type hinting
 from langchain.prompts import ChatPromptTemplate
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain.schema import Document # Added import
@@ -68,10 +69,12 @@ def main():
         logger.error(f"Error processing query: {str(e)}", exc_info=True)
         print(f"Error: {str(e)}")
 
-def query_direct(query_text: str) -> Dict[str, Union[str, List[str]]]:
+def query_direct(query_text: str, llm_config: Optional[Dict] = None) -> Dict[str, Union[str, List[str]]]:
     """Query the model directly without using RAG.
     
     Args:
+        query_text (str): The query text.
+        llm_config (Optional[Dict]): Configuration for the LLM provider.
         query_text (str): The query text.
         
     Returns:
@@ -82,11 +85,11 @@ def query_direct(query_text: str) -> Dict[str, Union[str, List[str]]]:
         prompt_template = ChatPromptTemplate.from_template(DIRECT_TEMPLATE)
         prompt = prompt_template.format(question=query_text)
         
-        response_text = get_llm_response(prompt)
+        response_text = get_llm_response(prompt, llm_config=llm_config)
         return {"text": response_text, "sources": []}
     except Exception as e:
         logger.error(f"Error in direct query: {str(e)}", exc_info=True)
-        return {"text": "Error processing direct query", "sources": []}
+        raise  # Re-raise the exception to be caught by the main handler
 
 def _perform_hybrid_retrieval_and_rerank(
     query_text: str,
@@ -192,12 +195,13 @@ def _perform_hybrid_retrieval_and_rerank(
             
     return final_docs, sources
 
-def query_hybrid(query_text: str) -> Dict[str, Union[str, List[str]]]:
+def query_hybrid(query_text: str, llm_config: Optional[Dict] = None) -> Dict[str, Union[str, List[str]]]:
     """Query using both RAG context and the model's knowledge.
     Applies Hybrid Search (Semantic + Keyword) and Reranking to the retrieved context.
     
     Args:
         query_text (str): The query text.
+        llm_config (Optional[Dict]): Configuration for the LLM provider.
         
     Returns:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
@@ -225,20 +229,21 @@ def query_hybrid(query_text: str) -> Dict[str, Union[str, List[str]]]:
         prompt = prompt_template.format(context=context_text, question=query_text)
         
         # Get response
-        response_text = get_llm_response(prompt)
+        response_text = get_llm_response(prompt, llm_config=llm_config)
         # Sources are obtained from the helper function
         
         return {"text": response_text, "sources": sources}
     except Exception as e:
         logger.error(f"Error in hybrid query: {str(e)}", exc_info=True)
-        return {"text": "Error processing hybrid query", "sources": []}
+        raise # Re-raise the exception
 
-def query_graph(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, List[str]]]:
+def query_graph(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None) -> Dict[str, Union[str, List[str]]]:
     """Query using the graph structure with semantic search.
     
     Args:
         query_text (str): The query text.
         hybrid (bool): Whether to use hybrid mode.
+        llm_config (Optional[Dict]): Configuration for the LLM provider.
         
     Returns:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
@@ -250,7 +255,7 @@ def query_graph(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, L
         G = data_service.graphrag_graph
     except Exception as e:
         logger.error(f"Error loading graph: {str(e)}", exc_info=True)
-        return {"text": "Error loading graph structure", "sources": []}
+        raise # Re-raise the exception
 
     # Find relevant nodes based on semantic similarity
     relevant_nodes = []
@@ -304,16 +309,17 @@ def query_graph(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, L
     prompt_template = ChatPromptTemplate.from_template(template)
     prompt = prompt_template.format(context=context_text, question=query_text)
     
-    response_text = get_llm_response(prompt)
+    response_text = get_llm_response(prompt, llm_config=llm_config)
     return {"text": response_text, "sources": list(sources)}
 
-def query_rag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, List[str]]]:
+def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None) -> Dict[str, Union[str, List[str]]]:
     """Query using RAG with Hybrid Search (Semantic + Keyword) and Reranking.
     
     Args:
         query_text (str): The query text.
         hybrid (bool): Whether to use the hybrid LLM prompt template
                      (combining retrieved context with LLM's internal knowledge).
+        llm_config (Optional[Dict]): Configuration for the LLM provider.
         
     Returns:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
@@ -350,7 +356,7 @@ def query_rag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, Lis
         prompt = prompt_template.format(context=context_text, question=query_text)
 
         # Get response
-        response_text = get_llm_response(prompt)
+        response_text = get_llm_response(prompt, llm_config=llm_config)
         
         # Sources are obtained from the helper function
         # Ensure database is persisted after query
@@ -359,9 +365,9 @@ def query_rag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, Lis
         return {"text": response_text, "sources": sources}
     except Exception as e:
         logger.error(f"Error in RAG query: {str(e)}", exc_info=True)
-        return {"text": "Error processing RAG query", "sources": []}
+        raise # Re-raise the exception
 
-def query_lightrag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, List[str]]]:
+def query_lightrag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None) -> Dict[str, Union[str, List[str]]]:
     """Query using the light RAG implementation.
     
     LightRAG is a simplified version of RAG that focuses on speed and efficiency:
@@ -373,6 +379,7 @@ def query_lightrag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str
     Args:
         query_text (str): The query text.
         hybrid (bool): Whether to use hybrid mode.
+        llm_config (Optional[Dict]): Configuration for the LLM provider.
         
     Returns:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
@@ -413,22 +420,24 @@ def query_lightrag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str
         if hybrid:
             prompt_template = ChatPromptTemplate.from_template(LIGHTRAG_HYBRID_TEMPLATE)
             prompt = prompt_template.format(context=context_text, question=query_text)
-            response_text = get_llm_response(prompt)
+            response_text = get_llm_response(prompt, llm_config=llm_config)
         else:
             # Use regular QA chain for non-hybrid mode (faster)
+            # TODO: Consider how to pass llm_config to the QA chain if needed
             response_text = data_service.qa_chain.invoke({"query": query_text})["result"]
         
         return {"text": response_text, "sources": sources}
     except Exception as e:
         logger.error(f"Error in light RAG query: {str(e)}", exc_info=True)
-        return {"text": "Error processing light RAG query", "sources": []}
+        raise # Re-raise the exception
 
-def query_kag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, List[str]]]:
+def query_kag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None) -> Dict[str, Union[str, List[str]]]:
     """Query using Knowledge-Augmented Generation (KAG) approach.
     
     Args:
         query_text (str): The query text.
         hybrid (bool): Whether to use hybrid mode.
+        llm_config (Optional[Dict]): Configuration for the LLM provider.
         
     Returns:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
@@ -440,7 +449,7 @@ def query_kag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, Lis
         G = data_service.kag_graph
     except Exception as e:
         logger.error(f"Error loading graph: {str(e)}", exc_info=True)
-        return {"text": "Error loading knowledge graph", "sources": []}
+        raise # Re-raise the exception
 
     # Get query embedding
     query_embedding = data_service.embedding_function.embed_query(query_text)
@@ -529,7 +538,7 @@ def query_kag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, Lis
         question=query_text
     )
     
-    response_text = get_llm_response(prompt)
+    response_text = get_llm_response(prompt, llm_config=llm_config)
     return {"text": response_text, "sources": list(sources)}
 
 if __name__ == "__main__":

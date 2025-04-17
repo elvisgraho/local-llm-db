@@ -1,584 +1,329 @@
-// Initialize markdown-it
-const md = window.markdownit({
-    html: true,
-    linkify: true,
-    typographer: true,
-    highlight: function (str, lang) {
-        if (lang && Prism.languages[lang]) {
-            try {
-                return `<pre class="line-numbers" data-language="${lang}"><code class="language-${lang}">${Prism.highlight(str, Prism.languages[lang], lang)}</code></pre>`;
-            } catch (__) {}
-        }
-        return `<pre class="line-numbers" data-language="plaintext"><code class="language-plaintext">${md.utils.escapeHtml(str)}</code></pre>`;
-    }
+// Global React and Material UI constants for components
+const { useState, useEffect, useRef, useCallback, createElement: e } = React;
+const {
+  Box,
+  Paper,
+  Typography,
+  Chip,
+  CircularProgress,
+  Alert,
+  TextField,
+  IconButton,
+  FormControlLabel,
+  Checkbox,
+  Tooltip,
+  Drawer,
+  List,
+  ListItem,
+  ListItemText,
+  ListItemIcon,
+  Divider,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  Switch,
+  Button,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  RadioGroup,
+  Radio,
+  ThemeProvider,
+  createTheme,
+  CssBaseline,
+} = MaterialUI;
+
+// Helper for Material Icons (Globally available)
+const Icon = ({ children, sx }) =>
+  e("span", { className: "material-icons", style: sx }, children);
+
+// Define the dark theme globally (used by AppRoot and Modal)
+const darkTheme = createTheme({
+  palette: {
+    mode: "dark",
+    primary: {
+      main: "#66bb6a", // MUI green
+    },
+    secondary: {
+      main: "#ba68c8", // MUI purple
+    },
+    background: {
+      default: "#303030",
+      paper: "#424242",
+    },
+    text: {
+      primary: "#ffffff",
+      secondary: "#c5c5d2",
+    },
+  },
+  typography: {
+    fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
+  },
+  components: {
+    // Add global component overrides here if needed
+  },
 });
 
-// Rough estimation of tokens (4 characters per token on average)
-function estimateTokens(text) {
-    return Math.ceil(text.length / 4);
-}
+// --- Export Chat (Run after DOM is loaded) ---
+document.addEventListener("DOMContentLoaded", () => {
+  // Export button functionality removed as requested.
+}); // End of document.addEventListener('DOMContentLoaded')
 
-// Update context length display
-function updateContextLength() {
-    const queryInput = document.getElementById('queryInput');
-    const includeHistory = document.getElementById('includeHistory');
-    const contextLengthDisplay = document.getElementById('contextLength');
-    
-    let totalTokens = estimateTokens(queryInput.value);
-    
-    if (includeHistory.checked && currentChatId) {
-        const chat = chats.find(c => c.id === currentChatId);
-        if (chat) {
-            const historyText = chat.messages
-                .map(msg => msg.content)
-                .join('\n');
-            totalTokens += estimateTokens(historyText);
-        }
+// --- Main Query Function ---
+// --- Main Query Function ---
+// Modified to accept settings as arguments
+window.sendQuery = async function (
+  queryText,
+  includeHistory,
+  queryMode,
+  optimize,
+  hybrid
+) {
+  // Start thinking indicator
+  window.chatAreaControl?.startThinking();
+
+  // --- Remove DOM reading for inputs and settings ---
+  // const queryInput = document.getElementById("queryInput");
+  // const includeHistoryCheckbox = document.getElementById("includeHistory");
+  // const query = queryInput?.value.trim() || ""; // Use queryText argument
+  // const includeHistory = includeHistoryCheckbox?.checked || false; // Use includeHistory argument
+
+  // Use queryText argument directly
+  if (!queryText) {
+    window.chatAreaControl?.stopThinking();
+    return;
+  }
+
+  if (!window.chatManager?.getCurrentChatId()) {
+    console.error("Send Query Error: Chat not initialized.");
+    window.chatAreaControl?.stopThinking();
+    alert("Error: Chat not ready. Please try again.");
+    return;
+  }
+
+  // --- Remove DOM reading for settings ---
+  // const queryModeSelect = document.getElementById("queryMode");
+  // const optimizeToggle = document.getElementById("optimizeToggle");
+  // const hybridToggle = document.getElementById("hybridToggle");
+  // const queryMode = queryModeSelect?.value || "rag"; // Use queryMode argument
+  // const optimize = optimizeToggle?.checked || false; // Use optimize argument
+  // const hybrid = hybridToggle?.checked || false; // Use hybrid argument
+
+  // Add user message via chatManager (UI updates via ChatArea listener)
+  const userMessage = {
+    content: queryText, // Use queryText argument
+    isUser: true,
+    timestamp: new Date().toISOString(),
+    messageId: `msg_${Date.now()}`,
+  };
+  window.chatManager.addMessageToHistory(userMessage);
+
+  // Prepare request body
+  let requestBody = {
+    query_text: queryText, // Use queryText argument
+    mode: queryMode, // Use queryMode argument
+    optimize: optimize, // Use optimize argument
+    hybrid: hybrid,
+    llm_config: {},
+    conversation_history: [],
+  };
+
+  // Load preferred LLM provider and its config from localStorage
+  const preferredProvider =
+    localStorage.getItem("preferredLlmProvider") || "local";
+  const configKey = `llmConfig_${preferredProvider}`;
+  const savedLlmConfig = localStorage.getItem(configKey);
+
+  console.log(`Using preferred provider: ${preferredProvider}`);
+
+  if (savedLlmConfig) {
+    try {
+      requestBody.llm_config = JSON.parse(savedLlmConfig);
+      // Ensure the provider field in the loaded config matches the preference
+      // (This handles cases where config might be stale or manually edited)
+      requestBody.llm_config.provider = preferredProvider;
+    } catch (e) {
+      console.error(`Failed to parse saved LLM config from ${configKey}:`, e);
+      // Fallback to just the provider name if parsing fails
+      requestBody.llm_config = { provider: preferredProvider };
     }
-    
-    contextLengthDisplay.textContent = `${totalTokens} tokens`;
-}
+  } else {
+    // If no specific config saved for the preferred provider, just send the provider name
+    console.warn(
+      `No specific config found for preferred provider ${preferredProvider}. Sending default.`
+    );
+    requestBody.llm_config = { provider: preferredProvider };
+  }
 
-// Add event listeners for context length updates
-document.getElementById('queryInput').addEventListener('input', updateContextLength);
-document.getElementById('includeHistory').addEventListener('change', updateContextLength);
+  // Ensure API key is explicitly null if the preferred provider is not Gemini
+  // (Cleans up potentially stale keys if user switches preference)
+  if (preferredProvider !== "gemini") {
+    requestBody.llm_config.apiKey = null;
+  }
+  // Ensure modelName is present, even if empty, for backend consistency
+  if (!requestBody.llm_config.modelName) {
+    requestBody.llm_config.modelName = "";
+  }
 
-// Auto-resize textarea
-const textarea = document.getElementById('queryInput');
-textarea.addEventListener('input', function() {
-    this.style.height = 'auto';
-    this.style.height = Math.min(this.scrollHeight, 200) + 'px';
-    updateContextLength();
-});
-
-// Handle Enter key (Shift+Enter for new line)
-function handleKeyDown(event) {
-    if (event.key === 'Enter' && !event.shiftKey) {
-        event.preventDefault();
-        sendQuery();
+  // Include conversation history if checked
+  if (includeHistory) {
+    const currentChat = window.chatManager.getCurrentChat();
+    // Include history *before* the current user message
+    if (currentChat?.messages.length > 1) {
+      requestBody.conversation_history = currentChat.messages
+        .slice(0, -1)
+        .map((msg) => ({
+          role: msg.isUser ? "user" : "assistant",
+          content: msg.content,
+        }));
     }
-}
+  }
 
-// Chat management
-let chats = JSON.parse(localStorage.getItem('chats')) || [];
-let currentChatId = null;
+  // Input clearing is handled by InputArea component
 
-// Create a new chat
-function createNewChat() {
-    const chatId = Date.now().toString();
-    const newChat = {
-        id: chatId,
-        title: 'New Chat',
-        messages: [],
-        timestamp: new Date().toISOString()
+  try {
+    console.log("Sending query:", requestBody);
+    const response = await fetch("/api/query", {
+      // Use relative path
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    });
+
+    window.chatAreaControl?.stopThinking();
+
+    let responseData;
+    try {
+      responseData = await response.json();
+    } catch (e) {
+      throw new Error(
+        `Server returned non-JSON response: ${response.status} ${response.statusText}`
+      );
+    }
+
+    if (!response.ok || responseData.status === "error") {
+      const errorMessage =
+        responseData.error || `HTTP error ${response.status}`;
+      console.error("Backend Error:", errorMessage, responseData);
+      throw new Error(errorMessage);
+    }
+
+    const assistantResponse =
+      responseData.data?.text ||
+      responseData.response ||
+      "No response text found.";
+    const assistantMessage = {
+      content: assistantResponse,
+      isUser: false,
+      timestamp: new Date().toISOString(),
+      // Ensure unique ID, Date.now() might collide on rapid responses
+      messageId: `msg_${Date.now()}_${Math.random()
+        .toString(36)
+        .substring(2, 7)}`,
     };
-    
-    chats.push(newChat);
-    localStorage.setItem('chats', JSON.stringify(chats));
-    
-    // Switch to the new chat
-    switchChat(chatId);
-}
+    window.chatManager.addMessageToHistory(assistantMessage);
+    console.log("Assistant message should now be in history via chatManager."); // Log after adding
 
-// Switch to a specific chat
-function switchChat(chatId) {
-    currentChatId = chatId;
-    const chat = chats.find(c => c.id === chatId);
-    if (!chat) return;
-    
-    // Clear current chat container
-    const chatContainer = document.getElementById('chatContainer');
-    chatContainer.innerHTML = '';
-    
-    // Load messages with their saved timestamps
-    chat.messages.forEach(msg => {
-        addMessage(msg.content, msg.isUser, msg.messageId, msg.timestamp);
-    });
-    
-    // Update chat history UI
-    updateChatHistoryUI();
-}
-
-// Delete a chat
-function deleteChat(chatId, event) {
-    event.stopPropagation(); // Prevent chat switching when clicking delete
-    
-    // Remove chat from array
-    chats = chats.filter(chat => chat.id !== chatId);
-    
-    // If deleted chat was current, switch to most recent chat or create new one
-    if (currentChatId === chatId) {
-        if (chats.length > 0) {
-            const mostRecentChat = chats.reduce((latest, current) => 
-                new Date(current.timestamp) > new Date(latest.timestamp) ? current : latest
-            );
-            switchChat(mostRecentChat.id);
-        } else {
-            createNewChat();
-        }
+    // Handle special sections
+    const specialSections =
+      responseData.data?.special_sections || responseData.special_sections;
+    if (specialSections) {
+      handleSpecialSections(specialSections);
     }
-    
-    // Update localStorage and UI
-    localStorage.setItem('chats', JSON.stringify(chats));
-    updateChatHistoryUI();
-}
-
-// Update chat history UI
-function updateChatHistoryUI() {
-    const chatHistoryList = document.getElementById('chatHistoryList');
-    chatHistoryList.innerHTML = '';
-    
-    chats.forEach(chat => {
-        const chatItem = document.createElement('div');
-        chatItem.className = `chat-history-item ${chat.id === currentChatId ? 'active' : ''}`;
-        
-        chatItem.onclick = () => switchChat(chat.id);
-
-
-        const titleSpan = document.createElement('span');
-        titleSpan.textContent = chat.title;
-        
-        
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'delete-btn';
-        deleteBtn.innerHTML = '×';
-        deleteBtn.onclick = (e) => deleteChat(chat.id, e);
-        
-        chatItem.appendChild(titleSpan);
-        chatItem.appendChild(deleteBtn);
-        chatHistoryList.appendChild(chatItem);
-    });
-}
-
-// Message Search
-const searchInput = document.getElementById('searchInput');
-let searchTimeout;
-
-searchInput.addEventListener('input', (e) => {
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => {
-        const searchTerm = e.target.value.toLowerCase();
-        const messages = document.querySelectorAll('.message');
-        
-        messages.forEach(message => {
-            const content = message.textContent.toLowerCase();
-            const isMatch = content.includes(searchTerm);
-            
-            message.style.display = isMatch ? 'block' : 'none';
-            
-            if (isMatch && searchTerm) {
-                highlightText(message, searchTerm);
-            } else {
-                removeHighlights(message);
-            }
-        });
-    }, 300);
-});
-
-function highlightText(element, searchTerm) {
-    const content = element.textContent;
-    const regex = new RegExp(`(${searchTerm})`, 'gi');
-    element.innerHTML = content.replace(regex, '<span class="highlight">$1</span>');
-}
-
-function removeHighlights(element) {
-    const highlights = element.querySelectorAll('.highlight');
-    highlights.forEach(highlight => {
-        const text = highlight.textContent;
-        highlight.replaceWith(text);
-    });
-}
-
-// Code Block Copy Button
-function addCopyButtons() {
-    document.querySelectorAll('pre code').forEach(block => {
-        const pre = block.parentElement;
-        const language = pre.getAttribute('data-language');
-        
-        // Only add copy button for code blocks with a language specified
-        if (language && language !== 'plaintext') {
-            const header = document.createElement('div');
-            header.className = 'code-block-header';
-            
-            const languageSpan = document.createElement('span');
-            languageSpan.className = 'code-block-language';
-            languageSpan.textContent = language;
-            
-            const copyButton = document.createElement('button');
-            copyButton.className = 'copy-button';
-            copyButton.textContent = 'Copy';
-            copyButton.onclick = async () => {
-                try {
-                    await navigator.clipboard.writeText(block.textContent);
-                    copyButton.textContent = 'Copied!';
-                    setTimeout(() => {
-                        copyButton.textContent = 'Copy';
-                    }, 2000);
-                } catch (err) {
-                    console.error('Failed to copy text:', err);
-                }
-            };
-            
-            header.appendChild(languageSpan);
-            header.appendChild(copyButton);
-            pre.insertBefore(header, block);
-        }
-    });
-}
-
-// Export Chat
-const exportButton = document.getElementById('exportButton');
-
-exportButton.addEventListener('click', () => {
-    if (!currentChatId) return;
-    
-    const chat = chats.find(c => c.id === currentChatId);
-    if (!chat) return;
-    
-    const exportData = {
-        title: chat.title,
-        messages: chat.messages,
-        timestamp: chat.timestamp
+  } catch (error) {
+    console.error("Error sending query:", error);
+    window.chatAreaControl?.stopThinking();
+    // Add error message to chat via chatManager
+    const errorMessage = {
+      content: `Error: ${error.message}`,
+      isUser: false,
+      timestamp: new Date().toISOString(),
+      messageId: `msg_${Date.now()}`,
     };
-    
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `chat-${chat.title.toLowerCase().replace(/\s+/g, '-')}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-});
+    window.chatManager.addMessageToHistory(errorMessage);
+  }
+};
 
-// Update addMessage function to include new features
-function addMessage(content, isUser = false, messageId = null, savedTimestamp = null) {
-    if (!currentChatId) return;
-    
-    const chatContainer = document.getElementById('chatContainer');
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
-    
-    // Use provided messageId or generate new one
-    messageDiv.dataset.messageId = messageId || Date.now().toString();
-    
-    // Add message header with timestamp
-    const header = document.createElement('div');
-    header.className = 'message-header';
-    
-    const timestamp = document.createElement('span');
-    timestamp.className = 'message-timestamp';
-    // Use saved timestamp if available, otherwise use current time
-    timestamp.textContent = savedTimestamp ? new Date(savedTimestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
-    
-    const status = document.createElement('div');
-    status.className = 'message-status';
-    const statusIndicator = document.createElement('span');
-    statusIndicator.className = 'status-indicator';
-    status.appendChild(statusIndicator);
-    
-    header.appendChild(timestamp);
-    header.appendChild(status);
-    messageDiv.appendChild(header);
-    
-    const contentDiv = document.createElement('div');
-    contentDiv.className = 'message-content';
-    
-    // Process markdown and sanitize HTML
-    const processedContent = DOMPurify.sanitize(md.render(content));
-    contentDiv.innerHTML = processedContent;
-    
-    messageDiv.appendChild(contentDiv);
-    chatContainer.appendChild(messageDiv);
-    
-    // Scroll to bottom
-    chatContainer.scrollTop = chatContainer.scrollHeight;
-    
-    // Apply syntax highlighting and add copy buttons
-    messageDiv.querySelectorAll('pre code').forEach((block) => {
-        Prism.highlightElement(block);
-    });
-    addCopyButtons();
+// --- Handle Special Sections ---
+// Appends a separate div for special content like sources or file paths.
+function handleSpecialSections(sections) {
+  const chatContainer = document.getElementById("chatContainer");
+  if (!chatContainer) {
+    console.error("Special Sections Error: Chat container not found.");
+    return;
+  }
 
-    // Only save to chat history if this is a new message (not loading from history)
-    if (!messageId) {
-        const chat = chats.find(c => c.id === currentChatId);
-        if (chat) {
-            chat.messages.push({
-                content,
-                isUser,
-                timestamp: new Date().toISOString(),
-                messageId: messageDiv.dataset.messageId
-            });
-            
-            // Update chat title if it's the first message
-            if (chat.messages.length === 1 && !isUser) {
-                chat.title = content.substring(0, 30) + (content.length > 30 ? '...' : '');
-            }
-            
-            localStorage.setItem('chats', JSON.stringify(chats));
-            updateChatHistoryUI();
-        }
-    }
-}
+  const specialSectionsDiv = document.createElement("div");
+  specialSectionsDiv.className =
+    "special-section-container message assistant-message"; // Style like a message
+  specialSectionsDiv.style.backgroundColor = "rgba(200, 200, 220, 0.1)"; // Slightly distinct background
+  specialSectionsDiv.style.borderLeft = "3px solid #888";
+  specialSectionsDiv.style.marginTop = "10px";
 
-// Initialize the app
-document.addEventListener('DOMContentLoaded', () => {
-    // Clear any existing messages in the chat container
-    const chatContainer = document.getElementById('chatContainer');
-    chatContainer.innerHTML = '';
-    
-    // Create initial chat if none exists
-    if (chats.length === 0) {
-        createNewChat();
+  const sectionHandlers = {
+    sources: (content) => {
+      if (!Array.isArray(content)) return "";
+      const sourcesList = content
+        .map(
+          (src) =>
+            `<li>${src.document || "Unknown"} (Score: ${(
+              src.score || 0
+            ).toFixed(2)})</li>`
+        )
+        .join("");
+      return `<h6>Sources:</h6><ul>${sourcesList}</ul>`;
+    },
+    file_path: (content) => {
+      if (!Array.isArray(content)) return "";
+      const fileLinks = content
+        .map((path) => {
+          if (typeof path !== "string") return "";
+          const escapedPath = path.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+          const onclickHandler = window.uiUtils?.openLocalFile
+            ? `window.uiUtils.openLocalFile('${escapedPath}')`
+            : `console.error('openLocalFile function not found')`;
+          return `<li><a href="#" onclick="${onclickHandler}; return false;">${path}</a></li>`;
+        })
+        .join("");
+      return `<h6>Referenced Files:</h6><ul>${fileLinks}</ul>`;
+    },
+  };
+
+  let htmlContent = "";
+  for (const key in sections) {
+    if (sectionHandlers[key]) {
+      htmlContent += sectionHandlers[key](sections[key]);
     } else {
-        // Switch to the most recent chat
-        const mostRecentChat = chats.reduce((latest, current) => 
-            new Date(current.timestamp) > new Date(latest.timestamp) ? current : latest
-        );
-        switchChat(mostRecentChat.id);
+      console.warn(`Unknown special section type: ${key}`);
+      try {
+        const cleanKey = key.replace(/[^a-zA-Z0-9_]/g, "").replace(/_/g, " ");
+        const safeJson = JSON.stringify(sections[key], null, 2)
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        htmlContent += `<h6>${cleanKey}:</h6><pre><code>${safeJson}</code></pre>`;
+      } catch (e) {
+        htmlContent += `<h6>${key
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")}:</h6><p>[Could not display content]</p>`;
+      }
     }
-    
-    // Add copy buttons to existing code blocks
-    addCopyButtons();
-});
+  }
 
-// Add this function at the end of the file, before the DOMContentLoaded event listener
-async function openLocalFile(filePath) {
-    try {
-        const response = await fetch('http://localhost:5000/open_file', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ file_path: filePath })
-        });
-        
-        const data = await response.json();
-        if (data.status === 'error') {
-            throw new Error(data.error || 'Failed to open file');
-        }
-    } catch (error) {
-        console.error('Error opening file:', error);
-        alert('Failed to open file. Please check if the file exists and you have permission to access it.');
-    }
-}
-
-// Add thinking indicator
-function addThinkingIndicator() {
-    const chatContainer = document.getElementById('chatContainer');
-    const thinkingDiv = document.createElement('div');
-    thinkingDiv.className = 'message assistant-message';
-    thinkingDiv.id = 'thinkingIndicator';
-    
-    thinkingDiv.innerHTML = `
-        <div class="thinking">
-            <span>Thinking</span>
-            <div class="dots">
-                <div class="dot"></div>
-                <div class="dot"></div>
-                <div class="dot"></div>
-            </div>
-        </div>
-    `;
-    
-    chatContainer.appendChild(thinkingDiv);
+  if (htmlContent && window.DOMPurify) {
+    specialSectionsDiv.innerHTML = DOMPurify.sanitize(htmlContent);
+    chatContainer.appendChild(specialSectionsDiv);
     chatContainer.scrollTop = chatContainer.scrollHeight;
+
+    // Apply Prism highlighting and copy buttons
+    window.Prism?.highlightAllUnder(specialSectionsDiv);
+    // Rely on ChatArea/ChatMessage to re-run addCopyButtons after new message/section added
+    // window.uiUtils?.addCopyButtons(); // Avoid potentially redundant global calls here
+  } else if (htmlContent) {
+    console.error("DOMPurify not available to sanitize special sections HTML.");
+    // Avoid setting innerHTML without sanitization
+  }
 }
 
-// Remove thinking indicator
-function removeThinkingIndicator() {
-    const thinkingIndicator = document.getElementById('thinkingIndicator');
-    if (thinkingIndicator) {
-        thinkingIndicator.remove();
-    }
-}
-
-// Toggle section visibility
-function toggleSection(section) {
-    section.classList.toggle('collapsed');
-}
-
-// Add click handlers for section toggles
-document.addEventListener('click', function(e) {
-    if (e.target.closest('.hamburger')) {
-        const section = e.target.closest('.special-section');
-        if (section) {
-            toggleSection(section);
-        }
-    }
-});
-
-// Update sendQuery function to include history
-async function sendQuery() {
-    if (!currentChatId) {
-        createNewChat();
-    }
-    
-    const queryInput = document.getElementById('queryInput');
-    const queryMode = document.getElementById('queryMode');
-    const includeHistory = document.getElementById('includeHistory');
-    const query = queryInput.value.trim();
-    
-    if (!query) return;
-    
-    // Add user message
-    addMessage(query, true);
-    
-    // Clear input and reset height
-    queryInput.value = '';
-    queryInput.style.height = 'auto';
-    updateContextLength();
-    
-    // Add thinking indicator
-    addThinkingIndicator();
-    
-    try {
-        let requestBody = {
-            query_text: query,
-            mode: queryMode.value,
-            optimize: document.getElementById('optimizeToggle').checked,
-            hybrid: document.getElementById('hybridToggle').checked
-        };
-
-        // Include conversation history if requested
-        if (includeHistory.checked) {
-            const chat = chats.find(c => c.id === currentChatId);
-            if (chat) {
-                requestBody.conversation_history = chat.messages
-                    .map(msg => ({
-                        role: msg.isUser ? 'user' : 'assistant',
-                        content: msg.content
-                    }));
-            }
-        }
-
-        const response = await fetch('http://localhost:5000/api/query', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(requestBody),
-            signal: AbortSignal.timeout(300000)
-        });
-        
-        const data = await response.json();
-        
-        if (data.status === 'error') {
-            throw new Error(data.error || 'An error occurred');
-        }
-        
-        // Remove thinking indicator
-        removeThinkingIndicator();
-        
-        // Process response
-        let responseText = data.data.text;
-        
-        // If response is an error message, display it directly without processing
-        if (responseText.includes('Error processing')) {
-            addMessage(responseText);
-            return;
-        }
-        
-        // Extract special sections
-        const specialSections = {
-            'think': responseText.match(/<think>([\s\S]*?)<\/think>/),
-            'reasoning': responseText.match(/<reasoning>([\s\S]*?)<\/reasoning>/),
-            'step': responseText.match(/<step>([\s\S]*?)<\/step>/),
-            'analysis': responseText.match(/<analysis>([\s\S]*?)<\/analysis>/),
-            'explanation': responseText.match(/<explanation>([\s\S]*?)<\/explanation>/),
-            'solution': responseText.match(/<solution>([\s\S]*?)<\/solution>/),
-            'approach': responseText.match(/<approach>([\s\S]*?)<\/approach>/),
-            'conclusion': responseText.match(/<conclusion>([\s\S]*?)<\/conclusion>/),
-            'summary': responseText.match(/<summary>([\s\S]*?)<\/summary>/),
-            'evaluation': responseText.match(/<evaluation>([\s\S]*?)<\/evaluation>/),
-            'consideration': responseText.match(/<consideration>([\s\S]*?)<\/consideration>/),
-            'implementation': responseText.match(/<implementation>([\s\S]*?)<\/implementation>/)
-        };
-        
-        // Remove all special sections from main response
-        let formattedResponse = responseText;
-        Object.keys(specialSections).forEach(tag => {
-            formattedResponse = formattedResponse.replace(new RegExp(`<${tag}>[\\s\\S]*?<\\/${tag}>`, 'g'), "");
-        });
-        formattedResponse = formattedResponse.trim();
-        
-        // Format special sections
-        let specialSectionsHTML = Object.entries(specialSections)
-            .map(([tag, match]) => {
-                if (!match) return "";
-                const content = match[1].trim();
-                return `
-                    <div class="special-section">
-                        <div class="hamburger">
-                            <span></span>
-                            <span></span>
-                            <span></span>
-                        </div>
-                        ${content}
-                    </div>
-                `;
-            })
-            .join("");
-        
-        // Calculate tokens per second
-        const totalTokens = estimateTokens(responseText);
-        const totalTime = data.stats.total_time;
-        const tokensPerSecond = totalTime > 0 ? (totalTokens / totalTime).toFixed(1) : '0.0';
-        
-        // Add main response with all special sections and token speed
-        addMessage(`
-            ${specialSectionsHTML}
-            <div class="main-response">${formattedResponse}</div>
-            <div class="token-speed">${tokensPerSecond} tokens/s</div>
-        `);
-        
-        // Add sources if present
-        if (data.data.sources && data.data.sources.length > 0) {
-            const uniq = [...new Set(data.data.sources)];
-            const sourcesList = document.createElement('ul');
-            sourcesList.className = 'sources-list';
-            
-            uniq.forEach(source => {
-                if (typeof(source) === 'string') {
-                    const filename = source.split('\\').pop();
-                    const listItem = document.createElement('li');
-                    const link = document.createElement('a');
-                    link.href = source;
-                    link.textContent = filename;
-                    link.onclick = (e) => {
-                        e.preventDefault();
-                        openLocalFile(source);
-                    };
-                    listItem.appendChild(link);
-                    sourcesList.appendChild(listItem);
-                }
-            });
-            
-            const sourcesDiv = document.createElement('div');
-            sourcesDiv.className = 'message assistant-message';
-            sourcesDiv.innerHTML = '<strong>Sources:</strong>';
-            sourcesDiv.appendChild(sourcesList);
-            document.getElementById('chatContainer').appendChild(sourcesDiv);
-        }
-        
-        // Add event listeners for hamburger menus
-        const specialSectionElements = document.querySelectorAll('.special-section');
-        specialSectionElements.forEach(section => {
-            const hamburger = section.querySelector('.hamburger');
-            if (hamburger) {
-                hamburger.addEventListener('click', () => {
-                    section.classList.toggle('collapsed');
-                });
-            }
-        });
-        
-    } catch (error) {
-        // Remove thinking indicator
-        removeThinkingIndicator();
-        
-        // Show error message
-        addMessage(`Error: ${error.message}`);
-    }
-} 
+console.log("app.js initialized.");

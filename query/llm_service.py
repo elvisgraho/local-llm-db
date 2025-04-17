@@ -6,9 +6,11 @@ import re
 import time
 import json
 import logging
-from typing import Optional
+from typing import Optional, Dict
 from requests.exceptions import RequestException
 from tenacity import retry, stop_after_attempt, wait_exponential
+from google.api_core import exceptions as google_exceptions # Import google api exceptions
+import google.generativeai as genai
 
 # Configure logging
 logging.basicConfig(
@@ -22,10 +24,14 @@ logger = logging.getLogger(__name__)
     wait=wait_exponential(multiplier=1, min=4, max=10),
     reraise=True
 )
-def get_llm_response(prompt: str, temperature: float = 0.7) -> str:
-    """Helper function to get response from LLM with retries.
+def get_llm_response(prompt: str, llm_config: Optional[Dict] = None, temperature: float = 0.7) -> str:
+    """Helper function to get response from LLM with retries, supporting different providers.
     
     Args:
+        prompt (str): The prompt to send to the LLM.
+        llm_config (Optional[Dict]): Configuration for the LLM provider.
+                                     Expected keys: 'provider' ('local' or 'gemini'),
+                                                    'model_name', 'api_key' (for gemini).
         prompt (str): The prompt to send to the LLM.
         temperature (float): The temperature parameter for the LLM.
         
@@ -34,37 +40,112 @@ def get_llm_response(prompt: str, temperature: float = 0.7) -> str:
         
     Raises:
         RequestException: If there's an error communicating with the LLM service.
-        ValueError: If the response is invalid or empty.
+        ValueError: If the response is invalid or empty, or config is invalid.
     """
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "model": LOCAL_MAIN_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature
-    }
-    
-    try:
-        response = requests.post(LOCAL_LLM_API_URL, json=payload, headers=headers)
-        response.raise_for_status()
-        response_data = response.json()
+    # Determine provider and settings
+    config = llm_config or {}
+    provider = config.get('provider', 'local')
+    # Expect camelCase from the config dict passed down
+    model_name = config.get('modelName')
+    api_key = config.get('apiKey') # Expect camelCase 'apiKey'
+
+    logger.info(f"Getting LLM response using provider: {provider}, model: {model_name or 'default'}")
+
+    if provider == 'local':
+        # Use local LLM (existing logic, but with model from config)
+        local_model = model_name or LOCAL_MAIN_MODEL
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "model": local_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature
+        }
         
-        if not response_data.get("choices"):
-            raise ValueError("No choices in LLM response")
+        try:
+            response = requests.post(LOCAL_LLM_API_URL, json=payload, headers=headers)
+            response.raise_for_status()
+            response_data = response.json()
             
-        content = response_data["choices"][0].get("message", {}).get("content", "")
-        if not content:
-            raise ValueError("Empty response from LLM")
+            if not response_data.get("choices"):
+                raise ValueError("No choices in local LLM response")
+                
+            content = response_data["choices"][0].get("message", {}).get("content", "")
+            if not content:
+                raise ValueError("Empty response from local LLM")
+                
+            return content
             
-        return content
-        
-    except RequestException as e:
-        logger.error(f"Error calling LLM API: {str(e)}")
-        raise
+        except RequestException as e:
+            logger.error(f"Error calling local LLM API ({LOCAL_LLM_API_URL}): {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Error processing local LLM response: {str(e)}")
+            raise ValueError(f"Failed to process local LLM response: {e}")
+
+    elif provider == 'gemini':
+        # Use Gemini API
+        if not api_key:
+            logger.error("Gemini provider selected, but API key is missing in llm_config.")
+            raise ValueError("API key required for Gemini provider is missing.")
+        # Check model_name (which is now modelName from config)
+        if not model_name:
+            logger.error("Gemini provider selected, but modelName is missing in llm_config.")
+            raise ValueError("Model name (modelName) required for Gemini provider is missing.")
+            
+        try:
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(model_name)
+            # Adjust temperature mapping if needed, Gemini uses a GenerationConfig
+            generation_config = genai.types.GenerationConfig(temperature=temperature)
+            
+            # Note: Gemini API might have different error handling and response structure
+            response = model.generate_content(prompt, generation_config=generation_config)
+            
+            # Accessing response text might differ based on Gemini library version
+            # Check response.text or response.parts
+            if hasattr(response, 'text'):
+                content = response.text
+            elif hasattr(response, 'parts') and response.parts:
+                content = "".join(part.text for part in response.parts)
+            else:
+                # Attempt to access prompt_feedback if generation failed
+                feedback = getattr(response, 'prompt_feedback', None)
+                if feedback and hasattr(feedback, 'block_reason'):
+                     raise ValueError(f"Gemini content generation blocked: {feedback.block_reason}")
+                else:
+                     raise ValueError("Could not extract text from Gemini response and no block reason found.")
+
+            if not content:
+                raise ValueError("Empty response from Gemini LLM")
+                
+            return content
+            
+        except google_exceptions.PermissionDenied as e:
+            logger.error(f"Gemini API Permission Denied (check API key?): {str(e)}")
+            raise ValueError(f"Gemini API Permission Denied: {e}")
+        except google_exceptions.InvalidArgument as e:
+            logger.error(f"Gemini API Invalid Argument (check model name or parameters?): {str(e)}")
+            raise ValueError(f"Gemini API Invalid Argument: {e}")
+        except Exception as e:
+            # Catch potential exceptions from the genai library or other issues
+            logger.error(f"Error calling Gemini API (model: {model_name}): {str(e)}")
+            raise ValueError(f"Failed to get response from Gemini: {e}") # Keep original error message propagation
+            
+    else:
+        logger.error(f"Unsupported LLM provider: {provider}")
+        raise ValueError(f"Unsupported LLM provider specified: {provider}")
 
 def optimize_query(query_text: str) -> str:
-    """Optimize the query using a separate LLM call.
+        raise
+
+# TODO: Decide if optimize_query should also use the configured LLM or always use local.
+# Currently, it always uses the local LLM for optimization.
+def optimize_query(query_text: str, llm_config: Optional[Dict] = None) -> str:
+    """Optimize the query using a separate LLM call (currently defaults to local).
     
     Args:
+        query_text (str): The original query text.
+        llm_config (Optional[Dict]): LLM configuration (currently unused here, but kept for signature consistency).
         query_text (str): The original query text.
         
     Returns:
@@ -74,7 +155,10 @@ def optimize_query(query_text: str) -> str:
         prompt_template = ChatPromptTemplate.from_template(QUERY_OPTIMIZATION_TEMPLATE)
         prompt = prompt_template.format(query=query_text)
         # Use a different model for optimization with lower temperature
-        optimized_query = get_llm_response(prompt, temperature=0.3).strip()
+        # For now, explicitly call with provider='local' for optimization step
+        # Pass a minimal config forcing local provider
+        optimization_llm_config = {'provider': 'local', 'model_name': LOCAL_MAIN_MODEL}
+        optimized_query = get_llm_response(prompt, llm_config=optimization_llm_config, temperature=0.3).strip()
 
         # Filter out <think> and <reasoning> tags if present
         if optimized_query:

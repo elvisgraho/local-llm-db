@@ -71,10 +71,14 @@ def validate_metadata(metadata: Dict[str, Any]) -> bool:
         
     return True
 
-def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: int = 1000) -> List[Document]:
-    """Split a single document into chunks with semantic boundaries.
+def split_document(doc: Document, add_tags_llm: bool, max_chunk_size: int = 1500, max_total_chunks: int = 1000) -> List[Document]:
+    """
+    Split a single document into chunks with semantic boundaries.
+    Optionally adds LLM-based metadata if add_tags_llm is True and no tags found in content.
     
     Args:
+        doc (Document): The document to split
+        add_tags_llm (bool): Whether to use LLM for tag extraction.
         doc (Document): The document to split
         max_chunk_size (int): Maximum size of each chunk
         max_total_chunks (int): Maximum total number of chunks
@@ -131,10 +135,10 @@ def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: 
         with tqdm(total=total_chunks, desc=f"Processing {display_source}", unit="chunk", leave=False) as pbar:
             for chunk in doc_chunks:
                 try:
-                    # Add LLM-based metadata using the helper function
-                    chunk = add_metadata_to_document(chunk)
+                    # Add metadata (from content or LLM based on flag)
+                    chunk = add_metadata_to_document(chunk, add_tags_llm=add_tags_llm)
                     
-                    # Add file metadata
+                    # Add file metadata (ensure it doesn't overwrite extracted/LLM tags)
                     chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
                     
                     # Add chunk-specific metadata
@@ -156,13 +160,15 @@ def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: 
         logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
         return []
 
-def process_document(doc: Document, vectorstore: FAISS, reset: bool = False) -> None:
-    """Process a single document and add it to the vectorstore.
+def process_document(doc: Document, add_tags_llm: bool) -> List[Document]:
+    """Process a single document, split it, add metadata. Returns processed chunks.
     
     Args:
         doc (Document): The document to process
-        vectorstore (FAISS): The FAISS vectorstore
-        reset (bool): Whether to reset the vectorstore
+        add_tags_llm (bool): Whether to use LLM for tag extraction.
+        
+    Returns:
+        List[Document]: List of processed document chunks, or empty list on error.
     """
     try:
         # Validate metadata
@@ -176,28 +182,24 @@ def process_document(doc: Document, vectorstore: FAISS, reset: bool = False) -> 
             logger.warning(f"Missing or invalid source in document metadata: {doc.metadata}")
             return
             
-        # Split document into chunks
-        chunks = split_document(doc)
+        # Split document into chunks and add metadata
+        chunks = split_document(doc, add_tags_llm=add_tags_llm)
         if not chunks:
-            logger.warning(f"No valid chunks created for document: {source}")
-            return
+            logger.warning(f"No valid chunks created or metadata added for document: {source}")
+            return [] # Return empty list if splitting/metadata fails
             
-        # Add chunks to vectorstore
+        # Ensure source metadata is present in all chunks
         for chunk in chunks:
-            try:
-                # Ensure chunk has source metadata
-                if not chunk.metadata:
-                    chunk.metadata = {}
-                chunk.metadata["source"] = source
-                
-                # Add to vectorstore
-                vectorstore.add_documents([chunk])
-            except Exception as e:
-                logger.error(f"Error adding chunk to vectorstore: {str(e)}")
-                continue
+             if not chunk.metadata:
+                 chunk.metadata = {}
+             if "source" not in chunk.metadata:
+                  chunk.metadata["source"] = source # Add source if missing
+
+        return chunks # Return the processed chunks
             
     except Exception as e:
-        logger.error(f"Error processing document: {str(e)}", exc_info=True)
+        logger.error(f"Error processing document {source}: {str(e)}", exc_info=True)
+        return [] # Return empty list on error
 
 def clear_vectorstore():
     """Clear the KAG database."""
@@ -251,9 +253,10 @@ def initialize_vectorstore(reset: bool = False) -> Optional[FAISS]:
         return None
 
 def main():
-    """Main function to populate the KAG database."""
-    parser = argparse.ArgumentParser(description="Populate KAG database with documents")
-    parser.add_argument("--reset", action="store_true", help="Reset the vectorstore before processing")
+    """Main function to populate the KAG FAISS database."""
+    parser = argparse.ArgumentParser(description="Populate the KAG FAISS database.")
+    parser.add_argument("--reset", action="store_true", help="Reset the vectorstore before processing.")
+    parser.add_argument("--add-tags", action="store_true", help="Enable LLM-based tag generation if tags are not found in the document content.")
     args = parser.parse_args()
     
     try:
@@ -272,14 +275,21 @@ def main():
         total_docs = len(documents)
         processed_docs = 0
         failed_docs = 0
+        all_processed_chunks = []
         
         with tqdm(total=total_docs, desc="Processing documents", unit="doc") as pbar:
             for doc in documents:
                 try:
-                    process_document(doc, vectorstore, args.reset)
-                    processed_docs += 1
+                    processed_chunks = process_document(doc, add_tags_llm=args.add_tags)
+                    if processed_chunks:
+                        all_processed_chunks.extend(processed_chunks)
+                        processed_docs += 1
+                    else:
+                         # If process_document returned empty list due to error or no chunks
+                         failed_docs += 1
+                         logger.warning(f"Document {doc.metadata.get('source', 'unknown')} resulted in no processed chunks.")
                 except Exception as e:
-                    logger.error(f"Error processing document: {str(e)}")
+                    logger.error(f"Error processing document {doc.metadata.get('source', 'unknown')}: {str(e)}")
                     failed_docs += 1
                 finally:
                     pbar.update(1)
@@ -287,8 +297,17 @@ def main():
                         "processed": processed_docs,
                         "failed": failed_docs
                     })
-                    
+        
+        # Add collected chunks to vectorstore if any exist
+        if all_processed_chunks:
+            logger.info(f"Adding {len(all_processed_chunks)} processed chunks to the vectorstore...")
+            vectorstore.add_documents(all_processed_chunks)
+            logger.info("Chunks added successfully.")
+        else:
+             logger.warning("No valid chunks were processed to add to the vectorstore.")
+
         # Save final vectorstore
+        logger.info(f"Saving vectorstore to {VECTORSTORE_PATH}...")
         vectorstore.save_local(VECTORSTORE_PATH)
         
         # Log statistics

@@ -120,10 +120,14 @@ def save_graph(graph: nx.DiGraph):
     except Exception as e:
         logger.error(f"Error saving graph: {str(e)}")
 
-def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: int = 1000) -> List[Document]:
-    """Split a single document into chunks with semantic boundaries.
+def split_document(doc: Document, add_tags_llm: bool, max_chunk_size: int = 1500, max_total_chunks: int = 1000) -> List[Document]:
+    """
+    Split a single document into chunks with semantic boundaries.
+    Optionally adds LLM-based metadata if add_tags_llm is True and no tags found in content.
     
     Args:
+        doc (Document): The document to split
+        add_tags_llm (bool): Whether to use LLM for tag extraction.
         doc (Document): The document to split
         max_chunk_size (int): Maximum size of each chunk
         max_total_chunks (int): Maximum total number of chunks
@@ -180,10 +184,10 @@ def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: 
         with tqdm(total=total_chunks, desc=f"Processing {display_source}", unit="chunk", leave=False) as pbar:
             for chunk in doc_chunks:
                 try:
-                    # Add LLM-based metadata using the helper function
-                    chunk = add_metadata_to_document(chunk)
+                    # Add metadata (from content or LLM based on flag)
+                    chunk = add_metadata_to_document(chunk, add_tags_llm=add_tags_llm)
                     
-                    # Add file metadata
+                    # Add file metadata (ensure it doesn't overwrite extracted/LLM tags)
                     chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
                     
                     # Add chunk-specific metadata
@@ -205,14 +209,14 @@ def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: 
         logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
         return []
 
-def process_document(doc: Document, graph: nx.DiGraph, vectorstore: FAISS, reset: bool = False) -> None:
-    """Process a single document and update the knowledge graph.
+def process_document(doc: Document, graph: nx.DiGraph, vectorstore: FAISS, add_tags_llm: bool) -> None:
+    """Process a single document, split it, add metadata, and update the knowledge graph and vectorstore.
     
     Args:
         doc (Document): The document to process
         graph (nx.DiGraph): The knowledge graph
         vectorstore (FAISS): The FAISS vectorstore
-        reset (bool): Whether to reset the vectorstore
+        add_tags_llm (bool): Whether to use LLM for tag extraction.
     """
     try:
         # Validate metadata
@@ -226,10 +230,10 @@ def process_document(doc: Document, graph: nx.DiGraph, vectorstore: FAISS, reset
             logger.warning(f"Missing or invalid source in document metadata: {doc.metadata}")
             return
             
-        # Split document into chunks
-        chunks = split_document(doc)
+        # Split document into chunks and add metadata
+        chunks = split_document(doc, add_tags_llm=add_tags_llm)
         if not chunks:
-            logger.warning(f"No valid chunks created for document: {source}")
+            logger.warning(f"No valid chunks created or metadata added for document: {source}")
             return
             
         # Get embeddings for new chunks
@@ -401,8 +405,9 @@ def initialize_vectorstore(reset: bool = False) -> Optional[FAISS]:
 
 def main():
     """Main function to populate the GraphRAG database."""
-    parser = argparse.ArgumentParser(description="Populate GraphRAG database with documents")
-    parser.add_argument("--reset", action="store_true", help="Reset the database before processing")
+    parser = argparse.ArgumentParser(description="Populate the GraphRAG database (Graph + FAISS).")
+    parser.add_argument("--reset", action="store_true", help="Reset the database before processing.")
+    parser.add_argument("--add-tags", action="store_true", help="Enable LLM-based tag generation if tags are not found in the document content.")
     args = parser.parse_args()
     
     try:
@@ -431,10 +436,10 @@ def main():
         with tqdm(total=total_docs, desc="Processing documents", unit="doc") as pbar:
             for doc in documents:
                 try:
-                    process_document(doc, graph, vectorstore, args.reset)
+                    process_document(doc, graph, vectorstore, add_tags_llm=args.add_tags)
                     processed_docs += 1
                 except Exception as e:
-                    logger.error(f"Error processing document: {str(e)}")
+                    logger.error(f"Error processing document {doc.metadata.get('source', 'unknown')}: {str(e)}")
                     failed_docs += 1
                 finally:
                     pbar.update(1)

@@ -6,12 +6,12 @@ using LLM analysis. It focuses on identifying key aspects of the content while
 ignoring unnecessary details.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
 import json
 import requests
 from langchain.prompts import ChatPromptTemplate
 from langchain.output_parsers import PydanticOutputParser
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from langchain.schema import Document
 import re
 import sys
@@ -29,15 +29,15 @@ logger = logging.getLogger(__name__)
 class DocumentMetadata(BaseModel):
     """Schema for document metadata extracted by LLM."""
     # Basic content metadata (Chroma-compatible)
-    content_type: str = Field(description="Type of content (e.g., 'technical_doc', 'code_example', 'explanation')")
-    main_topic: str = Field(description="Main topic or subject of the content")
-    key_concepts: str = Field(description="Comma-separated list of key concepts or terms")
-    has_code: bool = Field(description="Whether the content contains code examples")
-    has_instructions: bool = Field(description="Whether the content contains instructions, commands, or step-by-step guidance")
-    is_tutorial: bool = Field(description="Whether the content is tutorial-like")
+    content_type: Optional[str] = Field(None, description="Type of content (e.g., 'technical_doc', 'code_example', 'explanation')")
+    main_topic: Optional[str] = Field(None, description="Main topic or subject of the content")
+    key_concepts: Optional[str] = Field(None, description="Comma-separated list of key concepts or terms")
+    has_code: Optional[bool] = Field(None, description="Whether the content contains code examples")
+    has_instructions: Optional[bool] = Field(None, description="Whether the content contains instructions, commands, or step-by-step guidance")
+    is_tutorial: Optional[bool] = Field(None, description="Whether the content is tutorial-like")
     
     # Graph-specific metadata
-    section_type: str = Field(description="Type of section (e.g., 'scenario', 'mitigation', 'impact', 'explanation')")
+    section_type: Optional[str] = Field(None, description="Type of section (e.g., 'scenario', 'mitigation', 'impact', 'explanation')")
 
 def get_metadata_extraction_prompt() -> str:
     """Create a prompt template for metadata extraction."""
@@ -267,38 +267,97 @@ def extract_metadata_llm(text: str) -> Dict[str, Any]:
             
     except Exception as e:
         logger.error(f"Error extracting metadata: {str(e)}")
-        # Return default metadata if extraction fails
-        return {
-            "content_type": "unknown",
-            "main_topic": "unknown",
-            "key_concepts": "",
-            "has_code": False,
-            "has_instructions": False,
-            "is_tutorial": False,
-            "section_type": "unknown"
-        }
+        # Return empty metadata if extraction fails
+        return {}
 
-def add_metadata_to_document(doc: Document, max_chars: int = 5000) -> Document:
+def _extract_tags_from_content(content: str) -> Tuple[Optional[Dict[str, Any]], str]:
     """
-    Add LLM-extracted metadata to a document.
+    Check for a 'Tags: {json}' line, extract JSON, validate, and remove the line.
+    Returns the extracted metadata (or None) and the modified content.
+    """
+    lines = content.splitlines()
+    tag_line_index = -1
+    extracted_metadata = None
+    
+    tag_pattern = re.compile(r"^\s*Tags:\s*({.*})\s*$", re.IGNORECASE)
+
+    for i, line in enumerate(lines):
+        match = tag_pattern.match(line)
+        if match:
+            tag_line_index = i
+            json_str = match.group(1)
+            try:
+                raw_metadata = json.loads(json_str)
+                # Validate against Pydantic model
+                validated_metadata = DocumentMetadata(**raw_metadata)
+                # Convert back to dict, excluding None values
+                extracted_metadata = validated_metadata.model_dump(exclude_none=True)
+                logger.info(f"Extracted tags from document content: {extracted_metadata}")
+            except json.JSONDecodeError as e:
+                logger.warning(f"Found 'Tags:' line but failed to parse JSON: {e}. Line: '{line}'")
+            except ValidationError as e:
+                 logger.warning(f"Found 'Tags:' line but JSON validation failed: {e}. Data: {raw_metadata}")
+            except Exception as e:
+                logger.error(f"Unexpected error processing 'Tags:' line: {e}")
+            break # Stop after finding the first match
+
+    if tag_line_index != -1:
+        # Remove the tag line
+        del lines[tag_line_index]
+        content = "\n".join(lines)
+        
+    return extracted_metadata, content
+
+def add_metadata_to_document(doc: Document, add_tags_llm: bool, max_chars: int = 5000) -> Document:
+    """
+    Add metadata to a document.
+    Prioritizes extracting tags from a 'Tags: {json}' line in the content.
+    If not found, optionally uses LLM to extract metadata based on add_tags_llm flag.
     
     Args:
         doc: The document to process
-        max_chars: Maximum number of characters to analyze for metadata
+        add_tags_llm: Whether to use LLM for tag extraction if not found in content.
+        max_chars: Maximum number of characters to analyze for metadata via LLM.
     
     Returns:
-        Document with added metadata
+        Document with potentially added metadata and modified content (if Tags line removed).
     """
-    # Take first max_chars of content for analysis
-    preview_text = doc.page_content[:max_chars]
     
-    # Extract metadata
-    metadata = extract_metadata_llm(preview_text)
+    # 1. Try extracting tags directly from content
+    extracted_metadata, modified_content = _extract_tags_from_content(doc.page_content)
     
-    # Add metadata directly to document
-    doc.metadata.update(metadata)
+    # Update document content if the Tags line was removed
+    if modified_content != doc.page_content:
+        doc.page_content = modified_content
+        
+    if extracted_metadata:
+        # Add extracted metadata to the document
+        doc.metadata.update(extracted_metadata)
+        logger.debug(f"Updated metadata from content for source: {doc.metadata.get('source', 'unknown')}")
+        return doc
     
-    return doc 
+    # 2. If no tags found in content and LLM extraction is enabled
+    if add_tags_llm:
+        logger.debug(f"No tags found in content, proceeding with LLM extraction for source: {doc.metadata.get('source', 'unknown')}")
+        # Take first max_chars of content for analysis
+        preview_text = doc.page_content[:max_chars]
+        
+        # Extract metadata using LLM
+        llm_metadata = extract_metadata_llm(preview_text)
+        
+        # Add LLM metadata directly to document
+        if llm_metadata: # Check if LLM returned anything
+             # Filter out any potential None values just in case
+            llm_metadata_filtered = {k: v for k, v in llm_metadata.items() if v is not None}
+            doc.metadata.update(llm_metadata_filtered)
+            logger.debug(f"Added LLM metadata for source: {doc.metadata.get('source', 'unknown')}")
+        else:
+            logger.debug(f"LLM extraction returned no metadata for source: {doc.metadata.get('source', 'unknown')}")
+
+    else:
+         logger.debug(f"Skipping LLM metadata extraction for source: {doc.metadata.get('source', 'unknown')} as add_tags_llm is False.")
+
+    return doc
 
 def format_source_filename(source: str) -> str:
     """Format the source filename for display."""

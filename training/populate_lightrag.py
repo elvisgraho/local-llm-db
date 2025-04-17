@@ -41,8 +41,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: int = 1000) -> List[Document]:
-    """Split a single document into chunks with improved parameters for security documentation."""
+def split_document(doc: Document, add_tags_llm: bool, max_chunk_size: int = 1500, max_total_chunks: int = 1000) -> List[Document]:
+    """
+    Split a single document into chunks with improved parameters for security documentation.
+    Optionally adds LLM-based metadata if add_tags_llm is True and no tags found in content.
+    """
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=max_chunk_size,
         chunk_overlap=200,
@@ -94,10 +97,10 @@ def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: 
         with tqdm(total=total_chunks, desc=f"Processing {display_source}", unit="chunk", leave=False) as pbar:
             for chunk in doc_chunks:
                 try:
-                    # Add LLM-based metadata using the helper function
-                    chunk = add_metadata_to_document(chunk)
+                    # Add metadata (from content or LLM based on flag)
+                    chunk = add_metadata_to_document(chunk, add_tags_llm=add_tags_llm)
                     
-                    # Add file-based metadata
+                    # Add file-based metadata (ensure it doesn't overwrite extracted/LLM tags)
                     chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
                     
                     processed_chunks.append(chunk)
@@ -112,8 +115,8 @@ def split_document(doc: Document, max_chunk_size: int = 1500, max_total_chunks: 
         logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
         return []
 
-def process_document(doc: Document, vectorstore: FAISS, reset: bool = False) -> None:
-    """Process a single document and add it to the vectorstore.
+def process_document(doc: Document, add_tags_llm: bool) -> List[Document]:
+    """Process a single document, split it, add metadata. Returns processed chunks.
     
     LightRAG uses a simplified document processing approach:
     1. Basic metadata validation
@@ -138,21 +141,21 @@ def process_document(doc: Document, vectorstore: FAISS, reset: bool = False) -> 
             logger.debug(f"Missing or invalid source in document metadata: {doc.metadata}")
             return
             
-        # Split document into chunks
-        chunks = split_document(doc)
+        # Split document into chunks and add metadata
+        chunks = split_document(doc, add_tags_llm=add_tags_llm)
         
-        # Add chunks to vectorstore
+        # Ensure source metadata is present in all chunks
         for chunk in chunks:
-            # Ensure chunk has source metadata
             if not chunk.metadata:
                 chunk.metadata = {}
-            chunk.metadata["source"] = source
-            
-            # Add to vectorstore
-            vectorstore.add_documents([chunk])
+            if "source" not in chunk.metadata:
+                 chunk.metadata["source"] = source # Add source if missing after splitting/metadata steps
+
+        return chunks # Return the processed chunks
             
     except Exception as e:
-        logger.error(f"Error processing document: {str(e)}", exc_info=True)
+        logger.error(f"Error processing document {source}: {str(e)}", exc_info=True)
+        return [] # Return empty list on error
 
 def clear_vectorstore():
     """Clear the Light RAG database."""
@@ -183,8 +186,9 @@ def process_file_to_vectorstore(file_path: Path) -> None:
 
 def main():
     """Main function to populate the LightRAG database."""
-    parser = argparse.ArgumentParser(description="Populate LightRAG database with documents")
-    parser.add_argument("--reset", action="store_true", help="Reset the vectorstore before processing")
+    parser = argparse.ArgumentParser(description="Populate the LightRAG FAISS database.")
+    parser.add_argument("--reset", action="store_true", help="Reset the vectorstore before processing.")
+    parser.add_argument("--add-tags", action="store_true", help="Enable LLM-based tag generation if tags are not found in the document content.")
     args = parser.parse_args()
     
     try:
@@ -210,11 +214,34 @@ def main():
                     metadatas=[{"source": "initial"}]
                 )
         
-        # Process documents
-        for doc in load_documents():
-            process_document(doc, vectorstore, args.reset)
-            
+        # Process documents and collect chunks
+        all_processed_chunks = []
+        loaded_docs = load_documents()
+        total_docs = len(loaded_docs)
+        
+        logger.info(f"Found {total_docs} documents to process.")
+        
+        with tqdm(total=total_docs, desc="Processing documents", unit="doc") as pbar:
+            for doc in loaded_docs:
+                try:
+                    processed_chunks = process_document(doc, add_tags_llm=args.add_tags)
+                    if processed_chunks:
+                        all_processed_chunks.extend(processed_chunks)
+                except Exception as e:
+                     logger.error(f"Failed processing document {doc.metadata.get('source', 'unknown')}: {e}")
+                finally:
+                    pbar.update(1)
+
+        # Add collected chunks to vectorstore if any exist
+        if all_processed_chunks:
+            logger.info(f"Adding {len(all_processed_chunks)} processed chunks to the vectorstore...")
+            vectorstore.add_documents(all_processed_chunks)
+            logger.info("Chunks added successfully.")
+        else:
+             logger.warning("No valid chunks were processed to add to the vectorstore.")
+
         # Save vectorstore
+        logger.info(f"Saving vectorstore to {VECTORSTORE_PATH}...")
         vectorstore.save_local(VECTORSTORE_PATH)
         logger.info("LightRAG database populated successfully")
         

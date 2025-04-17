@@ -3,6 +3,7 @@ langchain>=0.1.0
 langchain_community>=0.0.10
 langchain-chroma>=0.0.5
 chromadb>=0.4.22
+langchain-aws>=0.1.0 # Added for Bedrock embeddings
 
 # Document processing
 pypdf>=3.0.0
@@ -19,8 +20,12 @@ sentence-transformers>=2.2.0 # Added for reranking
 # API and web
 fastapi>=0.68.0
 uvicorn>=0.15.0
+Flask>=2.0.0  # Added for Flask backend
+Flask-Cors>=3.0.0 # Added for CORS support
+waitress>=2.1.0 # Added WSGI server
 pydantic>=1.8.0
 requests>=2.31.0
+google-generativeai>=0.4.0 # Added for Gemini API support
 
 # Utilities
 tqdm>=4.65.0

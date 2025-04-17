@@ -227,8 +227,11 @@ class RAGSystem:
             logger.error(f"Unexpected error in LLM response: {str(e)}")
             return "I apologize, but I encountered an unexpected error."
 
-def split_document(doc: Document) -> List[Document]:
-    """Split a single document into chunks with improved parameters for security documentation."""
+def split_document(doc: Document, add_tags_llm: bool) -> List[Document]:
+    """
+    Split a single document into chunks with improved parameters for security documentation.
+    Optionally adds LLM-based metadata if add_tags_llm is True and no tags found in content.
+    """
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1500,
         chunk_overlap=200,
@@ -281,10 +284,10 @@ def split_document(doc: Document) -> List[Document]:
                 if not chunk.metadata.get("source") and doc.metadata.get("source"):
                     chunk.metadata["source"] = doc.metadata["source"]
                 
-                # Add LLM-based metadata using the helper function
-                chunk = add_metadata_to_document(chunk)
+                # Add metadata (from content or LLM based on flag)
+                chunk = add_metadata_to_document(chunk, add_tags_llm=add_tags_llm)
                 
-                # Add file-based metadata
+                # Add file-based metadata (ensure it doesn't overwrite extracted/LLM tags)
                 chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
                 
                 processed_chunks.append(chunk)
@@ -296,8 +299,8 @@ def split_document(doc: Document) -> List[Document]:
         logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
         return []
 
-def process_document(doc: Document) -> None:
-    """Process a single document and update the vectorstore."""
+def process_document(doc: Document, add_tags_llm: bool) -> None:
+    """Process a single document, split it, add metadata, and update the vectorstore."""
     embeddings = get_embedding_function()
     
     # Validate and ensure source metadata exists
@@ -311,10 +314,10 @@ def process_document(doc: Document) -> None:
         logger.warning(f"Invalid source metadata: {source}")
         return
     
-    # Split document into chunks
-    chunks = split_document(doc)
+    # Split document into chunks and add metadata
+    chunks = split_document(doc, add_tags_llm=add_tags_llm)
     if not chunks:
-        logger.warning(f"No valid chunks created for document: {source}")
+        logger.warning(f"No valid chunks created or metadata added for document: {source}")
         return
     
     # Initialize or update vectorstore
@@ -367,8 +370,8 @@ def clear_vectorstore():
                 os.rmdir(os.path.join(root, name))
         logger.info("Cleared RAG database")
 
-def process_file_to_vectorstore(file_path: Path) -> None:
-    """Process a single file and update the vectorstore."""
+def process_file_to_vectorstore(file_path: Path, add_tags_llm: bool) -> None:
+    """Process a single file, extract documents, add metadata, and update the vectorstore."""
     try:
         # Load documents from the file
         documents = process_single_file(file_path)
@@ -379,9 +382,9 @@ def process_file_to_vectorstore(file_path: Path) -> None:
         # Process each document
         for doc in documents:
             try:
-                process_document(doc)
+                process_document(doc, add_tags_llm=add_tags_llm)
             except Exception as e:
-                logger.error(f"Error processing document in {file_path.name}: {str(e)}")
+                logger.error(f"Error processing document {doc.metadata.get('source', file_path.name)}: {str(e)}")
                 continue
                 
     except Exception as e:
@@ -389,8 +392,9 @@ def process_file_to_vectorstore(file_path: Path) -> None:
 
 def main():
     """Main function to populate the RAG database file by file."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--reset", action="store_true", help="Reset the database before populating")
+    parser = argparse.ArgumentParser(description="Populate the RAG Chroma database.")
+    parser.add_argument("--reset", action="store_true", help="Reset the database before populating.")
+    parser.add_argument("--add-tags", action="store_true", help="Enable LLM-based tag generation if tags are not found in the document content.")
     args = parser.parse_args()
     
     if args.reset:
@@ -412,9 +416,9 @@ def main():
         # Process files one by one
         for doc in tqdm(all_documents, desc="Processing documents", total=total_docs):
             try:
-                logger.info(f"Processing document {processed_docs + 1}/{total_docs}")
-                # Use process_file_to_vectorstore for RAG implementation
-                process_file_to_vectorstore(Path(doc.metadata.get("source", "")))
+                logger.info(f"Processing document {processed_docs + 1}/{total_docs}: {doc.metadata.get('source', 'unknown')}")
+                # Use process_file_to_vectorstore for RAG implementation, passing the flag
+                process_file_to_vectorstore(Path(doc.metadata.get("source", "")), add_tags_llm=args.add_tags)
                 processed_docs += 1
                     
             except Exception as e:
