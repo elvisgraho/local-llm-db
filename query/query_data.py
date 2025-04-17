@@ -2,6 +2,7 @@ import argparse
 import networkx as nx
 from langchain.prompts import ChatPromptTemplate
 from sklearn.metrics.pairwise import cosine_similarity
+from langchain.schema import Document # Added import
 from query.database_paths import CHROMA_PATH
 from query.data_service import data_service
 from query.templates import (
@@ -23,6 +24,7 @@ from query.global_vars import (
 import os
 import logging
 from typing import Dict, List, Optional, Union, Tuple
+from langchain_core.vectorstores import VectorStore # Added for type hinting
 
 # Configure logging
 logging.basicConfig(
@@ -86,8 +88,113 @@ def query_direct(query_text: str) -> Dict[str, Union[str, List[str]]]:
         logger.error(f"Error in direct query: {str(e)}", exc_info=True)
         return {"text": "Error processing direct query", "sources": []}
 
+def _perform_hybrid_retrieval_and_rerank(
+    query_text: str,
+    db: VectorStore,
+    bm25: Optional[Any], # Using Any for BM25Okapi as it's not a LangChain type
+    reranker: Optional[Any] # Using Any for CrossEncoder
+) -> Tuple[List[Document], List[str]]:
+    """
+    Performs hybrid retrieval (semantic + keyword) and reranks the results.
+
+    Args:
+        query_text (str): The user's query.
+        db (VectorStore): The vector store (e.g., Chroma) for semantic search.
+        bm25 (Optional[BM25Okapi]): The initialized BM25 index.
+        reranker (Optional[CrossEncoder]): The initialized reranker model.
+
+    Returns:
+        Tuple[List[Document], List[str]]: A tuple containing the list of final
+                                          reranked/sorted documents and a list of their sources.
+    """
+    final_docs = []
+    sources = []
+
+    # --- Semantic Search ---
+    try:
+        results = db.similarity_search_with_score(query_text, k=RAG_MAX_DOCUMENTS)
+    except Exception as e:
+        logger.error(f"Error during semantic search: {e}", exc_info=True)
+        results = []
+
+    # --- Keyword Search (BM25) ---
+    bm25_results = []
+    if bm25 and data_service._bm25_corpus and data_service._bm25_doc_ids:
+        try:
+            tokenized_query = query_text.split(" ")
+            bm25_scores = bm25.get_scores(tokenized_query)
+            bm25_scored_docs = sorted(
+                zip(data_service._bm25_doc_ids, data_service._bm25_corpus, bm25_scores),
+                key=lambda x: x[2], reverse=True
+            )
+            top_bm25_ids = [doc_id for doc_id, _, score in bm25_scored_docs[:RAG_MAX_DOCUMENTS] if score > 0]
+            if top_bm25_ids:
+                # Fetch metadata only for the top BM25 results to optimize
+                chroma_bm25_docs = db.get(ids=top_bm25_ids, include=["metadatas", "documents"])
+                id_to_metadata = {id: meta for id, meta in zip(chroma_bm25_docs["ids"], chroma_bm25_docs["metadatas"])}
+                id_to_content = {id: content for id, content in zip(chroma_bm25_docs["ids"], chroma_bm25_docs["documents"])}
+                for doc_id, _content, score in bm25_scored_docs:
+                    if doc_id in top_bm25_ids: # Ensure we only process top IDs with metadata
+                        bm25_results.append(
+                            (Document(page_content=id_to_content[doc_id], metadata=id_to_metadata[doc_id]), score)
+                        )
+        except Exception as e:
+            logger.error(f"Error during BM25 search: {e}", exc_info=True)
+    else:
+        logger.warning("BM25 index not available, skipping keyword search.")
+
+    # --- Combine Semantic and Keyword Results ---
+    combined_results_dict = {}
+    for doc, score in results:
+        doc_id = doc.metadata.get("id", doc.page_content[:50])
+        combined_results_dict[doc_id] = (doc, score, "semantic")
+    for doc, score in bm25_results:
+        doc_id = doc.metadata.get("id", doc.page_content[:50])
+        if doc_id not in combined_results_dict:
+            combined_results_dict[doc_id] = (doc, score, "keyword")
+    combined_results = list(combined_results_dict.values())
+
+    if not combined_results:
+        logger.warning("No relevant information found from semantic or keyword search.")
+        return [], [] # Return empty lists
+
+    # --- Reranking ---
+    final_results_tuples = []
+    if reranker:
+        try:
+            pairs = [[query_text, doc.page_content] for doc, _, _ in combined_results]
+            rerank_scores = reranker.predict(pairs)
+            reranked_results = []
+            for i, (doc, original_score, search_type) in enumerate(combined_results):
+                reranked_results.append((doc, rerank_scores[i], search_type))
+            reranked_results.sort(key=lambda x: x[1], reverse=True)
+            final_results_tuples = reranked_results[:RAG_MAX_DOCUMENTS]
+            logger.info(f"Reranked {len(combined_results)} results, selected top {len(final_results_tuples)}")
+        except Exception as e:
+            logger.error(f"Error during reranking: {e}. Falling back.", exc_info=True)
+            # Fallback: sort by original score (semantic preferred)
+            combined_results.sort(key=lambda x: (x[2] == 'semantic', x[1]), reverse=True)
+            final_results_tuples = combined_results[:RAG_MAX_DOCUMENTS]
+    else:
+        logger.warning("Reranker not available, using combined semantic/keyword results without reranking.")
+        combined_results.sort(key=lambda x: (x[2] == 'semantic', x[1]), reverse=True)
+        final_results_tuples = combined_results[:RAG_MAX_DOCUMENTS]
+
+    # Extract final documents and sources
+    final_docs = [doc for doc, _, _ in final_results_tuples]
+    sources = []
+    for doc in final_docs:
+        source = doc.metadata.get("source")
+        if source and isinstance(source, str) and source.strip():
+            sources.append(source)
+        else:
+            logger.warning(f"Invalid or missing source in final document metadata: {doc.metadata}")
+            
+    return final_docs, sources
+
 def query_hybrid(query_text: str) -> Dict[str, Union[str, List[str]]]:
     """Query using both RAG context and the model's knowledge.
+    Applies Hybrid Search (Semantic + Keyword) and Reranking to the retrieved context.
     
     Args:
         query_text (str): The query text.
@@ -96,33 +203,30 @@ def query_hybrid(query_text: str) -> Dict[str, Union[str, List[str]]]:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
     try:
-        logger.debug("Processing hybrid query")
-        # Initialize only Chroma DB and embedding function
-        _ = data_service.embedding_function
-        _ = data_service.chroma_db
+        _ = data_service.embedding_function # Ensure embedding function is loaded
+        db = data_service.chroma_db
+        bm25 = data_service.bm25_index
+        reranker = data_service.reranker
         
-        # Get relevant documents from Chroma with scores
-        results = data_service.chroma_db.similarity_search_with_score(query_text, k=RAG_MAX_DOCUMENTS)
+        # Perform retrieval and reranking using the helper function
+        final_docs, sources = _perform_hybrid_retrieval_and_rerank(
+            query_text, db, bm25, reranker
+        )
         
-        if not results:
-            logger.warning("No relevant information found in the database")
-            return {"text": "No relevant information found in the database", "sources": []}
+        # Format context
+        if not final_docs:
+            context_text = "No relevant context found."
+            # Sources list is already empty from the helper function
+        else:
+            context_text = "\n\n---\n\n".join([doc.page_content for doc in final_docs])
             
-        # Filter results by similarity score
-        filtered_results = [(doc, score) for doc, score in results if score >= RAG_SIMILARITY_THRESHOLD]
-        
-        if not filtered_results:
-            logger.warning("No sufficiently relevant information found in the database")
-            return {"text": "No sufficiently relevant information found in the database", "sources": []}
-        
-        # Format context and create prompt
-        context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in filtered_results])
+        # Create prompt using the HYBRID_TEMPLATE
         prompt_template = ChatPromptTemplate.from_template(HYBRID_TEMPLATE)
         prompt = prompt_template.format(context=context_text, question=query_text)
         
         # Get response
         response_text = get_llm_response(prompt)
-        sources = [doc.metadata.get("id", None) for doc, _score in filtered_results]
+        # Sources are obtained from the helper function
         
         return {"text": response_text, "sources": sources}
     except Exception as e:
@@ -204,41 +308,41 @@ def query_graph(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, L
     return {"text": response_text, "sources": list(sources)}
 
 def query_rag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, List[str]]]:
-    """Query using only RAG context.
+    """Query using RAG with Hybrid Search (Semantic + Keyword) and Reranking.
     
     Args:
         query_text (str): The query text.
-        hybrid (bool): Whether to use hybrid mode.
+        hybrid (bool): Whether to use the hybrid LLM prompt template
+                     (combining retrieved context with LLM's internal knowledge).
         
     Returns:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
     try:
         logger.debug("Processing RAG query")
-        # Initialize only Chroma DB and embedding function
-        _ = data_service.embedding_function
+        # Initialize necessary services
+        _ = data_service.embedding_function # Ensure embedding function is loaded
         db = data_service.chroma_db
+        # BM25 and reranker will be accessed by the helper function
         
         # Verify database exists and has data
+        # Note: BM25 index loading depends on ChromaDB, so this check is important
         if not os.path.exists(os.path.join(str(CHROMA_PATH), "chroma.sqlite3")):
             logger.error("RAG database not found")
             return {"text": "RAG database not found. Please run populate_rag.py first.", "sources": []}
             
-        # Get relevant documents from Chroma with scores
-        results = db.similarity_search_with_score(query_text, k=RAG_MAX_DOCUMENTS)
+        # Perform retrieval and reranking using the helper function
+        final_docs, sources = _perform_hybrid_retrieval_and_rerank(
+            query_text, db, data_service.bm25_index, data_service.reranker
+        )
         
-        if not results:
-            logger.warning("No relevant information found in the database")
-            return {"text": "No relevant information found in the database", "sources": []}
-            
-        # Filter results by similarity score
-        filtered_results = [(doc, score) for doc, score in results if score >= RAG_SIMILARITY_THRESHOLD]
-        
-        if not filtered_results:
-            logger.warning("No sufficiently relevant information found in the database")
-            return {"text": "No sufficiently relevant information found in the database", "sources": []}
+        if not final_docs:
+            # If no documents are found after retrieval/reranking, return a specific message
+            logger.warning("No sufficiently relevant documents found after combining/reranking in RAG mode.")
+            return {"text": "No relevant information found in the database to answer the query.", "sources": []}
 
-        context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in filtered_results])
+        # Format context from the final documents
+        context_text = "\n\n---\n\n".join([doc.page_content for doc in final_docs])
         
         # Use hybrid template if hybrid mode is enabled
         template = HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE
@@ -248,15 +352,7 @@ def query_rag(query_text: str, hybrid: bool = False) -> Dict[str, Union[str, Lis
         # Get response
         response_text = get_llm_response(prompt)
         
-        # Extract sources from metadata, ensuring they are valid file paths
-        sources = []
-        for doc, _score in filtered_results:
-            source = doc.metadata.get("source")
-            if source and isinstance(source, str) and source.strip():
-                sources.append(source)
-            else:
-                logger.warning(f"Invalid or missing source in document metadata: {doc.metadata}")
-        
+        # Sources are obtained from the helper function
         # Ensure database is persisted after query
         data_service.persist_chroma_db()
         

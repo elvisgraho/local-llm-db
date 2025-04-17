@@ -21,6 +21,8 @@ import networkx as nx
 import os
 from typing import Optional, Dict, Any, List
 from pathlib import Path
+from rank_bm25 import BM25Okapi
+from sentence_transformers import CrossEncoder
 from langchain_chroma import Chroma
 from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
@@ -75,6 +77,10 @@ class DataService:
         _graphrag_graph (Optional[nx.DiGraph]): The GraphRAG graph.
         _kag_graph (Optional[nx.DiGraph]): The KAG graph.
         _qa_chain (Optional[RetrievalQA]): The QA chain.
+        _bm25_index (Optional[BM25Okapi]): The BM25 index.
+        _bm25_corpus (Optional[List[str]]): The corpus for BM25.
+        _bm25_doc_ids (Optional[List[str]]): Document IDs corresponding to the BM25 corpus.
+        _reranker (Optional[CrossEncoder]): The reranking model.
     """
     
     _instance: Optional['DataService'] = None
@@ -100,6 +106,10 @@ class DataService:
             self._kag_graph: Optional[nx.DiGraph] = None
             self._qa_chain: Optional[RetrievalQA] = None
             self._initialized = True
+            self._bm25_index: Optional[BM25Okapi] = None
+            self._bm25_corpus: Optional[List[str]] = None
+            self._bm25_doc_ids: Optional[List[str]] = None
+            self._reranker: Optional[CrossEncoder] = None
 
     @property
     def embedding_function(self) -> LMStudioEmbeddings:
@@ -162,6 +172,55 @@ class DataService:
             except Exception as e:
                 print(f"Error persisting Chroma database: {e}")
                 raise
+
+    @property
+    def bm25_index(self) -> Optional[BM25Okapi]:
+        """Get or initialize the BM25 index. Requires ChromaDB to be loaded.
+        
+        Returns:
+            Optional[BM25Okapi]: The BM25 index, or None if ChromaDB is empty or fails.
+        """
+        if self._bm25_index is None:
+            self._load_bm25_data()
+        return self._bm25_index
+
+    def _load_bm25_data(self) -> None:
+        """Load data from ChromaDB and build the BM25 index."""
+        try:
+            # Ensure ChromaDB is loaded
+            db = self.chroma_db
+            if db is None:
+                print("ChromaDB not available for BM25 indexing.")
+                return
+
+            # Retrieve all documents from ChromaDB
+            # Note: This might be inefficient for very large databases.
+            # Consider alternative strategies if performance is an issue.
+            all_docs = db.get(include=["documents", "metadatas"])
+            
+            if not all_docs or not all_docs.get("ids"):
+                print("No documents found in ChromaDB for BM25 indexing.")
+                return
+
+            self._bm25_corpus = all_docs["documents"]
+            self._bm25_doc_ids = all_docs["ids"] # Use ChromaDB internal IDs
+            
+            if not self._bm25_corpus:
+                print("Corpus is empty, cannot build BM25 index.")
+                return
+                
+            # Simple tokenization (split by space)
+            tokenized_corpus = [doc.split(" ") for doc in self._bm25_corpus]
+            
+            self._bm25_index = BM25Okapi(tokenized_corpus)
+            print(f"BM25 index built successfully with {len(self._bm25_corpus)} documents.")
+
+        except Exception as e:
+            print(f"Error loading data for BM25 index: {e}")
+            # Ensure attributes are reset if loading fails
+            self._bm25_index = None
+            self._bm25_corpus = None
+            self._bm25_doc_ids = None
 
     @property
     def vectorstore(self) -> FAISS:
@@ -232,6 +291,23 @@ class DataService:
             )
         return self._qa_chain
 
+    @property
+    def reranker(self) -> Optional[CrossEncoder]:
+        """Get or initialize the reranking model.
+        
+        Returns:
+            Optional[CrossEncoder]: The CrossEncoder model, or None if loading fails.
+        """
+        if self._reranker is None:
+            try:
+                # Load a pre-trained CrossEncoder model
+                self._reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+                print("Reranker model loaded successfully.")
+            except Exception as e:
+                print(f"Error loading reranker model: {e}")
+                self._reranker = None
+        return self._reranker
+
     def clear_cache(self) -> None:
         """Clear all cached resources."""
         self._embedding_function = None
@@ -240,6 +316,10 @@ class DataService:
         self._graphrag_graph = None
         self._kag_graph = None
         self._qa_chain = None
+        self._bm25_index = None
+        self._bm25_corpus = None
+        self._bm25_doc_ids = None
+        self._reranker = None
 
 def initialize_data_service() -> None:
     """Initialize the data service by pre-loading resources."""
@@ -251,7 +331,9 @@ def initialize_data_service() -> None:
     _ = data_service.graphrag_graph
     _ = data_service.kag_graph
     _ = data_service.qa_chain
+    _ = data_service.bm25_index # Trigger BM25 loading
+    _ = data_service.reranker # Trigger reranker loading
     print("Data service initialized successfully!")
 
 # Create a singleton instance
-data_service = DataService() 
+data_service = DataService()
