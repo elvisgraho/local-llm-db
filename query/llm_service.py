@@ -6,7 +6,7 @@ import re
 import time
 import json
 import logging
-from typing import Optional, Dict
+from typing import List, Optional, Dict
 from requests.exceptions import RequestException
 from tenacity import retry, stop_after_attempt, wait_exponential
 from google.api_core import exceptions as google_exceptions # Import google api exceptions
@@ -24,17 +24,24 @@ logger = logging.getLogger(__name__)
     wait=wait_exponential(multiplier=1, min=4, max=10),
     reraise=True
 )
-def get_llm_response(prompt: str, llm_config: Optional[Dict] = None, temperature: float = 0.7) -> str:
-    """Helper function to get response from LLM with retries, supporting different providers.
-    
+def get_llm_response(
+    prompt: str,
+    llm_config: Optional[Dict] = None,
+    temperature: float = 0.7,
+    conversation_history: Optional[List[Dict[str, str]]] = None
+) -> str:
+    """Helper function to get response from LLM with retries, supporting different providers and conversation history.
+
     Args:
-        prompt (str): The prompt to send to the LLM.
+        prompt (str): The current user prompt to send to the LLM.
         llm_config (Optional[Dict]): Configuration for the LLM provider.
                                      Expected keys: 'provider' ('local' or 'gemini'),
-                                                    'model_name', 'api_key' (for gemini).
-        prompt (str): The prompt to send to the LLM.
+                                                    'modelName', 'apiKey' (for gemini).
         temperature (float): The temperature parameter for the LLM.
-        
+        conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns,
+                                                                e.g., [{'role': 'user', 'content': '...'},
+                                                                       {'role': 'assistant', 'content': '...'}].
+
     Returns:
         str: The response from the LLM.
         
@@ -48,19 +55,33 @@ def get_llm_response(prompt: str, llm_config: Optional[Dict] = None, temperature
     # Expect camelCase from the config dict passed down
     model_name = config.get('modelName')
     api_key = config.get('apiKey') # Expect camelCase 'apiKey'
+    history = conversation_history or [] # Ensure history is a list
 
-    logger.info(f"Getting LLM response using provider: {provider}, model: {model_name or 'default'}")
+    logger.info(f"Getting LLM response using provider: {provider}, model: {model_name or 'default'}, history_len: {len(history)}")
 
     if provider == 'local':
-        # Use local LLM (existing logic, but with model from config)
+        # Use local LLM (OpenAI compatible API)
         local_model = model_name or LOCAL_MAIN_MODEL
         headers = {"Content-Type": "application/json"}
+
+        # Construct messages including history
+        messages = []
+        for entry in history:
+            # Ensure role is 'user' or 'assistant' (or 'system' if needed later)
+            role = entry.get('role')
+            content = entry.get('content')
+            if role in ['user', 'assistant'] and content:
+                 messages.append({"role": role, "content": content})
+            else:
+                 logger.warning(f"Skipping invalid history entry: {entry}")
+        messages.append({"role": "user", "content": prompt}) # Add current prompt
+
         payload = {
             "model": local_model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": temperature
         }
-        
+
         try:
             response = requests.post(LOCAL_LLM_API_URL, json=payload, headers=headers)
             response.raise_for_status()
@@ -91,16 +112,33 @@ def get_llm_response(prompt: str, llm_config: Optional[Dict] = None, temperature
         if not model_name:
             logger.error("Gemini provider selected, but modelName is missing in llm_config.")
             raise ValueError("Model name (modelName) required for Gemini provider is missing.")
-            
+
         try:
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel(model_name)
-            # Adjust temperature mapping if needed, Gemini uses a GenerationConfig
             generation_config = genai.types.GenerationConfig(temperature=temperature)
-            
-            # Note: Gemini API might have different error handling and response structure
-            response = model.generate_content(prompt, generation_config=generation_config)
-            
+
+            # Format history for Gemini API (list of content objects)
+            # Gemini expects alternating user/model roles. 'assistant' maps to 'model'.
+            gemini_history = []
+            for entry in history:
+                role = entry.get('role')
+                content = entry.get('content')
+                if role == 'user' and content:
+                    gemini_history.append({'role': 'user', 'parts': [content]})
+                elif role == 'assistant' and content:
+                    gemini_history.append({'role': 'model', 'parts': [content]})
+                else:
+                    logger.warning(f"Skipping invalid history entry for Gemini: {entry}")
+
+            # Start a chat session if history exists
+            if gemini_history:
+                 chat = model.start_chat(history=gemini_history)
+                 response = chat.send_message(prompt, generation_config=generation_config)
+            else:
+                 # Send single message if no history
+                 response = model.generate_content(prompt, generation_config=generation_config)
+
             # Accessing response text might differ based on Gemini library version
             # Check response.text or response.parts
             if hasattr(response, 'text'):

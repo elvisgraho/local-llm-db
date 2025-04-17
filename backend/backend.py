@@ -11,12 +11,10 @@ from query.query_data import query_direct, query_graph, query_kag, query_lightra
 from query.llm_service import optimize_query
 from query.data_service import data_service
 import traceback
-# --- Added imports for model listing ---
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
 import requests # To call local LLM API
 from query.global_vars import LOCAL_LLM_API_URL # Get local API URL
-# --- End added imports ---
 
 # Configure logging
 logging.basicConfig(
@@ -62,6 +60,8 @@ def handle_query():
         optimize = data.get('optimize', False)
         hybrid = data.get('hybrid', False)
         llm_config = data.get('llm_config', {}) # Extract llm_config
+        # Extract conversation history if present, default to None or empty list
+        conversation_history = data.get('conversation_history', None)
 
         # Basic validation for llm_config
         provider = llm_config.get('provider')
@@ -119,17 +119,17 @@ def handle_query():
         # Call appropriate query function based on mode
         try:
             query_start = time.time()
-            # Pass llm_config to the query functions
+            # Pass llm_config and conversation_history to the query functions
             if query_mode == 'direct':
-                query_response = query_direct(optimized_query, llm_config=llm_config)
+                query_response = query_direct(optimized_query, llm_config=llm_config, conversation_history=conversation_history)
             elif query_mode == 'graph':
-                query_response = query_graph(optimized_query, hybrid, llm_config=llm_config)
+                query_response = query_graph(optimized_query, hybrid, llm_config=llm_config, conversation_history=conversation_history)
             elif query_mode == 'lightrag':
-                query_response = query_lightrag(optimized_query, hybrid, llm_config=llm_config)
+                query_response = query_lightrag(optimized_query, hybrid, llm_config=llm_config, conversation_history=conversation_history)
             elif query_mode == 'kag':
-                query_response = query_kag(optimized_query, hybrid, llm_config=llm_config)
+                query_response = query_kag(optimized_query, hybrid, llm_config=llm_config, conversation_history=conversation_history)
             else: # Default to RAG
-                query_response = query_rag(optimized_query, hybrid, llm_config=llm_config)
+                query_response = query_rag(optimized_query, hybrid, llm_config=llm_config, conversation_history=conversation_history)
 
             query_time = time.time() - query_start
 

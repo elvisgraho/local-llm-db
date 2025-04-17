@@ -69,14 +69,14 @@ def main():
         logger.error(f"Error processing query: {str(e)}", exc_info=True)
         print(f"Error: {str(e)}")
 
-def query_direct(query_text: str, llm_config: Optional[Dict] = None) -> Dict[str, Union[str, List[str]]]:
+def query_direct(query_text: str, llm_config: Optional[Dict] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Union[str, List[str]]]:
     """Query the model directly without using RAG.
-    
+
     Args:
         query_text (str): The query text.
         llm_config (Optional[Dict]): Configuration for the LLM provider.
-        query_text (str): The query text.
-        
+        conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns.
+
     Returns:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
@@ -84,8 +84,8 @@ def query_direct(query_text: str, llm_config: Optional[Dict] = None) -> Dict[str
         logger.debug("Processing direct query")
         prompt_template = ChatPromptTemplate.from_template(DIRECT_TEMPLATE)
         prompt = prompt_template.format(question=query_text)
-        
-        response_text = get_llm_response(prompt, llm_config=llm_config)
+
+        response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
         return {"text": response_text, "sources": []}
     except Exception as e:
         logger.error(f"Error in direct query: {str(e)}", exc_info=True)
@@ -195,14 +195,15 @@ def _perform_hybrid_retrieval_and_rerank(
             
     return final_docs, sources
 
-def query_hybrid(query_text: str, llm_config: Optional[Dict] = None) -> Dict[str, Union[str, List[str]]]:
+def query_hybrid(query_text: str, llm_config: Optional[Dict] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Union[str, List[str]]]:
     """Query using both RAG context and the model's knowledge.
     Applies Hybrid Search (Semantic + Keyword) and Reranking to the retrieved context.
-    
+
     Args:
         query_text (str): The query text.
         llm_config (Optional[Dict]): Configuration for the LLM provider.
-        
+        conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns.
+
     Returns:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
@@ -229,22 +230,23 @@ def query_hybrid(query_text: str, llm_config: Optional[Dict] = None) -> Dict[str
         prompt = prompt_template.format(context=context_text, question=query_text)
         
         # Get response
-        response_text = get_llm_response(prompt, llm_config=llm_config)
+        response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
         # Sources are obtained from the helper function
-        
+
         return {"text": response_text, "sources": sources}
     except Exception as e:
         logger.error(f"Error in hybrid query: {str(e)}", exc_info=True)
         raise # Re-raise the exception
 
-def query_graph(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None) -> Dict[str, Union[str, List[str]]]:
+def query_graph(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Union[str, List[str]]]:
     """Query using the graph structure with semantic search.
-    
+
     Args:
         query_text (str): The query text.
         hybrid (bool): Whether to use hybrid mode.
         llm_config (Optional[Dict]): Configuration for the LLM provider.
-        
+        conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns.
+
     Returns:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
@@ -308,19 +310,20 @@ def query_graph(query_text: str, hybrid: bool = False, llm_config: Optional[Dict
     template = HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE
     prompt_template = ChatPromptTemplate.from_template(template)
     prompt = prompt_template.format(context=context_text, question=query_text)
-    
-    response_text = get_llm_response(prompt, llm_config=llm_config)
+
+    response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
     return {"text": response_text, "sources": list(sources)}
 
-def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None) -> Dict[str, Union[str, List[str]]]:
+def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Union[str, List[str]]]:
     """Query using RAG with Hybrid Search (Semantic + Keyword) and Reranking.
-    
+
     Args:
         query_text (str): The query text.
         hybrid (bool): Whether to use the hybrid LLM prompt template
                      (combining retrieved context with LLM's internal knowledge).
         llm_config (Optional[Dict]): Configuration for the LLM provider.
-        
+        conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns.
+
     Returns:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
@@ -356,8 +359,8 @@ def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] 
         prompt = prompt_template.format(context=context_text, question=query_text)
 
         # Get response
-        response_text = get_llm_response(prompt, llm_config=llm_config)
-        
+        response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
+
         # Sources are obtained from the helper function
         # Ensure database is persisted after query
         data_service.persist_chroma_db()
@@ -367,20 +370,21 @@ def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] 
         logger.error(f"Error in RAG query: {str(e)}", exc_info=True)
         raise # Re-raise the exception
 
-def query_lightrag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None) -> Dict[str, Union[str, List[str]]]:
+def query_lightrag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Union[str, List[str]]]:
     """Query using the light RAG implementation.
-    
+
     LightRAG is a simplified version of RAG that focuses on speed and efficiency:
     1. Uses FAISS for faster similarity search
     2. Simpler document processing
     3. Optional QA chain for faster responses
     4. Less strict filtering and validation
-    
+
     Args:
         query_text (str): The query text.
         hybrid (bool): Whether to use hybrid mode.
         llm_config (Optional[Dict]): Configuration for the LLM provider.
-        
+        conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns.
+
     Returns:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
@@ -416,29 +420,33 @@ def query_lightrag(query_text: str, hybrid: bool = False, llm_config: Optional[D
             else:
                 logger.debug(f"Missing or invalid source in document metadata: {doc.metadata}")
         
-        # Use hybrid template if enabled
-        if hybrid:
-            prompt_template = ChatPromptTemplate.from_template(LIGHTRAG_HYBRID_TEMPLATE)
+        # Determine how to get the response
+        if conversation_history or hybrid:
+            # Always use get_llm_response if history is present or hybrid is explicitly requested
+            template = LIGHTRAG_HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE # Use RAG_ONLY if history but not hybrid
+            prompt_template = ChatPromptTemplate.from_template(template)
             prompt = prompt_template.format(context=context_text, question=query_text)
-            response_text = get_llm_response(prompt, llm_config=llm_config)
+            response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
         else:
-            # Use regular QA chain for non-hybrid mode (faster)
-            # TODO: Consider how to pass llm_config to the QA chain if needed
+            # Use regular QA chain only if no history and not hybrid mode (for potential speed)
+            # Note: QA chain does not support conversation history or llm_config easily
+            logger.info("Using QA chain for lightrag query (no history, non-hybrid)")
             response_text = data_service.qa_chain.invoke({"query": query_text})["result"]
-        
+
         return {"text": response_text, "sources": sources}
     except Exception as e:
         logger.error(f"Error in light RAG query: {str(e)}", exc_info=True)
         raise # Re-raise the exception
 
-def query_kag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None) -> Dict[str, Union[str, List[str]]]:
+def query_kag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Union[str, List[str]]]:
     """Query using Knowledge-Augmented Generation (KAG) approach.
-    
+
     Args:
         query_text (str): The query text.
         hybrid (bool): Whether to use hybrid mode.
         llm_config (Optional[Dict]): Configuration for the LLM provider.
-        
+        conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns.
+
     Returns:
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
@@ -537,8 +545,8 @@ def query_kag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] 
         relationships=relationships_text,
         question=query_text
     )
-    
-    response_text = get_llm_response(prompt, llm_config=llm_config)
+
+    response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
     return {"text": response_text, "sources": list(sources)}
 
 if __name__ == "__main__":
