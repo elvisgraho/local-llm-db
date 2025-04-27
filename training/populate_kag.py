@@ -34,6 +34,7 @@ from load_documents import load_documents # Removed extract_metadata
 # Removed initialize_vectorstore, added get_embedding_function
 from training.processing_utils import validate_metadata, split_document
 from training.get_embedding_function import get_embedding_function # Added
+from training.config import EMBEDDING_CONTEXT_LENGTH # Import the constant
 # Removed unused 're' and 'datetime' imports
 import argparse
 import shutil
@@ -86,83 +87,7 @@ def save_graph(graph: nx.DiGraph, graph_path: Path, db_dir: Path):
     except Exception as e:
         logger.error(f"Error saving KAG graph to {graph_path}: {str(e)}")
 
-# --- Document Processing Function (modified for graph) ---
-
-def process_document_to_graph(doc: Document, graph: nx.DiGraph, add_tags_llm: bool) -> None:
-    """
-    Process a single document using utilities, split it, add metadata,
-    and update the knowledge graph with chunks and embeddings.
-
-    Args:
-        doc (Document): The document to process.
-        graph (nx.DiGraph): The knowledge graph to update.
-        add_tags_llm (bool): Whether to use LLM for tag extraction via split_document.
-    """
-    # Removed old docstring content and text_splitter definition
-    # Removed duplicate function definition below
-    # --- Start of function body ---
-    try:
-        # Validate metadata
-        if not validate_metadata(doc.metadata):
-            logger.warning(f"Invalid metadata for document: {doc}")
-            return
-            
-        # Extract source
-        source = doc.metadata.get("source")
-        if not source or not isinstance(source, str):
-            logger.warning(f"Missing or invalid source in document metadata: {doc.metadata}")
-            return
-            
-        # Split document into chunks and add metadata
-        chunks = split_document(doc, add_tags_llm=add_tags_llm)
-        if not chunks:
-            logger.warning(f"No valid chunks created or metadata added for document: {source}")
-            return # Corrected: Just return None if no chunks
-            
-        # Get embeddings for new chunks
-        try:
-            embedding_function = get_embedding_function()
-            chunk_texts = [chunk.page_content for chunk in chunks]
-            chunk_embeddings = embedding_function.embed_documents(chunk_texts)
-        except Exception as e:
-            logger.error(f"Error getting embeddings for document {source}: {str(e)}")
-            return
-
-        # Add new document nodes with embeddings to the graph
-        for chunk, embedding in zip(chunks, chunk_embeddings):
-            try:
-                # Use a consistent chunk ID format
-                chunk_index = chunk.metadata.get("chunk_index", 0) # Assuming split_document adds this
-                chunk_id = f"{source}:{chunk_index}"
-
-                # Skip if node already exists (optional, allows updates if needed)
-                if graph.has_node(chunk_id):
-                    logger.debug(f"Skipping existing chunk node: {chunk_id}")
-                    continue
-
-                # Add chunk node with content, metadata, and embedding
-                graph.add_node(chunk_id,
-                               content=chunk.page_content,
-                               metadata=chunk.metadata, # Use metadata from split_document
-                               embedding=embedding,
-                               type="chunk") # Add type for potential filtering
-
-                # Add file node and connect to chunk (basic relationship)
-                if not graph.has_node(source):
-                    graph.add_node(source, type="file")
-                graph.add_edge(source, chunk_id, relation="contains")
-
-                # KAG specific: Potentially add relationships based on metadata later
-                # (e.g., same_section, based_on_topic, etc.)
-                # For now, just adding chunks and embeddings as query_kag expects.
-
-            except Exception as e:
-                logger.error(f"Error processing chunk {chunk_id} for graph: {str(e)}")
-                continue
-
-    except Exception as e:
-        logger.error(f"Error processing document {source} for graph: {str(e)}", exc_info=True)
-
+# --- Document Processing Function removed, logic moved to main ---
 
 def clear_graph_dir(db_dir: Path):
     """Clear the KAG database directory (including graph file)."""
@@ -217,46 +142,135 @@ def main():
         # Load or create graph
         graph = load_graph(graph_path)
 
-        # Process documents and add to graph
+        # 1. Load and process documents to get all chunks
         documents = load_documents()
         if not documents:
             logger.error("No documents found to process")
             return
-            
-        total_docs = len(documents)
-        processed_docs = 0
-        failed_docs = 0
 
-        logger.info(f"Found {total_docs} documents to process for '{rag_type}/{db_name}'.")
-        with tqdm(total=total_docs, desc=f"Processing documents for '{rag_type}/{db_name}'", unit="doc") as pbar:
+        total_docs = len(documents)
+        all_chunks = []
+        processed_docs_count = 0
+        failed_docs_count = 0
+
+        logger.info(f"Found {total_docs} documents. Processing and splitting into chunks...")
+        with tqdm(total=total_docs, desc=f"Splitting documents for '{rag_type}/{db_name}'", unit="doc") as pbar:
             for doc in documents:
                 try:
-                    # Process document and add directly to the graph
-                    process_document_to_graph(doc, graph, add_tags_llm=args.add_tags)
-                    processed_docs += 1
+                    if not validate_metadata(doc.metadata):
+                         logger.warning(f"Invalid metadata for document: {doc.metadata.get('source', 'unknown')}, skipping.")
+                         failed_docs_count += 1
+                         continue
+
+                    chunks = split_document(doc, add_tags_llm=args.add_tags)
+                    if chunks:
+                        all_chunks.extend(chunks)
+                        processed_docs_count += 1
+                    else:
+                        logger.warning(f"Document {doc.metadata.get('source', 'unknown')} resulted in no chunks.")
+                        failed_docs_count += 1 # Count as failed if no chunks produced
+
                 except Exception as e:
-                    logger.error(f"Error processing document {doc.metadata.get('source', 'unknown')} into graph: {str(e)}")
-                    failed_docs += 1
+                    logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
+                    failed_docs_count += 1
                 finally:
                     pbar.update(1)
-                    pbar.set_postfix({
-                        "processed": processed_docs,
-                        "failed": failed_docs
-                    })
+                    pbar.set_postfix({"processed": processed_docs_count, "failed": failed_docs_count})
 
-        # Save the final graph
+        if not all_chunks:
+            logger.error("No valid chunks were created from any documents. Aborting graph population.")
+            return
+
+        logger.info(f"Successfully split {processed_docs_count} documents into {len(all_chunks)} chunks.")
+        if failed_docs_count > 0:
+            logger.warning(f"{failed_docs_count} documents failed during processing/splitting.")
+
+        # 2. Generate embeddings for all chunks in batches
+        logger.info("Generating embeddings for all chunks...")
+        try:
+            embedding_function = get_embedding_function()
+            chunk_texts = [chunk.page_content for chunk in all_chunks]
+            all_embeddings = []
+            batch_size = EMBEDDING_CONTEXT_LENGTH
+
+            with tqdm(total=len(chunk_texts), desc=f"Generating embeddings for '{rag_type}/{db_name}'", unit="chunk") as pbar_embed:
+                for i in range(0, len(chunk_texts), batch_size):
+                    batch_texts = chunk_texts[i:i + batch_size]
+                    try:
+                        batch_embeddings = embedding_function.embed_documents(batch_texts)
+                        all_embeddings.extend(batch_embeddings)
+                        pbar_embed.update(len(batch_texts))
+                    except Exception as embed_error:
+                        logger.error(f"Error embedding batch starting at index {i}: {embed_error}")
+                        # Handle error: either stop or add placeholders/skip batch
+                        # For now, we'll stop if a batch fails critically
+                        raise RuntimeError(f"Failed to embed batch starting at index {i}") from embed_error
+
+            if len(all_embeddings) != len(all_chunks):
+                 raise RuntimeError(f"Mismatch between number of chunks ({len(all_chunks)}) and generated embeddings ({len(all_embeddings)}).")
+
+            logger.info("Embeddings generated successfully.")
+
+        except Exception as e:
+            logger.error(f"Fatal error during embedding generation: {str(e)}")
+            sys.exit(1) # Exit if embeddings fail
+
+        # 3. Populate the graph using chunks and embeddings
+        logger.info("Populating the knowledge graph...")
+        graph = load_graph(graph_path) # Load or create graph here
+        nodes_added = 0
+        edges_added = 0
+
+        with tqdm(total=len(all_chunks), desc=f"Populating graph for '{rag_type}/{db_name}'", unit="chunk") as pbar_graph:
+            for chunk, embedding in zip(all_chunks, all_embeddings):
+                try:
+                    source = chunk.metadata.get("source")
+                    chunk_index = chunk.metadata.get("chunk_index", 0)
+                    chunk_id = f"{source}:{chunk_index}"
+
+                    # Add chunk node if it doesn't exist
+                    if not graph.has_node(chunk_id):
+                        graph.add_node(chunk_id,
+                                       content=chunk.page_content,
+                                       metadata=chunk.metadata,
+                                       embedding=embedding,
+                                       type="chunk")
+                        nodes_added += 1
+
+                        # Add file node and edge if they don't exist
+                        if source and not graph.has_node(source):
+                            graph.add_node(source, type="file")
+                            nodes_added += 1
+                        if source and not graph.has_edge(source, chunk_id):
+                             graph.add_edge(source, chunk_id, relation="contains")
+                             edges_added += 1
+                    else:
+                        # Optionally update existing node data if needed
+                        # graph.nodes[chunk_id]['embedding'] = embedding # Example update
+                        pass # For now, skip if node exists
+
+                except Exception as graph_error:
+                    logger.error(f"Error adding chunk {chunk_id} to graph: {graph_error}")
+                finally:
+                    pbar_graph.update(1)
+
+        logger.info(f"Graph population complete. Added {nodes_added} nodes and {edges_added} edges.")
+
+        # 4. Save the final graph
         save_graph(graph, graph_path, db_dir)
 
-        # Log statistics
+        # 5. Log final statistics
         logger.info(f"KAG graph population completed for '{rag_type}/{db_name}':")
         logger.info(f"- Total documents found: {total_docs}")
-        logger.info(f"- Documents successfully processed into graph: {processed_docs}")
-        logger.info(f"- Failed: {failed_docs}")
-        logger.info(f"- Total nodes in graph: {len(graph.nodes)}") # Added graph stats
-        logger.info(f"- Total edges in graph: {len(graph.edges)}") # Added graph stats
+        logger.info(f"- Documents processed into chunks: {processed_docs_count}")
+        logger.info(f"- Documents failed processing/splitting: {failed_docs_count}")
+        logger.info(f"- Total chunks generated: {len(all_chunks)}")
+        logger.info(f"- Total embeddings generated: {len(all_embeddings)}")
+        logger.info(f"- Final nodes in graph: {len(graph.nodes)}")
+        logger.info(f"- Final edges in graph: {len(graph.edges)}")
 
-        if processed_docs == 0:
-            logger.error("No documents were successfully processed into the graph")
+        if len(all_chunks) == 0:
+            logger.error("No chunks were successfully processed into the graph")
         else:
             logger.info(f"Successfully populated KAG graph database '{rag_type}/{db_name}'")
 
