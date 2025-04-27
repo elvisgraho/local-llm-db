@@ -14,7 +14,6 @@ retrieval. Key features:
 2. Vector similarity search
 3. Integration with LM Studio for local LLM inference
 4. Basic question-answering capabilities
-# from langchain_text_splitters import RecursiveCharacterTextSplitter # Removed workaround import
 
 The standard implementation provides:
 - Efficient document retrieval

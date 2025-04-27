@@ -6,7 +6,6 @@ A comprehensive implementation of different RAG (Retrieval Augmented Generation)
 
 - Multiple RAG implementations:
   - Standard RAG with Chroma vectorstore
-  - GraphRAG for hierarchical document relationships
   - Knowledge Augmented Graph (KAG) for semantic relationships
   - LightRAG for efficient document retrieval
 - Support for multiple document types (PDF, TXT, MD)
@@ -29,9 +28,6 @@ pip install -r requirements.txt
 ```bash
 # Standard RAG
 python training/populate_rag.py
-
-# GraphRAG
-python training/populate_graphrag.py
 
 # KAG
 python training/populate_kag.py

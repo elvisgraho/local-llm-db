@@ -29,7 +29,6 @@ from langchain.chains import RetrievalQA
 from langchain.llms.base import LLM
 from query.database_paths import (
     DEFAULT_CHROMA_PATH,
-    DEFAULT_GRAPHRAG_GRAPH_PATH,
     DEFAULT_KAG_GRAPH_PATH,
     DEFAULT_VECTORSTORE_PATH,
     get_db_paths # Import get_db_paths
@@ -81,7 +80,6 @@ class DataService:
         _chroma_db (Optional[Chroma]): The default Chroma vector store (for 'rag').
         _lightrag_chroma_db (Optional[Chroma]): The Chroma vector store for 'lightrag'.
         _vectorstore (Optional[FAISS]): The FAISS vector store (legacy/unused?).
-        _graphrag_graph (Optional[nx.DiGraph]): The GraphRAG graph.
         _kag_graph (Optional[nx.DiGraph]): The KAG graph.
         _qa_chain (Optional[RetrievalQA]): The QA chain.
         _bm25_index (Optional[BM25Okapi]): The BM25 index.
@@ -110,7 +108,6 @@ class DataService:
             self._chroma_db: Optional[Chroma] = None # For default 'rag'
             self._lightrag_chroma_db: Optional[Chroma] = None # For 'lightrag'
             self._vectorstore: Optional[FAISS] = None # Legacy FAISS path
-            self._graphrag_graph: Optional[nx.DiGraph] = None
             self._kag_graph: Optional[nx.DiGraph] = None
             self._qa_chain: Optional[RetrievalQA] = None
             self._initialized = True
@@ -277,24 +274,6 @@ class DataService:
         return self._vectorstore
 
     @property
-    def graphrag_graph(self) -> nx.DiGraph:
-        """Get or initialize the GraphRAG graph.
-        
-        Returns:
-            nx.DiGraph: The GraphRAG graph.
-        """
-        if self._graphrag_graph is None:
-            with open(DEFAULT_GRAPHRAG_GRAPH_PATH, 'r') as f:
-                graph_data = json.load(f)
-            
-            self._graphrag_graph = nx.DiGraph()
-            for node in graph_data['nodes']:
-                self._graphrag_graph.add_node(node['id'], **node['data'])
-            for edge in graph_data['edges']:
-                self._graphrag_graph.add_edge(edge['source'], edge['target'], **edge['data'])
-        return self._graphrag_graph
-
-    @property
     def kag_graph(self) -> nx.DiGraph:
         """Get or initialize the KAG graph.
         
@@ -353,7 +332,6 @@ class DataService:
         self._chroma_db = None
         self._lightrag_chroma_db = None # Clear lightrag cache too
         self._vectorstore = None
-        self._graphrag_graph = None
         self._kag_graph = None
         self._qa_chain = None
         self._bm25_index = None
@@ -373,8 +351,6 @@ def initialize_data_service() -> None:
     _ = data_service.lightrag_chroma_db # Initialize lightrag db too
     # print("Initializing FAISS vectorstore (legacy)...") # Keep FAISS initialization commented unless needed
     # _ = data_service.vectorstore
-    print("Initializing GraphRAG graph...")
-    _ = data_service.graphrag_graph
     _ = data_service.kag_graph
     _ = data_service.qa_chain
     _ = data_service.bm25_index # Trigger BM25 loading

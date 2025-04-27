@@ -8,10 +8,10 @@ sys.path.insert(0, str(project_root))
 """
 Knowledge-Augmented Generation (KAG) Implementation
 
-This module implements a knowledge-augmented approach to RAG using FAISS vectorstore for efficient
-document retrieval and knowledge graph construction. Key features:
-1. Advanced document chunking with semantic boundaries
-2. Knowledge graph construction from document relationships
+This module implements a knowledge-augmented approach to RAG using a NetworkX graph for storing
+document chunks, embeddings, and relationships. Key features:
+1. Document chunking using shared utilities
+2. Knowledge graph construction storing chunks and embeddings
 3. Hybrid retrieval combining vector similarity and graph traversal
 4. Integration with LM Studio for local LLM inference
 
@@ -26,14 +26,17 @@ import logging
 from typing import List
 from pathlib import Path
 from tqdm import tqdm
+import json # Added for graph saving
+import networkx as nx # Added for graph operations
 from langchain.schema.document import Document
 from query.database_paths import get_db_paths # Updated import
-from load_documents import load_documents, extract_metadata
-from training.processing_utils import validate_metadata, split_document, initialize_vectorstore
-import re
+from load_documents import load_documents # Removed extract_metadata
+# Removed initialize_vectorstore, added get_embedding_function
+from training.processing_utils import validate_metadata, split_document
+from training.get_embedding_function import get_embedding_function # Added
+# Removed unused 're' and 'datetime' imports
 import argparse
 import shutil
-from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -46,104 +49,58 @@ logger = logging.getLogger(__name__)
 
 # --- split_document function removed, imported from processing_utils ---
 
-def process_document(doc: Document, add_tags_llm: bool) -> List[Document]:
-    """
-    Split a single document into chunks with semantic boundaries.
-    Optionally adds LLM-based metadata if add_tags_llm is True and no tags found in content.
-    
-    Args:
-        doc (Document): The document to split
-        add_tags_llm (bool): Whether to use LLM for tag extraction.
-        doc (Document): The document to split
-        max_chunk_size (int): Maximum size of each chunk
-        max_total_chunks (int): Maximum total number of chunks
-        
-    Returns:
-        List[Document]: List of document chunks
-    """
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=max_chunk_size,
-        chunk_overlap=200,
-        length_function=len,
-        is_separator_regex=False,
-        separators=[
-            "\n\n## ",  # Main headers
-            "\n\n### ",  # Subheaders
-            "\n\n#### ",  # Sub-subheaders
-            "\n\n",     # Double newlines
-            "\n```",    # Code blocks
-            "\n",       # Single newlines
-            "\n**",     # Bold text
-            " ",        # Spaces
-            ""         # No separator
-        ],
-        keep_separator=True
-    )
-    
+# --- Graph Loading/Saving Functions (adapted from populate_graphrag.py) ---
+
+def load_graph(graph_path: Path) -> nx.DiGraph:
+    """Load existing graph or create new one."""
     try:
-        # Pre-process content
-        content = doc.page_content
-        
-        # Normalize formatting
-        content = re.sub(r'^\s*[-•]\s*', '• ', content, flags=re.MULTILINE)
-        content = re.sub(r'^\s*(\d+\.)\s*', r'\1 ', content, flags=re.MULTILINE)
-        content = re.sub(r'```(\w+)?\n', r'```\n', content)
-        
-        # Update document content
-        doc.page_content = content
-        
-        # Split the document
-        doc_chunks = text_splitter.split_documents([doc])
-        
-        # Limit total chunks
-        if len(doc_chunks) > max_total_chunks:
-            logger.warning(f"Document {doc.metadata.get('source', 'unknown')} has too many chunks ({len(doc_chunks)}). Limiting to {max_total_chunks} chunks.")
-            doc_chunks = doc_chunks[:max_total_chunks]
-        
-        # Process chunks with progress bar
-        processed_chunks = []
-        total_chunks = len(doc_chunks)
-        source = doc.metadata.get("source", "unknown")
-        # Truncate source filename for display and get just the filename
-        display_source = format_source_filename(source)
-            
-        with tqdm(total=total_chunks, desc=f"Processing {display_source}", unit="chunk", leave=False) as pbar:
-            for chunk in doc_chunks:
-                try:
-                    # Add metadata (from content or LLM based on flag)
-                    chunk = add_metadata_to_document(chunk, add_tags_llm=add_tags_llm)
-                    
-                    # Add file metadata (ensure it doesn't overwrite extracted/LLM tags)
-                    chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
-                    
-                    # Add chunk-specific metadata
-                    chunk.metadata.update({
-                        "chunk_index": len(processed_chunks),
-                        "total_chunks": len(doc_chunks),
-                        "processed_at": datetime.now().isoformat()
-                    })
-                    
-                    processed_chunks.append(chunk)
-                    pbar.update(1)
-                except Exception as e:
-                    logger.error(f"Error processing chunk from {source}: {str(e)}")
-                    continue
-            
-        return processed_chunks
-            
+        if graph_path.exists():
+            logger.info(f"Loading existing KAG graph from {graph_path}")
+            with open(graph_path, 'r') as f:
+                graph_data = json.load(f)
+                graph = nx.DiGraph()
+                # Simplified loading assuming basic node/edge structure for KAG
+                for node in graph_data.get('nodes', []):
+                    graph.add_node(node.get('id'), **node.get('data', {}))
+                for edge in graph_data.get('edges', []):
+                    graph.add_edge(edge.get('source'), edge.get('target'), **edge.get('data', {}))
+        else:
+            logger.info(f"Creating new KAG graph at {graph_path}")
+            graph = nx.DiGraph()
+        return graph
     except Exception as e:
-        logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
-        return []
+        logger.error(f"Error loading KAG graph from {graph_path}: {str(e)}")
+        return nx.DiGraph()
 
-    """Process a single document using utility functions, split it, add metadata. Returns processed chunks.
+def save_graph(graph: nx.DiGraph, graph_path: Path, db_dir: Path):
+    """Save the graph structure to disk."""
+    try:
+        db_dir.mkdir(parents=True, exist_ok=True)
+        graph_data = {
+            "nodes": [{"id": n, "data": d} for n, d in graph.nodes(data=True)],
+            "edges": [{"source": u, "target": v, "data": d} for u, v, d in graph.edges(data=True)]
+        }
+        with open(graph_path, "w") as f:
+            json.dump(graph_data, f, indent=2)
+        logger.info(f"Saved KAG graph to {graph_path}")
+    except Exception as e:
+        logger.error(f"Error saving KAG graph to {graph_path}: {str(e)}")
+
+# --- Document Processing Function (modified for graph) ---
+
+def process_document_to_graph(doc: Document, graph: nx.DiGraph, add_tags_llm: bool) -> None:
+    """
+    Process a single document using utilities, split it, add metadata,
+    and update the knowledge graph with chunks and embeddings.
 
     Args:
-        doc (Document): The document to process
-        add_tags_llm (bool): Whether to use LLM for tag extraction.
-        
-    Returns:
-        List[Document]: List of processed document chunks, or empty list on error.
+        doc (Document): The document to process.
+        graph (nx.DiGraph): The knowledge graph to update.
+        add_tags_llm (bool): Whether to use LLM for tag extraction via split_document.
     """
+    # Removed old docstring content and text_splitter definition
+    # Removed duplicate function definition below
+    # --- Start of function body ---
     try:
         # Validate metadata
         if not validate_metadata(doc.metadata):
@@ -160,37 +117,59 @@ def process_document(doc: Document, add_tags_llm: bool) -> List[Document]:
         chunks = split_document(doc, add_tags_llm=add_tags_llm)
         if not chunks:
             logger.warning(f"No valid chunks created or metadata added for document: {source}")
-            return [] # Return empty list if splitting/metadata fails
+            return # Corrected: Just return None if no chunks
             
-        # Ensure source metadata is present in all chunks
-        for chunk in chunks:
-             if not chunk.metadata:
-                 chunk.metadata = {}
-             if "source" not in chunk.metadata:
-                  chunk.metadata["source"] = source # Add source if missing
+        # Get embeddings for new chunks
+        try:
+            embedding_function = get_embedding_function()
+            chunk_texts = [chunk.page_content for chunk in chunks]
+            chunk_embeddings = embedding_function.embed_documents(chunk_texts)
+        except Exception as e:
+            logger.error(f"Error getting embeddings for document {source}: {str(e)}")
+            return
 
-        return chunks # Return the processed chunks
-            
+        # Add new document nodes with embeddings to the graph
+        for chunk, embedding in zip(chunks, chunk_embeddings):
+            try:
+                # Use a consistent chunk ID format
+                chunk_index = chunk.metadata.get("chunk_index", 0) # Assuming split_document adds this
+                chunk_id = f"{source}:{chunk_index}"
+
+                # Skip if node already exists (optional, allows updates if needed)
+                if graph.has_node(chunk_id):
+                    logger.debug(f"Skipping existing chunk node: {chunk_id}")
+                    continue
+
+                # Add chunk node with content, metadata, and embedding
+                graph.add_node(chunk_id,
+                               content=chunk.page_content,
+                               metadata=chunk.metadata, # Use metadata from split_document
+                               embedding=embedding,
+                               type="chunk") # Add type for potential filtering
+
+                # Add file node and connect to chunk (basic relationship)
+                if not graph.has_node(source):
+                    graph.add_node(source, type="file")
+                graph.add_edge(source, chunk_id, relation="contains")
+
+                # KAG specific: Potentially add relationships based on metadata later
+                # (e.g., same_section, based_on_topic, etc.)
+                # For now, just adding chunks and embeddings as query_kag expects.
+
+            except Exception as e:
+                logger.error(f"Error processing chunk {chunk_id} for graph: {str(e)}")
+                continue
+
     except Exception as e:
-        logger.error(f"Error processing document {source}: {str(e)}", exc_info=True)
-        return [] # Return empty list on error
+        logger.error(f"Error processing document {source} for graph: {str(e)}", exc_info=True)
 
-def clear_vectorstore_dir(db_dir: Path):
-    """Clear the KAG database directory."""
+
+def clear_graph_dir(db_dir: Path):
+    """Clear the KAG database directory (including graph file)."""
     try:
         if db_dir.exists():
             logger.info(f"Clearing KAG database directory: {db_dir}")
-            for item in db_dir.iterdir():
-                try:
-                    if item.is_file():
-                        item.unlink()
-                    elif item.is_dir():
-                        # Be careful here, ensure it's the correct directory structure
-                        # If vectorstore is a sub-directory, target that specifically
-                        # Assuming db_dir IS the vectorstore directory for KAG based on old structure
-                        shutil.rmtree(item)
-                except Exception as e:
-                    logger.error(f"Error removing {item}: {str(e)}")
+            shutil.rmtree(db_dir) # Remove the whole directory
             logger.info(f"Cleared KAG database directory: {db_dir}")
         else:
             logger.info(f"KAG database directory {db_dir} does not exist, nothing to clear.")
@@ -200,32 +179,32 @@ def clear_vectorstore_dir(db_dir: Path):
 # --- initialize_vectorstore function removed, imported from processing_utils ---
 
 def main():
-    """Main function to populate the KAG FAISS database."""
-    parser = argparse.ArgumentParser(description="Populate the KAG FAISS database.")
+    """Main function to populate the KAG Graph database."""
+    parser = argparse.ArgumentParser(description="Populate the KAG Graph database.") # Updated description
     parser.add_argument("--name", type=str, default="kag", help="Name for the database instance (determines directory).")
-    parser.add_argument("--reset", action="store_true", help="Reset the vectorstore before processing.")
+    parser.add_argument("--reset", action="store_true", help="Reset the graph database before processing.") # Updated help text
     parser.add_argument("--add-tags", action="store_true", help="Enable LLM-based tag generation if tags are not found in the document content.")
     args = parser.parse_args()
 
     # --- Get dynamic paths based on name ---
-    # KAG primarily uses a vectorstore, potentially within its named directory
+    # Removed incorrect comment about vectorstore
     db_paths = get_db_paths(args.name)
-    db_dir = db_paths["db_dir"] # This is the main directory for the instance, e.g., databases/kag_custom
-    vectorstore_path = db_paths["vectorstore_path"] # Path within the instance dir, e.g., databases/kag_custom/vectorstore
+    db_dir = db_paths["db_dir"]
+    graph_path = db_paths["graph_path"] # Use graph_path from db_paths
     logger.info(f"Using database name: {args.name}")
     logger.info(f"Database directory: {db_dir}")
-    logger.info(f"Vectorstore path: {vectorstore_path}")
-
+    logger.info(f"Graph path: {graph_path}") # Log graph path
 
     try:
-        # Initialize vectorstore using dynamic path
-        # Note: The initialize_vectorstore from utils handles reset internally based on the path
-        vectorstore = initialize_vectorstore(vectorstore_path, args.reset)
-        if not vectorstore:
-            logger.error(f"Failed to initialize vectorstore for '{args.name}' at {vectorstore_path}")
-            return
-            
-        # Process documents
+        # Reset directory if requested
+        if args.reset:
+            clear_graph_dir(db_dir) # Clear the main instance directory
+            logger.info(f"Cleared existing KAG database '{args.name}'")
+
+        # Load or create graph
+        graph = load_graph(graph_path)
+
+        # Process documents and add to graph
         documents = load_documents()
         if not documents:
             logger.error("No documents found to process")
@@ -234,21 +213,15 @@ def main():
         total_docs = len(documents)
         processed_docs = 0
         failed_docs = 0
-        all_processed_chunks = []
-        
-        with tqdm(total=total_docs, desc="Processing documents", unit="doc") as pbar:
+
+        with tqdm(total=total_docs, desc="Processing documents into graph", unit="doc") as pbar:
             for doc in documents:
                 try:
-                    processed_chunks = process_document(doc, add_tags_llm=args.add_tags)
-                    if processed_chunks:
-                        all_processed_chunks.extend(processed_chunks)
-                        processed_docs += 1
-                    else:
-                         # If process_document returned empty list due to error or no chunks
-                         failed_docs += 1
-                         logger.warning(f"Document {doc.metadata.get('source', 'unknown')} resulted in no processed chunks.")
+                    # Process document and add directly to the graph
+                    process_document_to_graph(doc, graph, add_tags_llm=args.add_tags)
+                    processed_docs += 1
                 except Exception as e:
-                    logger.error(f"Error processing document {doc.metadata.get('source', 'unknown')}: {str(e)}")
+                    logger.error(f"Error processing document {doc.metadata.get('source', 'unknown')} into graph: {str(e)}")
                     failed_docs += 1
                 finally:
                     pbar.update(1)
@@ -256,32 +229,25 @@ def main():
                         "processed": processed_docs,
                         "failed": failed_docs
                     })
-        
-        # Add collected chunks to vectorstore if any exist
-        if all_processed_chunks:
-            logger.info(f"Adding {len(all_processed_chunks)} processed chunks to the vectorstore...")
-            vectorstore.add_documents(all_processed_chunks)
-            logger.info("Chunks added successfully.")
-        else:
-             logger.warning("No valid chunks were processed to add to the vectorstore.")
 
-        # Save final vectorstore using dynamic path
-        logger.info(f"Saving vectorstore for '{args.name}' to {vectorstore_path}...")
-        vectorstore.save_local(str(vectorstore_path)) # FAISS expects string path
+        # Save the final graph
+        save_graph(graph, graph_path, db_dir)
 
         # Log statistics
-        logger.info(f"KAG database population completed for '{args.name}':")
-        logger.info(f"- Total documents: {total_docs}")
-        logger.info(f"- Successfully processed: {processed_docs}")
+        logger.info(f"KAG graph population completed for '{args.name}':") # Removed duplicate log line
+        logger.info(f"- Total documents found: {total_docs}")
+        logger.info(f"- Documents successfully processed into graph: {processed_docs}")
         logger.info(f"- Failed: {failed_docs}")
-        
+        logger.info(f"- Total nodes in graph: {len(graph.nodes)}") # Added graph stats
+        logger.info(f"- Total edges in graph: {len(graph.edges)}") # Added graph stats
+
         if processed_docs == 0:
-            logger.error("No documents were successfully processed")
+            logger.error("No documents were successfully processed into the graph")
         else:
-            logger.info(f"Successfully populated KAG database '{args.name}'")
+            logger.info(f"Successfully populated KAG graph database '{args.name}'") # Updated log
 
     except Exception as e:
-        logger.error(f"Error populating KAG database '{args.name}': {str(e)}", exc_info=True)
+        logger.error(f"Error populating KAG graph database '{args.name}': {str(e)}", exc_info=True) # Updated log
         raise
 
 if __name__ == "__main__":

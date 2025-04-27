@@ -152,7 +152,6 @@ function Sidebar({
           },
           e(MenuItem, { value: "rag" }, "RAG Mode"),
           e(MenuItem, { value: "direct" }, "Direct Mode"),
-          e(MenuItem, { value: "graph" }, "Graph Mode"),
           e(MenuItem, { value: "lightrag" }, "Light RAG Mode"),
           e(MenuItem, { value: "kag" }, "KAG Mode")
         )

@@ -7,7 +7,7 @@ import time
 import logging
 from datetime import datetime
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from query.query_data import query_direct, query_graph, query_kag, query_lightrag, query_rag
+from query.query_data import query_direct, query_kag, query_lightrag, query_rag
 from query.llm_service import optimize_query
 from query.data_service import data_service
 import traceback
@@ -90,9 +90,9 @@ def handle_query():
                 'status': 'error'
             }), 400
 
-        if query_mode not in ['rag', 'direct', 'graph', 'lightrag', 'kag']:
+        if query_mode not in ['rag', 'direct', 'lightrag', 'kag']:
             return jsonify({
-                'error': 'Invalid query mode. Must be one of: rag, direct, graph, lightrag, kag',
+                'error': 'Invalid query mode. Must be one of: rag, direct, lightrag, kag',
                 'status': 'error'
             }), 400
 
@@ -122,8 +122,6 @@ def handle_query():
             # Pass llm_config and conversation_history to the query functions
             if query_mode == 'direct':
                 query_response = query_direct(optimized_query, llm_config=llm_config, conversation_history=conversation_history)
-            elif query_mode == 'graph':
-                query_response = query_graph(optimized_query, hybrid, llm_config=llm_config, conversation_history=conversation_history)
             elif query_mode == 'lightrag':
                 query_response = query_lightrag(optimized_query, hybrid, llm_config=llm_config, conversation_history=conversation_history)
             elif query_mode == 'kag':

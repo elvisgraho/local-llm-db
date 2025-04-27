@@ -37,8 +37,8 @@ def main():
     # Create CLI.
     parser = argparse.ArgumentParser()
     parser.add_argument("query_text", type=str, help="The query text.")
-    parser.add_argument("--mode", type=str, choices=['rag', 'direct', 'hybrid', 'graph', 'lightrag', 'kag'], 
-                       default='rag', help="Query mode: rag, direct, hybrid, graph, lightrag, or kag")
+    parser.add_argument("--mode", type=str, choices=['rag', 'direct', 'hybrid', 'lightrag', 'kag'],
+                       default='rag', help="Query mode: rag, direct, hybrid, lightrag, or kag")
     parser.add_argument("--optimize", action="store_true", help="Whether to optimize the query before processing")
     args = parser.parse_args()
     
@@ -51,8 +51,6 @@ def main():
             result = query_direct(query_text)
         elif args.mode == 'hybrid':
             result = query_hybrid(query_text)
-        elif args.mode == 'graph':
-            result = query_graph(query_text)
         elif args.mode == 'lightrag':
             result = query_lightrag(query_text)
         elif args.mode == 'kag':
@@ -295,82 +293,6 @@ def query_hybrid(query_text: str, llm_config: Optional[Dict] = None, conversatio
     except Exception as e:
         logger.error(f"Error in hybrid query: {str(e)}", exc_info=True)
         raise # Re-raise the exception
-
-def query_graph(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Union[str, List[str]]]:
-    """Query using the graph structure with semantic search.
-
-    Args:
-        query_text (str): The query text.
-        hybrid (bool): Whether to use hybrid mode.
-        llm_config (Optional[Dict]): Configuration for the LLM provider.
-        conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns.
-
-    Returns:
-        Dict[str, Union[str, List[str]]]: The response containing text and sources.
-    """
-    try:
-        logger.debug("Processing graph query")
-        # Initialize only GraphRAG graph and embedding function
-        _ = data_service.embedding_function
-        G = data_service.graphrag_graph
-    except Exception as e:
-        logger.error(f"Error loading graph: {str(e)}", exc_info=True)
-        raise # Re-raise the exception
-
-    # Find relevant nodes based on semantic similarity
-    relevant_nodes = []
-    chunk_nodes = [n for n, d in G.nodes(data=True) if d.get('type') == 'chunk']
-    
-    # Get query embedding
-    query_embedding = data_service.embedding_function.embed_query(query_text)
-    
-    for node in chunk_nodes:
-        node_data = G.nodes[node]
-        if 'embedding' in node_data:
-            similarity = cosine_similarity([query_embedding], [node_data['embedding']])[0][0]
-            if similarity > GRAPH_MIN_SIMILARITY:
-                relevant_nodes.append((node, similarity))
-
-    # Sort nodes by similarity score
-    relevant_nodes.sort(key=lambda x: x[1], reverse=True)
-    relevant_nodes = [node for node, _ in relevant_nodes[:GRAPH_MAX_NODES]]
-
-    if not relevant_nodes:
-        logger.warning("No relevant information found in the graph structure")
-        return {"text": "No relevant information found in the graph structure", "sources": []}
-
-    # Collect context from relevant nodes and their neighbors
-    context_parts = []
-    sources = set()
-    
-    for node in relevant_nodes:
-        node_data = G.nodes[node]
-        context_parts.append(node_data.get('content', ''))
-        sources.add(node_data.get('metadata', {}).get('source', 'unknown'))
-        
-        # Add content from semantically similar nodes
-        for neighbor in G.neighbors(node):
-            edge_data = G.get_edge_data(node, neighbor)
-            if edge_data.get('relation') == 'semantically_similar':
-                neighbor_data = G.nodes[neighbor]
-                context_parts.append(neighbor_data.get('content', ''))
-                sources.add(neighbor_data.get('metadata', {}).get('source', 'unknown'))
-        
-        # Add content from code blocks and payloads
-        for neighbor in G.neighbors(node):
-            neighbor_data = G.nodes[neighbor]
-            if neighbor_data.get('type') in ['code_block', 'payload']:
-                context_parts.append(neighbor_data.get('content', ''))
-
-    context_text = "\n\n---\n\n".join(context_parts)
-    
-    # Use hybrid template if hybrid mode is enabled
-    template = HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE
-    prompt_template = ChatPromptTemplate.from_template(template)
-    prompt = prompt_template.format(context=context_text, question=query_text)
-
-    response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
-    return {"text": response_text, "sources": list(sources)}
 
 def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Union[str, List[str]]]:
     """Query using RAG with Hybrid Search (Semantic + Keyword) and Reranking.
