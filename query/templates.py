@@ -19,12 +19,16 @@ Therefore, the final answer is 5.
 Context:
 {context}
 
+Sources:
+{sources}
+
 Instructions:
-1. Use ONLY the information provided in the context above
-2. If the context doesn't contain enough information to fully answer the question, say so
-3. Do not make assumptions or use external knowledge
-4. If you find conflicting information in the context, point it out
-5. Format your response in a clear, structured way
+1. Use ONLY the information provided in the context above.
+2. When referencing information derived from the context, cite the corresponding source file path from the 'Sources' list provided above using the format `[Source: file_path]`.
+3. If the context doesn't contain enough information to fully answer the question, state that clearly.
+4. Do not make assumptions or use external knowledge.
+5. If you find conflicting information in the context, point it out.
+6. Format your response in a clear, structured way.
 
 Question: {question}
 
@@ -51,12 +55,17 @@ Knowledge Context:
 Relationships:
 {relationships}
 
+Sources:
+{sources}
+
 Instructions:
-1. Analyze both the content and the relationships between different pieces of information
-2. Explain how the relationships help understand the answer
-3. If you find important connections, explain their significance
-4. If certain relationships are particularly relevant to the question, highlight them
-5. Structure your response to show both the direct answer and the reasoning behind it
+1. Analyze the content, relationships, and sources provided in the Knowledge Context, Relationships, and Sources sections.
+2. Explain how the relationships help understand the answer.
+3. When discussing examples or concepts from the Knowledge Context, **incorporate the specific details and descriptions provided for those examples directly into your explanation.** Do not just refer to them abstractly.
+4. When referencing information derived from the context or relationships, cite the corresponding source file path from the 'Sources' list provided above using the format `[Source: file_path]`.
+5. If you find important connections, explain their significance.
+6. If certain relationships are particularly relevant to the question, highlight them.
+7. Structure your response to show both the direct answer and the reasoning behind it, clearly drawing from the provided information and citing sources appropriately.
 
 Question: {question}
 
@@ -167,14 +176,16 @@ Therefore, the answer is 5.
 Document Context:
 {context}
 
+Sources:
+{sources}
+
 Instructions:
-1. Start by using the provided document context
-2. If needed, enhance with your general knowledge
-3. Clearly indicate which parts come from:
-   - The documents (cite specific parts)
-   - Your general knowledge
-4. Keep your response concise but complete
-5. Structure your answer to show both the response and your reasoning
+1. Start by using the provided document context.
+2. When referencing information derived from the context, cite the corresponding source file path from the 'Sources' list provided above using the format `[Source: file_path]`.
+3. If needed, enhance with your general knowledge, clearly indicating when you are doing so.
+4. Clearly indicate which parts come from the documents (with citations) and which from general knowledge.
+5. Keep your response concise but complete.
+6. Structure your answer to show both the response and your reasoning.
 
 Question: {question}
 
@@ -202,17 +213,20 @@ Knowledge Context:
 Relationships:
 {relationships}
 
+Sources:
+{sources}
+
 Instructions:
-1. First, analyze the provided knowledge and relationships
-2. Use the graph structure to understand connections
-3. Supplement with your general knowledge when needed
-4. Clearly indicate which parts come from:
-   - The knowledge graph (cite specific relationships)
-   - Your general knowledge
-5. Structure your response to show:
-   - The direct answer
-   - The reasoning based on relationships
-   - Any additional insights from general knowledge
+1. First, analyze the provided knowledge, relationships, and sources.
+2. Use the graph structure and relationships to understand connections.
+3. When discussing examples or concepts from the Knowledge Context, **incorporate the specific details and descriptions provided for those examples directly into your explanation.**
+4. When referencing information derived from the context or relationships, cite the corresponding source file path from the 'Sources' list provided above using the format `[Source: file_path]`.
+5. Supplement with your general knowledge when needed, clearly indicating when you are doing so.
+6. Clearly indicate which parts come from the knowledge graph (with citations) and which from general knowledge.
+7. Structure your response to show:
+   - The direct answer.
+   - The reasoning based on relationships and context, with citations.
+   - Any additional insights from general knowledge.
 
 Question: {question}
 

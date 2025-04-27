@@ -431,12 +431,18 @@ def query_lightrag(
         # This avoids the FAISS-dependent qa_chain entirely for lightrag mode.
         template = LIGHTRAG_HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE
         prompt_template = ChatPromptTemplate.from_template(template)
-
-        prompt = prompt_template.format(context=context_text, question=query_text)
+        
+        # Format sources for the prompt
+        sources_text = "\n".join(f"- {s}" for s in sources if s and s != 'unknown')
+        if not sources_text:
+            sources_text = "No specific sources identified for this context."
+        
+        prompt = prompt_template.format(context=context_text, question=query_text, sources=sources_text)
         logger.debug(logging.DEBUG, f"Prompt for LightRAG: {prompt}") # Log the prompt for debugging
         logger.debug(f"Using template: {'Hybrid' if hybrid else 'RAG Only'} for LightRAG")
         response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
-
+        
+        # Return the original list of sources, not the formatted string
         return {"text": response_text, "sources": sources}
     except Exception as e:
         logger.error(f"Error in light RAG query: {str(e)}", exc_info=True)
@@ -570,14 +576,22 @@ def query_kag(
     # Use hybrid template if enabled
     template = KAG_HYBRID_TEMPLATE if hybrid else KAG_TEMPLATE
     prompt_template = ChatPromptTemplate.from_template(template)
+    # Format sources for the prompt
+    sources_list = list(s for s in sources if s and s != 'unknown')
+    sources_text = "\n".join(f"- {s}" for s in sources_list)
+    if not sources_text:
+        sources_text = "No specific sources identified for this context."
+    
     prompt = prompt_template.format(
         context=context_text,
         relationships=relationships_text,
-        question=query_text
+        question=query_text,
+        sources=sources_text
     )
-
+    
     response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
-    return {"text": response_text, "sources": list(sources)}
+    # Return the original list of sources, not the formatted string
+    return {"text": response_text, "sources": sources_list}
 
 if __name__ == "__main__":
     main()

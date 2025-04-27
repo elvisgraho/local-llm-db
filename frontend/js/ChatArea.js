@@ -26,8 +26,67 @@ function ChatMessage({ message }) {
   useEffect(() => {
     if (contentRef.current && window.md && window.DOMPurify) {
       const rawHtml = md.render(message.content);
-      const cleanHtml = DOMPurify.sanitize(rawHtml);
-      contentRef.current.innerHTML = cleanHtml;
+      let cleanHtml = DOMPurify.sanitize(rawHtml);
+
+      // --- Add clickable source links ---
+      const sourcePattern = /\[Source: (.*?)\]/g;
+      const finalHtml = cleanHtml.replace(sourcePattern, (match, filePath) => {
+        try {
+          // Trim potential whitespace
+          const trimmedPath = filePath.trim();
+
+          // --- Create VSCode URI ---
+          let uriPath = trimmedPath.replace(/\\/g, "/");
+          // Ensure it starts with a slash if it's a drive path like C:/...
+          if (/^[a-zA-Z]:\//.test(uriPath)) {
+            uriPath = "/" + uriPath;
+          }
+          // Encode for URI, preserving slashes and drive colon.
+          // We split by slash, encode each part EXCEPT the drive letter part if present.
+          const encodedPath = uriPath
+            .split("/")
+            .map((part, index) => {
+              // Check if it's the drive letter part (e.g., '/C:')
+              if (index === 1 && /^[a-zA-Z]:$/.test(part)) {
+                return part; // Don't encode drive letter
+              }
+              // Encode other parts, including filenames with spaces, #, etc.
+              return encodeURIComponent(part);
+            })
+            .join("/");
+          const vscodeUri = `vscode://file${encodedPath}`;
+          // --- End VSCode URI ---
+
+          // Extract filename
+          const filename = trimmedPath.split(/[\\/]/).pop() || trimmedPath; // Get part after last slash/backslash
+
+          console.log(
+            `Creating VS Code link for path: ${trimmedPath} -> ${vscodeUri}`
+          ); // Debugging
+
+          // Return styled link with icon and filename
+          // Using inline styles for a self-contained example. Consider moving to CSS classes.
+          // Added vertical-align: middle to align better with surrounding text.
+          // Added small padding and background for a "chip" look.
+          return (
+            `<a href="${vscodeUri}" title="Open ${trimmedPath} in VS Code" style="text-decoration: none; color: inherit; display: inline-flex; align-items: center; vertical-align: middle; margin: 0 2px; padding: 1px 5px; background-color: rgba(128, 128, 128, 0.1); border-radius: 4px; font-size: 0.9em; white-space: nowrap;">` +
+            // Use standard 'material-icons' class to match index.html
+            `<span class="material-icons" style="font-size: 1.1em; margin-right: 4px; opacity: 0.7; vertical-align: middle;">description</span>` + // Material file icon
+            `<span style="text-decoration: underline; vertical-align: middle;">${filename}</span>` + // Filename only, underlined
+            `</a>`
+          );
+        } catch (e) {
+          console.error(
+            "Error creating VS Code file link:",
+            e,
+            "for path:",
+            filePath
+          );
+          return match; // Return original text if encoding/processing fails
+        }
+      });
+      contentRef.current.innerHTML = finalHtml; // Use the HTML with links
+      // --- End source link modification ---
 
       // Highlight all code blocks within the message container
       // This should also trigger plugins like line-numbers if configured correctly
