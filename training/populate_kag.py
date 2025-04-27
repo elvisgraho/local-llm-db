@@ -180,18 +180,31 @@ def clear_graph_dir(db_dir: Path):
 
 def main():
     """Main function to populate the KAG Graph database."""
-    parser = argparse.ArgumentParser(description="Populate the KAG Graph database.") # Updated description
-    parser.add_argument("--name", type=str, default="kag", help="Name for the database instance (determines directory).")
+    parser = argparse.ArgumentParser(description="Populate a specific KAG (Graph) database instance.") # Updated description
+    # Changed --name to --db_name and set a default
+    parser.add_argument("--db_name", type=str, default="default", help="Name for the database instance under the 'kag' directory.")
     parser.add_argument("--reset", action="store_true", help="Reset the graph database before processing.") # Updated help text
     parser.add_argument("--add-tags", action="store_true", help="Enable LLM-based tag generation if tags are not found in the document content.")
     args = parser.parse_args()
 
-    # --- Get dynamic paths based on name ---
-    # Removed incorrect comment about vectorstore
-    db_paths = get_db_paths(args.name)
-    db_dir = db_paths["db_dir"]
-    graph_path = db_paths["graph_path"] # Use graph_path from db_paths
-    logger.info(f"Using database name: {args.name}")
+    # --- Get dynamic paths based on db_name for 'kag' type ---
+    rag_type = 'kag' # Explicitly set rag_type for this script
+    db_name = args.db_name
+    try:
+        db_paths = get_db_paths(rag_type, db_name)
+    except ValueError as e:
+         logger.error(f"Error getting database paths: {e}")
+         sys.exit(1) # Exit if paths are invalid
+
+    db_dir = db_paths["db_dir"] # Main directory for the instance (databases/kag/db_name)
+    graph_path = db_paths.get("graph_path") # Use .get() for safety
+
+    if not graph_path:
+        logger.error(f"Could not determine Graph path for rag_type='{rag_type}', db_name='{db_name}'")
+        sys.exit(1)
+
+    logger.info(f"Target RAG Type: {rag_type}")
+    logger.info(f"Target DB Name: {db_name}")
     logger.info(f"Database directory: {db_dir}")
     logger.info(f"Graph path: {graph_path}") # Log graph path
 
@@ -199,7 +212,7 @@ def main():
         # Reset directory if requested
         if args.reset:
             clear_graph_dir(db_dir) # Clear the main instance directory
-            logger.info(f"Cleared existing KAG database '{args.name}'")
+            logger.info(f"Cleared existing KAG database '{db_name}' at {db_dir}")
 
         # Load or create graph
         graph = load_graph(graph_path)
@@ -214,7 +227,8 @@ def main():
         processed_docs = 0
         failed_docs = 0
 
-        with tqdm(total=total_docs, desc="Processing documents into graph", unit="doc") as pbar:
+        logger.info(f"Found {total_docs} documents to process for '{rag_type}/{db_name}'.")
+        with tqdm(total=total_docs, desc=f"Processing documents for '{rag_type}/{db_name}'", unit="doc") as pbar:
             for doc in documents:
                 try:
                     # Process document and add directly to the graph
@@ -234,7 +248,7 @@ def main():
         save_graph(graph, graph_path, db_dir)
 
         # Log statistics
-        logger.info(f"KAG graph population completed for '{args.name}':") # Removed duplicate log line
+        logger.info(f"KAG graph population completed for '{rag_type}/{db_name}':")
         logger.info(f"- Total documents found: {total_docs}")
         logger.info(f"- Documents successfully processed into graph: {processed_docs}")
         logger.info(f"- Failed: {failed_docs}")
@@ -244,10 +258,10 @@ def main():
         if processed_docs == 0:
             logger.error("No documents were successfully processed into the graph")
         else:
-            logger.info(f"Successfully populated KAG graph database '{args.name}'") # Updated log
+            logger.info(f"Successfully populated KAG graph database '{rag_type}/{db_name}'")
 
     except Exception as e:
-        logger.error(f"Error populating KAG graph database '{args.name}': {str(e)}", exc_info=True) # Updated log
+        logger.error(f"Error populating KAG graph database '{rag_type}/{db_name}': {str(e)}", exc_info=True)
         raise
 
 if __name__ == "__main__":

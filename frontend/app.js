@@ -73,13 +73,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // --- Main Query Function ---
 // --- Main Query Function ---
-// Modified to accept settings as arguments
+// Modified to accept settings and db_name as arguments
 window.sendQuery = async function (
   queryText,
   includeHistory,
-  queryMode,
+  queryMode, // This is now rag_type
   optimize,
-  hybrid
+  hybrid,
+  selectedDbName // Added argument
 ) {
   // Start thinking indicator
   window.chatAreaControl?.startThinking();
@@ -123,7 +124,8 @@ window.sendQuery = async function (
   // Prepare request body
   let requestBody = {
     query_text: queryText, // Use queryText argument
-    mode: queryMode, // Use queryMode argument
+    rag_type: queryMode, // Rename 'mode' to 'rag_type' for backend consistency
+    db_name: selectedDbName, // Add db_name
     optimize: optimize, // Use optimize argument
     hybrid: hybrid,
     llm_config: {},

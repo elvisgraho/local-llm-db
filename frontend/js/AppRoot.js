@@ -11,6 +11,9 @@ function AppRoot() {
   const [queryMode, setQueryMode] = useState("rag");
   const [optimize, setOptimize] = useState(false);
   const [hybrid, setHybrid] = useState(false);
+  const [selectedDbName, setSelectedDbName] = useState(
+    window.GLOBAL_CONFIG?.DEFAULT_DB_NAME || "default"
+  ); // Add state for DB name
 
   // --- Load settings from localStorage on mount ---
   useEffect(() => {
@@ -19,10 +22,15 @@ function AppRoot() {
     const savedOptimize =
       localStorage.getItem("uiSettings_optimize") === "true";
     const savedHybrid = localStorage.getItem("uiSettings_hybrid") === "true";
+    const savedDbName =
+      localStorage.getItem("uiSettings_selectedDbName") ||
+      window.GLOBAL_CONFIG?.DEFAULT_DB_NAME ||
+      "default";
 
     setQueryMode(savedQueryMode);
     setOptimize(savedOptimize);
     setHybrid(savedHybrid);
+    setSelectedDbName(savedDbName); // Load saved DB name
   }, []); // Empty dependency array ensures this runs only once on mount
 
   // --- Save settings to localStorage on change ---
@@ -35,6 +43,9 @@ function AppRoot() {
   useEffect(() => {
     localStorage.setItem("uiSettings_hybrid", hybrid);
   }, [hybrid]);
+  useEffect(() => {
+    localStorage.setItem("uiSettings_selectedDbName", selectedDbName);
+  }, [selectedDbName]); // Save DB name on change
 
   // --- Handlers to update state ---
   const handleQueryModeChange = useCallback((newMode) => {
@@ -46,6 +57,9 @@ function AppRoot() {
   const handleHybridChange = useCallback((newHybrid) => {
     setHybrid(newHybrid);
   }, []);
+  const handleDbNameChange = useCallback((newDbName) => {
+    setSelectedDbName(newDbName);
+  }, []); // Handler for DB name change
 
   return e(
     ThemeProvider,
@@ -61,15 +75,18 @@ function AppRoot() {
         queryMode,
         optimize,
         hybrid,
+        selectedDbName, // Pass state down
         onQueryModeChange: handleQueryModeChange,
         onOptimizeChange: handleOptimizeChange,
         onHybridChange: handleHybridChange,
+        onDbNameChange: handleDbNameChange, // Pass handler down
       }),
       // Pass state to MainContent
       e(MainContent, {
         queryMode,
         optimize,
         hybrid,
+        selectedDbName, // Pass state down
       })
     )
   );

@@ -4,6 +4,7 @@ from typing import Any, Optional, List, Dict, Union # Added for type hinting
 from langchain.prompts import ChatPromptTemplate
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain.schema import Document # Added import
+from query.database_paths import DEFAULT_DB_NAME # Import default DB name
 from query.data_service import data_service
 from query.templates import (
     RAG_ONLY_TEMPLATE,
@@ -37,27 +38,29 @@ def main():
     # Create CLI.
     parser = argparse.ArgumentParser()
     parser.add_argument("query_text", type=str, help="The query text.")
-    parser.add_argument("--mode", type=str, choices=['rag', 'direct', 'hybrid', 'lightrag', 'kag'],
-                       default='rag', help="Query mode: rag, direct, hybrid, lightrag, or kag")
+    # Changed 'mode' to 'rag_type'
+    parser.add_argument("--rag_type", type=str, choices=['rag', 'direct', 'lightrag', 'kag'],
+                       default='rag', help="Query mode: rag, direct, lightrag, or kag")
+    parser.add_argument("--db_name", type=str, default=DEFAULT_DB_NAME, help="Name of the database instance to use.")
     parser.add_argument("--optimize", action="store_true", help="Whether to optimize the query before processing")
     args = parser.parse_args()
-    
+
     try:
         # Optimize query if requested
         query_text = optimize_query(args.query_text) if args.optimize else args.query_text
-        logger.info(f"Processing query in {args.mode} mode: {query_text}")
-        
-        if args.mode == 'direct':
+        logger.info(f"Processing query in {args.rag_type} mode for DB '{args.db_name}': {query_text}")
+
+        # Pass rag_type and db_name to the appropriate functions
+        if args.rag_type == 'direct':
             result = query_direct(query_text)
-        elif args.mode == 'hybrid':
-            result = query_hybrid(query_text)
-        elif args.mode == 'lightrag':
-            result = query_lightrag(query_text)
-        elif args.mode == 'kag':
-            result = query_kag(query_text)
-        else:
-            result = query_rag(query_text)
-        
+        elif args.rag_type == 'lightrag':
+            # Assuming hybrid=False for CLI lightrag for now
+            result = query_lightrag(query_text, hybrid=False, rag_type=args.rag_type, db_name=args.db_name)
+        elif args.rag_type == 'kag':
+            result = query_kag(query_text, hybrid=False, rag_type=args.rag_type, db_name=args.db_name)
+        else: # Default to rag
+            result = query_rag(query_text, hybrid=False, rag_type=args.rag_type, db_name=args.db_name)
+
         print(result["text"])
         if result.get("sources"):
             print("\nSources:", result["sources"])
@@ -112,6 +115,8 @@ def _reorder_documents_for_context(docs: List[Document]) -> List[Document]:
 def _perform_hybrid_retrieval_and_rerank(
     query_text: str,
     db: VectorStore,
+    rag_type: str, # Added rag_type
+    db_name: str, # Added db_name
     bm25: Optional[Any], # Using Any for BM25Okapi as it's not a LangChain type
     reranker: Optional[Any], # Using Any for CrossEncoder
     metadata_filter: Optional[Dict[str, Any]] = None # Added metadata filter
@@ -123,6 +128,8 @@ def _perform_hybrid_retrieval_and_rerank(
     Args:
         query_text (str): The user's query.
         db (VectorStore): The vector store (e.g., Chroma) for semantic search.
+        rag_type (str): The RAG type ('rag', 'lightrag') for fetching BM25 data.
+        db_name (str): The specific database name for fetching BM25 data.
         bm25 (Optional[BM25Okapi]): The initialized BM25 index.
         reranker (Optional[CrossEncoder]): The initialized reranker model.
         metadata_filter (Optional[Dict[str, Any]]): A dictionary for metadata filtering
@@ -152,13 +159,17 @@ def _perform_hybrid_retrieval_and_rerank(
         results = []
 
     # --- Keyword Search (BM25) ---
+    # Retrieve BM25 corpus and doc IDs from cache using rag_type and db_name
+    # Note: bm25 object itself is passed in, but we need the corresponding corpus/ids
+    _, bm25_corpus, bm25_doc_ids = data_service._bm25_cache.get((rag_type, db_name), (None, None, None))
+
     bm25_results = []
-    if bm25 and data_service._bm25_corpus and data_service._bm25_doc_ids:
+    if bm25 and bm25_corpus and bm25_doc_ids: # Check if corpus/ids were loaded
         try:
             tokenized_query = query_text.split(" ")
             bm25_scores = bm25.get_scores(tokenized_query)
             bm25_scored_docs = sorted(
-                zip(data_service._bm25_doc_ids, data_service._bm25_corpus, bm25_scores),
+                zip(bm25_doc_ids, bm25_corpus, bm25_scores), # Use retrieved corpus/ids
                 key=lambda x: x[2], reverse=True
             )
             top_bm25_ids = [doc_id for doc_id, _, score in bm25_scored_docs[:RAG_MAX_DOCUMENTS] if score > 0]
@@ -198,7 +209,10 @@ def _perform_hybrid_retrieval_and_rerank(
         except Exception as e:
             logger.error(f"Error during BM25 search: {e}", exc_info=True)
     else:
-        logger.warning("BM25 index not available, skipping keyword search.")
+        if not bm25:
+            logger.warning(f"BM25 index not available for {rag_type}/{db_name}, skipping keyword search.")
+        elif not bm25_corpus or not bm25_doc_ids:
+            logger.warning(f"BM25 corpus/doc_ids not loaded for {rag_type}/{db_name}, skipping keyword search.")
 
     # --- Combine Semantic and Keyword Results ---
     combined_results_dict = {}
@@ -249,12 +263,20 @@ def _perform_hybrid_retrieval_and_rerank(
             
     return final_docs, sources
 
-def query_hybrid(query_text: str, llm_config: Optional[Dict] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Union[str, List[str]]]:
+def query_hybrid(
+    query_text: str,
+    rag_type: str = 'rag', # Default to 'rag'
+    db_name: str = DEFAULT_DB_NAME, # Use default name
+    llm_config: Optional[Dict] = None,
+    conversation_history: Optional[List[Dict[str, str]]] = None
+) -> Dict[str, Union[str, List[str]]]:
     """Query using both RAG context and the model's knowledge.
     Applies Hybrid Search (Semantic + Keyword) and Reranking to the retrieved context.
 
     Args:
         query_text (str): The query text.
+        rag_type (str): The RAG type ('rag', 'lightrag').
+        db_name (str): The specific database name.
         llm_config (Optional[Dict]): Configuration for the LLM provider.
         conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns.
 
@@ -262,16 +284,17 @@ def query_hybrid(query_text: str, llm_config: Optional[Dict] = None, conversatio
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
     try:
+        logger.info(f"Processing hybrid query for {rag_type}/{db_name}")
         _ = data_service.embedding_function # Ensure embedding function is loaded
-        db = data_service.chroma_db
-        bm25 = data_service.bm25_index
+        db = data_service.get_chroma_db(rag_type, db_name) # Get specific DB
+        bm25 = data_service.get_bm25_index(rag_type, db_name) # Get specific BM25
         reranker = data_service.reranker
-        
+
         # Perform retrieval and reranking using the helper function
         final_docs, sources = _perform_hybrid_retrieval_and_rerank(
-            query_text, db, bm25, reranker
+            query_text, db, rag_type, db_name, bm25, reranker # Pass rag_type, db_name
         )
-        
+
         # Format context
         if not final_docs:
             context_text = "No relevant context found."
@@ -294,13 +317,22 @@ def query_hybrid(query_text: str, llm_config: Optional[Dict] = None, conversatio
         logger.error(f"Error in hybrid query: {str(e)}", exc_info=True)
         raise # Re-raise the exception
 
-def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Union[str, List[str]]]:
+def query_rag(
+    query_text: str,
+    hybrid: bool = False,
+    rag_type: str = 'rag', # Default to 'rag'
+    db_name: str = DEFAULT_DB_NAME, # Use default name
+    llm_config: Optional[Dict] = None,
+    conversation_history: Optional[List[Dict[str, str]]] = None
+) -> Dict[str, Union[str, List[str]]]:
     """Query using RAG with Hybrid Search (Semantic + Keyword) and Reranking.
 
     Args:
         query_text (str): The query text.
         hybrid (bool): Whether to use the hybrid LLM prompt template
                      (combining retrieved context with LLM's internal knowledge).
+        rag_type (str): The RAG type ('rag', 'lightrag').
+        db_name (str): The specific database name.
         llm_config (Optional[Dict]): Configuration for the LLM provider.
         conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns.
 
@@ -308,19 +340,20 @@ def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] 
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
     try:
-        logger.debug("Processing RAG query")
+        logger.info(f"Processing RAG query for {rag_type}/{db_name}")
         # Initialize necessary services
         _ = data_service.embedding_function # Ensure embedding function is loaded
-        db = data_service.chroma_db
-        # BM25 and reranker will be accessed by the helper function
-        
+        db = data_service.get_chroma_db(rag_type, db_name) # Get specific DB
+        bm25 = data_service.get_bm25_index(rag_type, db_name) # Get specific BM25
+        reranker = data_service.reranker # Reranker is global for now
+
         # Verify database exists and has data
         # Note: BM25 index loading depends on ChromaDB. data_service handles loading.
         # Perform retrieval and reranking using the helper function
         final_docs, sources = _perform_hybrid_retrieval_and_rerank(
-            query_text, db, data_service.bm25_index, data_service.reranker
+            query_text, db, rag_type, db_name, bm25, reranker # Pass rag_type, db_name
         )
-        
+
         if not final_docs:
             # If no documents are found after retrieval/reranking, return a specific message
             logger.warning("No sufficiently relevant documents found after combining/reranking in RAG mode.")
@@ -334,7 +367,13 @@ def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] 
         # Use hybrid template if hybrid mode is enabled
         template = HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE
         prompt_template = ChatPromptTemplate.from_template(template)
-        prompt = prompt_template.format(context=context_text, question=query_text)
+        # Format sources for the prompt
+        sources_text = "\n".join(f"- {s}" for s in sources if s and s != 'unknown')
+        if not sources_text:
+            sources_text = "No specific sources identified for this context."
+
+        prompt = prompt_template.format(context=context_text, question=query_text, sources=sources_text)
+        logger.debug(f"Using template: {'Hybrid' if hybrid else 'RAG Only'} for RAG") # Added logging
 
         # Get response
         response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
@@ -349,6 +388,8 @@ def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] 
 def query_lightrag(
     query_text: str,
     hybrid: bool = False,
+    rag_type: str = 'lightrag', # Default to 'lightrag'
+    db_name: str = DEFAULT_DB_NAME, # Use default name
     llm_config: Optional[Dict] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
     metadata_filter: Optional[Dict[str, Any]] = None # Added metadata filter
@@ -364,6 +405,8 @@ def query_lightrag(
     Args:
         query_text (str): The query text.
         hybrid (bool): Whether to use hybrid mode.
+        rag_type (str): The RAG type ('lightrag').
+        db_name (str): The specific database name.
         llm_config (Optional[Dict]): Configuration for the LLM provider.
         conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns.
 
@@ -371,9 +414,9 @@ def query_lightrag(
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
     try:
-        logger.debug("Processing light RAG query using ChromaDB") # Updated log
+        logger.info(f"Processing light RAG query for {rag_type}/{db_name}")
         # Initialize the LightRAG ChromaDB instance
-        db = data_service.lightrag_chroma_db # Use the specific lightrag chroma db
+        db = data_service.get_chroma_db(rag_type, db_name) # Get specific DB
         # _ = data_service.qa_chain # Removed unused QA chain initialization
 
         # Get relevant documents
@@ -451,6 +494,8 @@ def query_lightrag(
 def query_kag(
     query_text: str,
     hybrid: bool = False,
+    rag_type: str = 'kag', # Default to 'kag'
+    db_name: str = DEFAULT_DB_NAME, # Use default name
     llm_config: Optional[Dict] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
     metadata_filter: Optional[Dict[str, Any]] = None # Added metadata filter
@@ -460,6 +505,8 @@ def query_kag(
     Args:
         query_text (str): The query text.
         hybrid (bool): Whether to use hybrid mode.
+        rag_type (str): The RAG type ('kag').
+        db_name (str): The specific database name.
         llm_config (Optional[Dict]): Configuration for the LLM provider.
         conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns.
 
@@ -467,12 +514,12 @@ def query_kag(
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
     try:
-        logger.debug("Processing KAG query")
+        logger.info(f"Processing KAG query for {rag_type}/{db_name}")
         # Initialize only KAG graph and embedding function
         _ = data_service.embedding_function
-        G = data_service.kag_graph
+        G = data_service.get_kag_graph(rag_type, db_name) # Get specific graph
     except Exception as e:
-        logger.error(f"Error loading graph: {str(e)}", exc_info=True)
+        logger.error(f"Error loading graph for {rag_type}/{db_name}: {str(e)}", exc_info=True)
         raise # Re-raise the exception
 
     # Get query embedding

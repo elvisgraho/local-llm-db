@@ -27,14 +27,12 @@ from langchain_chroma import Chroma
 from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from langchain.llms.base import LLM
-from query.database_paths import (
-    DEFAULT_CHROMA_PATH,
-    DEFAULT_KAG_GRAPH_PATH,
-    DEFAULT_VECTORSTORE_PATH,
-    get_db_paths # Import get_db_paths
-)
+from query.database_paths import get_db_paths, DEFAULT_DB_NAME, DATABASE_DIR # Import necessary items
 from query.llm_service import get_llm_response
 from training.get_embedding_function import get_embedding_function, LMStudioEmbeddings
+import logging # Add logging
+
+logger = logging.getLogger(__name__) # Setup logger
 
 class CustomLLM(LLM):
     """Custom LLM class that uses our LLM service.
@@ -75,17 +73,14 @@ class DataService:
     
     Attributes:
         _instance (Optional[DataService]): The singleton instance.
-        _initialized (bool): Whether the instance has been initialized.
-        _embedding_function (Optional[LMStudioEmbeddings]): The embedding function.
-        _chroma_db (Optional[Chroma]): The default Chroma vector store (for 'rag').
-        _lightrag_chroma_db (Optional[Chroma]): The Chroma vector store for 'lightrag'.
-        _vectorstore (Optional[FAISS]): The FAISS vector store (legacy/unused?).
-        _kag_graph (Optional[nx.DiGraph]): The KAG graph.
-        _qa_chain (Optional[RetrievalQA]): The QA chain.
-        _bm25_index (Optional[BM25Okapi]): The BM25 index.
-        _bm25_corpus (Optional[List[str]]): The corpus for BM25.
-        _bm25_doc_ids (Optional[List[str]]): Document IDs corresponding to the BM25 corpus.
-        _reranker (Optional[CrossEncoder]): The reranking model.
+        _initialized (bool): Flag indicating if initialization is complete.
+        _embedding_function (Optional[LMStudioEmbeddings]): Cached embedding function.
+        _chroma_cache (Dict[Tuple[str, str], Chroma]): Cache for loaded Chroma databases.
+        _vectorstore (Optional[FAISS]): Legacy FAISS vector store.
+        _kag_graph_cache (Dict[Tuple[str, str], nx.DiGraph]): Cache for loaded KAG graphs.
+        _qa_chain (Optional[RetrievalQA]): Legacy QA chain using FAISS.
+        _bm25_cache (Dict[Tuple[str, str], Tuple[Optional[BM25Okapi], Optional[List[str]], Optional[List[str]]]]): Cache for BM25 index, corpus, and doc IDs per DB.
+        _reranker (Optional[CrossEncoder]): Cached reranking model.
     """
     
     _instance: Optional['DataService'] = None
@@ -103,18 +98,19 @@ class DataService:
 
     def __init__(self) -> None:
         """Initialize the data service if not already initialized."""
-        if not self._initialized:
-            self._embedding_function: Optional[LMStudioEmbeddings] = None
-            self._chroma_db: Optional[Chroma] = None # For default 'rag'
-            self._lightrag_chroma_db: Optional[Chroma] = None # For 'lightrag'
-            self._vectorstore: Optional[FAISS] = None # Legacy FAISS path
-            self._kag_graph: Optional[nx.DiGraph] = None
-            self._qa_chain: Optional[RetrievalQA] = None
-            self._initialized = True
-            self._bm25_index: Optional[BM25Okapi] = None
-            self._bm25_corpus: Optional[List[str]] = None
-            self._bm25_doc_ids: Optional[List[str]] = None
-            self._reranker: Optional[CrossEncoder] = None
+        # Ensure initialization runs only once for the singleton
+        if getattr(self, '_initialized', False):
+            return
+        logger.info("Initializing DataService singleton...")
+        self._embedding_function: Optional[LMStudioEmbeddings] = None
+        self._chroma_cache: Dict[tuple[str, str], Chroma] = {}
+        self._vectorstore: Optional[FAISS] = None # Legacy FAISS path
+        self._kag_graph_cache: Dict[tuple[str, str], nx.DiGraph] = {}
+        self._qa_chain: Optional[RetrievalQA] = None
+        self._bm25_cache: Dict[tuple[str, str], tuple[Optional[BM25Okapi], Optional[List[str]], Optional[List[str]]]] = {}
+        self._reranker: Optional[CrossEncoder] = None
+        self._initialized = True
+        logger.info("DataService initialized.")
 
     @property
     def embedding_function(self) -> LMStudioEmbeddings:
@@ -124,187 +120,255 @@ class DataService:
             LMStudioEmbeddings: The embedding function.
         """
         if self._embedding_function is None:
+            logger.info("Loading embedding function...")
             self._embedding_function = get_embedding_function()
+            logger.info("Embedding function loaded.")
         return self._embedding_function
 
-    @property
-    def chroma_db(self) -> Chroma:
-        """Get or initialize the Chroma database.
-        
-        Returns:
-            Chroma: The Chroma database.
-            
-        Raises:
-            Exception: If there's an error initializing the database.
-        """
-        if self._chroma_db is None:
-            # Ensure the database directory exists
-            os.makedirs(str(DEFAULT_CHROMA_PATH), exist_ok=True)
-            
-            # Check if database exists
-            db_exists = os.path.exists(str(DEFAULT_CHROMA_PATH)) and os.path.exists(os.path.join(str(DEFAULT_CHROMA_PATH), "chroma.sqlite3"))
-            
-            try:
-                if db_exists:
-                    # Load existing database
-                    self._chroma_db = Chroma(
-                        persist_directory=str(DEFAULT_CHROMA_PATH),
-                        embedding_function=self.embedding_function
-                    )
-                else:
-                    # Create new database
-                    self._chroma_db = Chroma(
-                        persist_directory=str(DEFAULT_CHROMA_PATH),
-                        embedding_function=self.embedding_function
-                    )
-                    # Persistence is typically handled automatically by ChromaDB
-                    # when initialized with a persist_directory.
-                    # No explicit persist() call needed here.
-            except Exception as e:
-                print(f"Error initializing Chroma database: {e}")
-                raise
-                
-        return self._chroma_db
+    def get_chroma_db(self, rag_type: str, db_name: str) -> Chroma:
+        """Get or initialize a Chroma database for a specific RAG type and name.
 
-    @property
-    def lightrag_chroma_db(self) -> Chroma:
-        """Get or initialize the Chroma database specifically for LightRAG.
+        Args:
+            rag_type (str): The type of RAG ('rag', 'lightrag').
+            db_name (str): The specific name of the database instance.
 
         Returns:
-            Chroma: The LightRAG Chroma database.
+            Chroma: The Chroma database instance.
 
         Raises:
+            ValueError: If the rag_type is invalid or path cannot be determined.
             Exception: If there's an error initializing the database.
         """
-        if self._lightrag_chroma_db is None:
-            db_name = 'lightrag' # Hardcode for this property
-            db_paths = get_db_paths(db_name)
-            # Use chroma_path, fallback to vectorstore_path if needed for older configs
-            lightrag_path_str = str(db_paths.get("chroma_path", db_paths.get("vectorstore_path")))
+        cache_key = (rag_type, db_name)
+        if cache_key in self._chroma_cache:
+            logger.debug(f"Returning cached ChromaDB for {cache_key}")
+            return self._chroma_cache[cache_key]
 
-            if not lightrag_path_str:
-                 raise ValueError(f"Could not determine Chroma path for database '{db_name}'")
-
-            # Ensure the database directory exists
-            os.makedirs(lightrag_path_str, exist_ok=True)
-
-            # Check if database exists (basic check)
-            db_exists = os.path.exists(lightrag_path_str) and os.path.exists(os.path.join(lightrag_path_str, "chroma.sqlite3"))
-
-            try:
-                print(f"Attempting to load LightRAG ChromaDB from: {lightrag_path_str}")
-                # Always try to load, Chroma handles creation if directory is empty/new
-                self._lightrag_chroma_db = Chroma(
-                    persist_directory=lightrag_path_str,
-                    embedding_function=self.embedding_function
-                )
-                print(f"LightRAG ChromaDB loaded successfully from {lightrag_path_str}")
-            except Exception as e:
-                print(f"Error initializing LightRAG Chroma database at {lightrag_path_str}: {e}")
-                raise
-
-        return self._lightrag_chroma_db
-
-    # Removed persist_chroma_db method as explicit persistence calls
-    # are likely unnecessary with current ChromaDB versions when using
-    # persist_directory during initialization.
-
-    @property
-    def bm25_index(self) -> Optional[BM25Okapi]:
-        """Get or initialize the BM25 index. Requires ChromaDB to be loaded.
-        
-        Returns:
-            Optional[BM25Okapi]: The BM25 index, or None if ChromaDB is empty or fails.
-        """
-        if self._bm25_index is None:
-            self._load_bm25_data()
-        return self._bm25_index
-
-    def _load_bm25_data(self) -> None:
-        """Load data from ChromaDB and build the BM25 index."""
+        logger.info(f"Loading ChromaDB for rag_type='{rag_type}', db_name='{db_name}'")
         try:
-            # Ensure ChromaDB is loaded
-            db = self.chroma_db
+            # Determine the correct path using get_db_paths
+            db_paths = get_db_paths(rag_type, db_name)
+            # Prioritize 'chroma_path', fallback to 'vectorstore_path' for lightrag compatibility
+            chroma_path = db_paths.get("chroma_path")
+            if rag_type == 'lightrag' and not chroma_path:
+                 chroma_path = db_paths.get("vectorstore_path") # Fallback for lightrag
+
+            if not chroma_path:
+                raise ValueError(f"Could not determine Chroma path for rag_type='{rag_type}', db_name='{db_name}'")
+
+            chroma_path_str = str(chroma_path)
+            logger.info(f"ChromaDB path determined: {chroma_path_str}")
+
+            # Ensure the database directory exists
+            chroma_path.mkdir(parents=True, exist_ok=True)
+
+            # Check if the database likely exists (basic check for the sqlite file)
+            db_exists = (chroma_path / "chroma.sqlite3").exists()
+            logger.info(f"ChromaDB at {chroma_path_str} {'exists' if db_exists else 'does not exist (will be created)'}.")
+
+            # Load or create the database
+            db = Chroma(
+                persist_directory=chroma_path_str,
+                embedding_function=self.embedding_function
+            )
+            logger.info(f"ChromaDB for {cache_key} loaded successfully.")
+            self._chroma_cache[cache_key] = db
+            return db
+
+        except ValueError as ve: # Catch specific path errors
+             logger.error(f"Configuration error for ChromaDB {cache_key}: {ve}")
+             raise
+        except Exception as e:
+            logger.error(f"Error initializing Chroma database for {cache_key} at {chroma_path_str}: {e}", exc_info=True)
+            raise # Re-raise other exceptions
+
+    def get_bm25_index(self, rag_type: str, db_name: str) -> Optional[BM25Okapi]:
+        """Get or initialize the BM25 index for a specific ChromaDB instance.
+
+        Args:
+            rag_type (str): The RAG type of the ChromaDB.
+            db_name (str): The name of the ChromaDB instance.
+
+        Returns:
+            Optional[BM25Okapi]: The BM25 index, or None if loading fails.
+        """
+        cache_key = (rag_type, db_name)
+        if cache_key in self._bm25_cache:
+            logger.debug(f"Returning cached BM25 index for {cache_key}")
+            return self._bm25_cache[cache_key][0] # Return only the index
+
+        logger.info(f"Loading BM25 index for {cache_key}...")
+        self._load_bm25_data(rag_type, db_name)
+        return self._bm25_cache.get(cache_key, (None, None, None))[0]
+
+    def _load_bm25_data(self, rag_type: str, db_name: str) -> None:
+        """Load data from a specific ChromaDB instance and build its BM25 index."""
+        cache_key = (rag_type, db_name)
+        bm25_index = None
+        corpus = None
+        doc_ids = None
+        try:
+            # Ensure the corresponding ChromaDB is loaded
+            db = self.get_chroma_db(rag_type, db_name)
             if db is None:
-                print("ChromaDB not available for BM25 indexing.")
+                logger.warning(f"ChromaDB {cache_key} not available for BM25 indexing.")
                 return
 
-            # Retrieve all documents from ChromaDB
-            # Note: This might be inefficient for very large databases.
-            # Consider alternative strategies if performance is an issue.
-            all_docs = db.get(include=["documents", "metadatas"])
-            
+            logger.info(f"Retrieving documents from ChromaDB {cache_key} for BM25...")
+            all_docs = db.get(include=["documents", "metadatas"]) # IDs are included by default
+
             if not all_docs or not all_docs.get("ids"):
-                print("No documents found in ChromaDB for BM25 indexing.")
+                logger.warning(f"No documents found in ChromaDB {cache_key} for BM25 indexing.")
                 return
 
-            self._bm25_corpus = all_docs["documents"]
-            self._bm25_doc_ids = all_docs["ids"] # Use ChromaDB internal IDs
-            
-            if not self._bm25_corpus:
-                print("Corpus is empty, cannot build BM25 index.")
+            corpus = all_docs["documents"]
+            doc_ids = all_docs["ids"] # Use ChromaDB internal IDs
+
+            if not corpus:
+                logger.warning(f"Corpus is empty for {cache_key}, cannot build BM25 index.")
                 return
-                
-            # Simple tokenization (split by space)
-            tokenized_corpus = [doc.split(" ") for doc in self._bm25_corpus]
-            
-            self._bm25_index = BM25Okapi(tokenized_corpus)
-            print(f"BM25 index built successfully with {len(self._bm25_corpus)} documents.")
+
+            logger.info(f"Tokenizing {len(corpus)} documents for BM25 index {cache_key}...")
+            # Simple tokenization (split by space) - consider a more robust tokenizer if needed
+            tokenized_corpus = [doc.split(" ") for doc in corpus]
+
+            logger.info(f"Building BM25 index for {cache_key}...")
+            bm25_index = BM25Okapi(tokenized_corpus)
+            logger.info(f"BM25 index for {cache_key} built successfully.")
 
         except Exception as e:
-            print(f"Error loading data for BM25 index: {e}")
+            logger.error(f"Error loading data or building BM25 index for {cache_key}: {e}", exc_info=True)
             # Ensure attributes are reset if loading fails
-            self._bm25_index = None
-            self._bm25_corpus = None
-            self._bm25_doc_ids = None
+            bm25_index = None
+            corpus = None
+            doc_ids = None
+        finally:
+             # Store results (even if None) in cache to avoid re-attempting on failure
+             self._bm25_cache[cache_key] = (bm25_index, corpus, doc_ids)
 
-    @property
-    def vectorstore(self) -> FAISS:
-        """Get or initialize the FAISS vectorstore.
-        
-        Returns:
-            FAISS: The FAISS vectorstore.
-        """
-        if self._vectorstore is None:
-            self._vectorstore = FAISS.load_local(
-                DEFAULT_VECTORSTORE_PATH,
-                self.embedding_function,
-                allow_dangerous_deserialization=True  # Safe since we created the file ourselves
-            )
-        return self._vectorstore
 
+    # --- Legacy FAISS properties - Keep for potential backward compatibility ---
+    # --- but clearly mark as using default paths and not the new structure ---
     @property
-    def kag_graph(self) -> nx.DiGraph:
-        """Get or initialize the KAG graph.
-        
+    def vectorstore(self) -> Optional[FAISS]:
+        """Get or initialize the LEGACY FAISS vectorstore (uses default path)."""
+        # Determine the default path (assuming it was under 'lightrag/default')
+        # This path might need adjustment based on the old structure.
+        # For now, let's assume a plausible default path.
+        try:
+            legacy_paths = get_db_paths('lightrag', DEFAULT_DB_NAME) # Get paths for default lightrag
+            legacy_faiss_path = legacy_paths.get("vectorstore_path")
+            if legacy_faiss_path and legacy_faiss_path.exists():
+                 if self._vectorstore is None:
+                     logger.warning(f"Loading LEGACY FAISS vectorstore from default path: {legacy_faiss_path}")
+                     self._vectorstore = FAISS.load_local(
+                         str(legacy_faiss_path),
+                         self.embedding_function,
+                         allow_dangerous_deserialization=True
+                     )
+                 return self._vectorstore
+            else:
+                 logger.warning(f"Legacy FAISS path not found or does not exist: {legacy_faiss_path}")
+                 return None
+        except Exception as e:
+            logger.error(f"Error loading legacy FAISS vectorstore: {e}", exc_info=True)
+            return None
+
+
+    def get_kag_graph(self, rag_type: str, db_name: str) -> nx.DiGraph:
+        """Get or initialize the KAG graph for a specific RAG type and name.
+
+        Args:
+            rag_type (str): The type of RAG ('kag').
+            db_name (str): The specific name of the database instance.
+
         Returns:
             nx.DiGraph: The KAG graph.
+
+        Raises:
+            ValueError: If rag_type is not 'kag' or path cannot be determined.
+            FileNotFoundError: If the graph file does not exist.
+            Exception: If there's an error loading the graph.
         """
-        if self._kag_graph is None:
-            with open(DEFAULT_KAG_GRAPH_PATH, 'r') as f:
+        if rag_type != 'kag':
+            raise ValueError(f"KAG graph is only applicable for rag_type='kag', not '{rag_type}'")
+
+        cache_key = (rag_type, db_name)
+        if cache_key in self._kag_graph_cache:
+            logger.debug(f"Returning cached KAG graph for {cache_key}")
+            return self._kag_graph_cache[cache_key]
+
+        logger.info(f"Loading KAG graph for {cache_key}...")
+        try:
+            db_paths = get_db_paths(rag_type, db_name)
+            graph_path = db_paths.get("graph_path")
+
+            if not graph_path:
+                raise ValueError(f"Could not determine graph path for {cache_key}")
+
+            graph_path_str = str(graph_path)
+            logger.info(f"KAG graph path determined: {graph_path_str}")
+
+            if not graph_path.exists():
+                 raise FileNotFoundError(f"KAG graph file not found at: {graph_path_str}")
+
+            with open(graph_path_str, 'r') as f:
                 graph_data = json.load(f)
-            
-            self._kag_graph = nx.DiGraph()
-            for node in graph_data['nodes']:
-                self._kag_graph.add_node(node['id'], **node['data'])
-            for edge in graph_data['edges']:
-                self._kag_graph.add_edge(edge['source'], edge['target'], **edge['data'])
-        return self._kag_graph
+
+            graph = nx.DiGraph()
+            # Safely access nodes and edges, providing defaults if keys are missing
+            nodes_data = graph_data.get('nodes', [])
+            edges_data = graph_data.get('edges', [])
+
+            for node in nodes_data:
+                 node_id = node.get('id')
+                 node_attrs = node.get('data', {})
+                 if node_id is not None:
+                      graph.add_node(node_id, **node_attrs)
+                 else:
+                      logger.warning(f"Skipping node with missing 'id' in graph {cache_key}")
+
+            for edge in edges_data:
+                 source = edge.get('source')
+                 target = edge.get('target')
+                 edge_attrs = edge.get('data', {})
+                 if source is not None and target is not None:
+                      graph.add_edge(source, target, **edge_attrs)
+                 else:
+                      logger.warning(f"Skipping edge with missing 'source' or 'target' in graph {cache_key}: {edge}")
+
+
+            logger.info(f"KAG graph for {cache_key} loaded successfully with {graph.number_of_nodes()} nodes and {graph.number_of_edges()} edges.")
+            self._kag_graph_cache[cache_key] = graph
+            return graph
+
+        except FileNotFoundError as fnf:
+             logger.error(f"KAG graph file not found for {cache_key}: {fnf}")
+             raise # Re-raise specific error
+        except ValueError as ve:
+             logger.error(f"Configuration error for KAG graph {cache_key}: {ve}")
+             raise
+        except Exception as e:
+            logger.error(f"Error loading KAG graph for {cache_key} from {graph_path_str}: {e}", exc_info=True)
+            raise # Re-raise other exceptions
+
 
     @property
-    def qa_chain(self) -> RetrievalQA:
-        """Get or initialize the QA chain.
-        
-        Returns:
-            RetrievalQA: The QA chain.
-        """
+    def qa_chain(self) -> Optional[RetrievalQA]:
+        """Get or initialize the LEGACY QA chain (uses legacy FAISS vectorstore)."""
+        legacy_vs = self.vectorstore # Try to get the legacy FAISS store
+        if legacy_vs is None:
+             logger.warning("Cannot initialize legacy QA chain because legacy FAISS vectorstore failed to load.")
+             return None
+
         if self._qa_chain is None:
+            logger.warning("Initializing LEGACY QA chain using default FAISS vectorstore.")
             llm = CustomLLM()
             self._qa_chain = RetrievalQA.from_chain_type(
                 llm=llm,
                 chain_type="stuff",
-                retriever=self.vectorstore.as_retriever(
-                    search_kwargs={"k": 3}
+                retriever=legacy_vs.as_retriever(
+                    search_kwargs={"k": 3} # Default k=3
                 )
             )
         return self._qa_chain
@@ -317,45 +381,53 @@ class DataService:
             Optional[CrossEncoder]: The CrossEncoder model, or None if loading fails.
         """
         if self._reranker is None:
+            logger.info("Loading reranker model...")
             try:
                 # Load a pre-trained CrossEncoder model
+                # Consider making the model name configurable if needed
                 self._reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-                print("Reranker model loaded successfully.")
+                logger.info("Reranker model loaded successfully.")
             except Exception as e:
-                print(f"Error loading reranker model: {e}")
-                self._reranker = None
+                logger.error(f"Error loading reranker model: {e}", exc_info=True)
+                self._reranker = None # Ensure it's None on failure
         return self._reranker
 
     def clear_cache(self) -> None:
-        """Clear all cached resources."""
+        """Clear all cached resources managed by the DataService."""
+        logger.warning("Clearing DataService cache...")
         self._embedding_function = None
-        self._chroma_db = None
-        self._lightrag_chroma_db = None # Clear lightrag cache too
-        self._vectorstore = None
-        self._kag_graph = None
-        self._qa_chain = None
-        self._bm25_index = None
-        self._bm25_corpus = None
-        self._bm25_doc_ids = None
+        self._chroma_cache.clear()
+        self._vectorstore = None # Clear legacy FAISS
+        self._kag_graph_cache.clear()
+        self._qa_chain = None # Clear legacy QA chain
+        self._bm25_cache.clear()
         self._reranker = None
+        logger.info("DataService cache cleared.")
 
+# --- Initialization Function (Adjusted) ---
 def initialize_data_service() -> None:
-    """Initialize the data service by pre-loading resources."""
-    print("Initializing data service...")
-    # Access properties to trigger lazy loading
-    print("Initializing embedding function...")
-    _ = data_service.embedding_function
-    print("Initializing default Chroma DB...")
-    _ = data_service.chroma_db
-    print("Initializing LightRAG Chroma DB...")
-    _ = data_service.lightrag_chroma_db # Initialize lightrag db too
-    # print("Initializing FAISS vectorstore (legacy)...") # Keep FAISS initialization commented unless needed
-    # _ = data_service.vectorstore
-    _ = data_service.kag_graph
-    _ = data_service.qa_chain
-    _ = data_service.bm25_index # Trigger BM25 loading
-    _ = data_service.reranker # Trigger reranker loading
-    print("Data service initialized successfully!")
+    """Initialize the data service by pre-loading resources that don't require specific DB names."""
+    logger.info("Initializing data service (pre-loading common resources)...")
+    try:
+        # Pre-load resources that are independent of specific databases
+        logger.info("Initializing embedding function...")
+        _ = data_service.embedding_function
+        logger.info("Initializing reranker...")
+        _ = data_service.reranker
 
-# Create a singleton instance
+        # Optionally, you could try to load default databases if they exist,
+        # but this might hide errors if defaults are missing.
+        # Example: Try loading default 'rag' DB
+        # try:
+        #     logger.info("Attempting to pre-load default 'rag' Chroma DB...")
+        #     _ = data_service.get_chroma_db('rag', DEFAULT_DB_NAME)
+        # except Exception:
+        #     logger.warning("Could not pre-load default 'rag' Chroma DB (might not exist yet).")
+
+        logger.info("Common data service resources initialized!")
+    except Exception as e:
+        logger.error(f"Error during data service initialization: {e}", exc_info=True)
+        # Depending on the severity, you might want to exit or just log the error
+
+# Create the singleton instance upon import
 data_service = DataService()

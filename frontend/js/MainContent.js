@@ -1,4 +1,5 @@
-function MainContent({ queryMode, optimize, hybrid }) {
+function MainContent({ queryMode, optimize, hybrid, selectedDbName }) {
+  // Add selectedDbName prop
   // Accept props
   return e(
     Box,
@@ -14,7 +15,7 @@ function MainContent({ queryMode, optimize, hybrid }) {
       },
     },
     e(ChatArea),
-    e(InputArea, { queryMode, optimize, hybrid }) // Pass props down
+    e(InputArea, { queryMode, optimize, hybrid, selectedDbName }) // Pass selectedDbName down
   );
 }
 

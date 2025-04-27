@@ -105,31 +105,45 @@ def process_file_to_vectorstore(file_path: Path, add_tags_llm: bool) -> None:
         logger.error(f"Error processing file {file_path.name}: {str(e)}")
 
 def main():
-    """Main function to populate the RAG database file by file."""
-    parser = argparse.ArgumentParser(description="Populate the RAG Chroma database.")
-    parser.add_argument("--name", type=str, default="rag", help="Name for the database instance (determines directory).")
+    """Main function to populate the RAG Chroma database."""
+    parser = argparse.ArgumentParser(description="Populate a specific RAG (Chroma) database instance.")
+    # Changed --name to --db_name and set a default
+    parser.add_argument("--db_name", type=str, default="default", help="Name for the database instance under the 'rag' directory.")
     parser.add_argument("--reset", action="store_true", help="Reset the database before populating.")
     parser.add_argument("--add-tags", action="store_true", help="Enable LLM-based tag generation if tags are not found in the document content.")
     args = parser.parse_args()
 
-    # --- Get dynamic paths based on name ---
-    db_paths = get_db_paths(args.name)
-    db_dir = db_paths["db_dir"] # Main directory for the instance
-    chroma_path = db_paths["chroma_path"] # Path within the instance dir
-    logger.info(f"Using database name: {args.name}")
+    # --- Get dynamic paths based on db_name for 'rag' type ---
+    rag_type = 'rag' # Explicitly set rag_type for this script
+    db_name = args.db_name
+    try:
+        db_paths = get_db_paths(rag_type, db_name)
+    except ValueError as e:
+         logger.error(f"Error getting database paths: {e}")
+         sys.exit(1) # Exit if paths are invalid
+
+    db_dir = db_paths["db_dir"] # Main directory for the instance (databases/rag/db_name)
+    chroma_path = db_paths.get("chroma_path") # Use .get() for safety
+
+    if not chroma_path:
+        logger.error(f"Could not determine Chroma path for rag_type='{rag_type}', db_name='{db_name}'")
+        sys.exit(1)
+
+    logger.info(f"Target RAG Type: {rag_type}")
+    logger.info(f"Target DB Name: {db_name}")
     logger.info(f"Database directory: {db_dir}")
     logger.info(f"Chroma path: {chroma_path}")
 
     if args.reset:
         clear_db_directory(chroma_path) # Use utility function with specific chroma path
-        logger.info(f"Cleared existing RAG database '{args.name}' at {chroma_path}")
+        logger.info(f"Cleared existing RAG database '{db_name}' at {chroma_path}")
 
     try:
         # Initialize Chroma vectorstore using dynamic path and imported function
-        vectorstore = initialize_chroma_vectorstore(chroma_path, args.reset) # Reset is handled internally now
+        vectorstore = initialize_chroma_vectorstore(chroma_path) # Reset is handled by clear_db_directory now
         if not vectorstore:
-             logger.error(f"Failed to initialize Chroma vectorstore for '{args.name}' at {chroma_path}")
-             return # Exit if vectorstore fails
+             logger.error(f"Failed to initialize Chroma vectorstore for '{db_name}' at {chroma_path}")
+             sys.exit(1) # Exit if vectorstore fails
 
         # Get all documents using load_documents functionality
         all_documents = load_documents()
@@ -144,8 +158,8 @@ def main():
         all_processed_chunks = []
 
         # Process documents and collect chunks
-        logger.info(f"Found {total_docs} documents to process for '{args.name}'.")
-        with tqdm(total=total_docs, desc=f"Processing documents for '{args.name}'", unit="doc") as pbar:
+        logger.info(f"Found {total_docs} documents to process for '{rag_type}/{db_name}'.")
+        with tqdm(total=total_docs, desc=f"Processing documents for '{rag_type}/{db_name}'", unit="doc") as pbar:
             for doc in all_documents:
                 try:
                     processed_chunks = process_document(doc, add_tags_llm=args.add_tags)
@@ -165,7 +179,7 @@ def main():
 
         # Add collected chunks to vectorstore if any exist
         if all_processed_chunks:
-            logger.info(f"Adding {len(all_processed_chunks)} processed chunks to the Chroma vectorstore for '{args.name}'...")
+            logger.info(f"Adding {len(all_processed_chunks)} processed chunks to the Chroma vectorstore for '{rag_type}/{db_name}'...")
             # Consider batching adds for Chroma if performance is an issue for very large datasets
             vectorstore.add_documents(all_processed_chunks)
             logger.info("Chunks added successfully.")
@@ -174,22 +188,22 @@ def main():
 
         # Persist the vectorstore (Chroma persists automatically when initialized with persist_directory)
         # No explicit persist call needed here for Chroma. Changes are saved.
-        logger.info(f"Chroma vectorstore for '{args.name}' at {chroma_path} is up-to-date.")
+        logger.info(f"Chroma vectorstore for '{rag_type}/{db_name}' at {chroma_path} is up-to-date.")
 
 
         # Log final statistics
-        logger.info(f"RAG database population completed for '{args.name}':")
+        logger.info(f"RAG database population completed for '{rag_type}/{db_name}':")
         logger.info(f"- Total documents: {total_docs}")
         if failed_docs > 0:
             logger.info(f"- Failed documents: {failed_docs}")
-        
+
         if processed_docs == 0:
             logger.error("No documents were successfully processed")
         else:
-            logger.info(f"Successfully populated RAG database '{args.name}'")
+            logger.info(f"Successfully populated RAG database '{rag_type}/{db_name}'")
 
     except Exception as e:
-        logger.error(f"Error in database population for '{args.name}': {str(e)}")
+        logger.error(f"Error in database population for '{rag_type}/{db_name}': {str(e)}")
         raise
 
 if __name__ == "__main__":

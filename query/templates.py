@@ -22,13 +22,13 @@ Context:
 Sources:
 {sources}
 
-Instructions:
-1. Use ONLY the information provided in the context above.
-2. When referencing information derived from the context, cite the corresponding source file path from the 'Sources' list provided above using the format `[Source: file_path]`.
-3. If the context doesn't contain enough information to fully answer the question, state that clearly.
-4. Do not make assumptions or use external knowledge.
-5. If you find conflicting information in the context, point it out.
-6. Format your response in a clear, structured way.
+Strict Instructions:
+1. **CRITICAL:** Your response MUST be based **SOLELY** on the information explicitly provided in the 'Context' section above.
+2. **ABSOLUTELY DO NOT** use any external knowledge, prior training data, or make assumptions beyond what is written in the 'Context'.
+3. If the 'Context' section **does not contain** the information needed to answer the question, you **MUST** respond *only* with the exact phrase: "The provided context does not contain enough information to answer this question." Do not add any other explanation or attempt to answer partially.
+4. When referencing information directly extracted from the 'Context', cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. Only cite sources when directly quoting or paraphrasing from the context.
+5. If you find conflicting information within the 'Context', point it out clearly.
+6. Format your response (if providing one based on context) in a clear, structured way.
 
 Question: {question}
 
@@ -58,14 +58,14 @@ Relationships:
 Sources:
 {sources}
 
-Instructions:
-1. Analyze the content, relationships, and sources provided in the Knowledge Context, Relationships, and Sources sections.
-2. Explain how the relationships help understand the answer.
-3. When discussing examples or concepts from the Knowledge Context, **incorporate the specific details and descriptions provided for those examples directly into your explanation.** Do not just refer to them abstractly.
-4. When referencing information derived from the context or relationships, cite the corresponding source file path from the 'Sources' list provided above using the format `[Source: file_path]`.
-5. If you find important connections, explain their significance.
-6. If certain relationships are particularly relevant to the question, highlight them.
-7. Structure your response to show both the direct answer and the reasoning behind it, clearly drawing from the provided information and citing sources appropriately.
+Strict Instructions:
+1. **CRITICAL:** Your response MUST be based **SOLELY** on the information explicitly provided in the 'Knowledge Context', 'Relationships', and 'Sources' sections above.
+2. **ABSOLUTELY DO NOT** use any external knowledge, prior training data, or make assumptions beyond what is written in the provided structured knowledge.
+3. If the provided 'Knowledge Context', 'Relationships', and 'Sources' **do not contain** the information needed to answer the question, you **MUST** respond *only* with the exact phrase: "The provided knowledge context does not contain enough information to answer this question." Do not add any other explanation or attempt to answer partially.
+4. When discussing examples or concepts from the Knowledge Context, **incorporate the specific details and descriptions provided for those examples directly into your explanation.** Do not just refer to them abstractly.
+5. When referencing information directly extracted from the 'Knowledge Context' or 'Relationships', cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. Only cite sources when directly quoting or paraphrasing from the provided knowledge.
+6. Explain how the relationships help understand the answer, but only if the answer can be derived from the provided knowledge.
+7. Structure your response (if providing one based on context) to show both the direct answer and the reasoning based on the provided knowledge and relationships, citing sources appropriately.
 
 Question: {question}
 
@@ -90,13 +90,15 @@ Context from Documents:
 {context}
 
 Instructions:
-1. First, try to answer using the provided context
-2. If needed, supplement with your general knowledge
-3. Clearly indicate which parts of your answer come from:
-   - The provided context (cite specific parts)
-   - Your general knowledge
-4. If there are conflicts between context and general knowledge, explain them
-5. Structure your response to show both the answer and your reasoning
+1. **Prioritize** answering using ONLY the information present in the 'Context from Documents' section above.
+2. When referencing information derived **solely** from the context, cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. **DO NOT LIE OR MAKE UP SOURCES.**
+3. If the provided context **does not contain** the necessary information to fully answer the question, **you MUST state this explicitly first.**
+4. Only **after** stating the context is insufficient, you may supplement with your general knowledge to provide a more complete answer.
+5. Clearly indicate which parts of your answer come from:
+   - The provided context (with citations as specified above)
+   - Your general knowledge (explicitly stating "Based on general knowledge, ...")
+6. If there are conflicts between the context and your general knowledge, point them out.
+7. Structure your response to show both the answer and your reasoning, clearly distinguishing between context-based and general knowledge-based information.
 
 Question: {question}
 
@@ -180,12 +182,15 @@ Sources:
 {sources}
 
 Instructions:
-1. Start by using the provided document context.
-2. When referencing information derived from the context, cite the corresponding source file path from the 'Sources' list provided above using the format `[Source: file_path]`.
-3. If needed, enhance with your general knowledge, clearly indicating when you are doing so.
-4. Clearly indicate which parts come from the documents (with citations) and which from general knowledge.
-5. Keep your response concise but complete.
-6. Structure your answer to show both the response and your reasoning.
+1. **Prioritize** answering using ONLY the information present in the 'Document Context' section above.
+2. When referencing information derived **solely** from the context, cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. **DO NOT LIE OR MAKE UP SOURCES.**
+3. If the provided context **does not contain** the necessary information to fully answer the question, **you MUST state this explicitly first.**
+4. Only **after** stating the context is insufficient, you may enhance with your general knowledge to provide a more complete answer.
+5. Clearly indicate which parts of your answer come from:
+   - The provided context (with citations as specified above)
+   - Your general knowledge (explicitly stating "Based on general knowledge, ...")
+6. Keep your response concise but complete.
+7. Structure your answer to show both the response and your reasoning, clearly distinguishing between context-based and general knowledge-based information.
 
 Question: {question}
 
@@ -217,16 +222,19 @@ Sources:
 {sources}
 
 Instructions:
-1. First, analyze the provided knowledge, relationships, and sources.
-2. Use the graph structure and relationships to understand connections.
+1. **Prioritize** answering using ONLY the information present in the 'Knowledge Context', 'Relationships', and 'Sources' sections above.
+2. Use the graph structure and relationships provided to understand connections relevant to the question.
 3. When discussing examples or concepts from the Knowledge Context, **incorporate the specific details and descriptions provided for those examples directly into your explanation.**
-4. When referencing information derived from the context or relationships, cite the corresponding source file path from the 'Sources' list provided above using the format `[Source: file_path]`.
-5. Supplement with your general knowledge when needed, clearly indicating when you are doing so.
-6. Clearly indicate which parts come from the knowledge graph (with citations) and which from general knowledge.
-7. Structure your response to show:
+4. When referencing information derived **solely** from the context or relationships, cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. **DO NOT LIE OR MAKE UP SOURCES.**
+5. If the provided knowledge context, relationships, and sources **do not contain** the necessary information to fully answer the question, **you MUST state this explicitly first.**
+6. Only **after** stating the context is insufficient, you may supplement with your general knowledge to provide a more complete answer.
+7. Clearly indicate which parts of your answer come from:
+   - The provided knowledge graph (context/relationships, with citations as specified above)
+   - Your general knowledge (explicitly stating "Based on general knowledge, ...")
+8. Structure your response to show:
    - The direct answer.
-   - The reasoning based on relationships and context, with citations.
-   - Any additional insights from general knowledge.
+   - The reasoning based on relationships and context (with citations).
+   - Any additional insights clearly marked as coming from general knowledge.
 
 Question: {question}
 

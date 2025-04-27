@@ -1,7 +1,8 @@
 // Helper for Material Icons (Assuming Icon is defined globally or imported elsewhere)
 // const Icon = ({ children, sx }) => e("span", { className: "material-icons", style: sx }, children);
 
-function InputArea({ queryMode, optimize, hybrid }) {
+function InputArea({ queryMode, optimize, hybrid, selectedDbName }) {
+  // Add selectedDbName prop
   // Accept props
   const [inputValue, setInputValue] = useState("");
   const [includeHistory, setIncludeHistory] = useState(true);
@@ -62,8 +63,16 @@ function InputArea({ queryMode, optimize, hybrid }) {
     // Remove code updating hidden inputs - no longer needed
 
     if (window.sendQuery && typeof window.sendQuery === "function") {
-      // Pass query text and settings state to sendQuery
-      window.sendQuery(inputValue, includeHistory, queryMode, optimize, hybrid);
+      // Pass query text and settings state (including selectedDbName) to sendQuery
+      // Note: sendQuery function itself will need to be updated to handle this new arg
+      window.sendQuery(
+        inputValue,
+        includeHistory,
+        queryMode,
+        optimize,
+        hybrid,
+        selectedDbName
+      );
       setInputValue("");
     } else {
       console.error("InputArea: sendQuery function not found.");

@@ -10,6 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from query.query_data import query_direct, query_kag, query_lightrag, query_rag
 from query.llm_service import optimize_query
 from query.data_service import data_service
+from query.database_paths import list_available_dbs, DEFAULT_DB_NAME # Import list_available_dbs
 import traceback
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
@@ -56,7 +57,9 @@ def handle_query():
             }), 400
 
         query_text = data.get('query_text', '')
-        query_mode = data.get('mode', 'rag')
+        # Renamed 'mode' to 'rag_type' for clarity and consistency
+        rag_type = data.get('rag_type', 'rag') # Expect 'rag_type' from frontend
+        db_name = data.get('db_name', DEFAULT_DB_NAME) # Expect 'db_name', default if missing
         optimize = data.get('optimize', False)
         hybrid = data.get('hybrid', False)
         llm_config = data.get('llm_config', {}) # Extract llm_config
@@ -90,13 +93,20 @@ def handle_query():
                 'status': 'error'
             }), 400
 
-        if query_mode not in ['rag', 'direct', 'lightrag', 'kag']:
+        # Validate rag_type
+        valid_rag_types = ['rag', 'direct', 'lightrag', 'kag']
+        if rag_type not in valid_rag_types:
             return jsonify({
-                'error': 'Invalid query mode. Must be one of: rag, direct, lightrag, kag',
+                'error': f'Invalid rag_type. Must be one of: {", ".join(valid_rag_types)}',
                 'status': 'error'
             }), 400
 
-        logging.info(f"Processing query {request_id}: mode={query_mode}, optimize={optimize}, hybrid={hybrid}, provider={provider}, model={model_name}")
+        # Validate db_name (basic check, more specific checks happen in query functions)
+        if rag_type != 'direct' and not db_name:
+             return jsonify({'error': f'db_name is required for rag_type "{rag_type}"', 'status': 'error'}), 400
+
+        # Log the received parameters including rag_type and db_name
+        logging.info(f"Processing query {request_id}: rag_type={rag_type}, db_name={db_name}, optimize={optimize}, hybrid={hybrid}, provider={provider}, model={model_name}")
 
         # Optimize query if requested
         # TODO: Pass llm_config to optimize_query if needed in the future
@@ -119,15 +129,15 @@ def handle_query():
         # Call appropriate query function based on mode
         try:
             query_start = time.time()
-            # Pass llm_config and conversation_history to the query functions
-            if query_mode == 'direct':
+            # Pass rag_type, db_name, llm_config, and conversation_history
+            if rag_type == 'direct':
                 query_response = query_direct(optimized_query, llm_config=llm_config, conversation_history=conversation_history)
-            elif query_mode == 'lightrag':
-                query_response = query_lightrag(optimized_query, hybrid, llm_config=llm_config, conversation_history=conversation_history)
-            elif query_mode == 'kag':
-                query_response = query_kag(optimized_query, hybrid, llm_config=llm_config, conversation_history=conversation_history)
+            elif rag_type == 'lightrag':
+                query_response = query_lightrag(optimized_query, hybrid, rag_type=rag_type, db_name=db_name, llm_config=llm_config, conversation_history=conversation_history)
+            elif rag_type == 'kag':
+                query_response = query_kag(optimized_query, hybrid, rag_type=rag_type, db_name=db_name, llm_config=llm_config, conversation_history=conversation_history)
             else: # Default to RAG
-                query_response = query_rag(optimized_query, hybrid, llm_config=llm_config, conversation_history=conversation_history)
+                query_response = query_rag(optimized_query, hybrid, rag_type=rag_type, db_name=db_name, llm_config=llm_config, conversation_history=conversation_history)
 
             query_time = time.time() - query_start
 
@@ -144,7 +154,8 @@ def handle_query():
                     'total_time': round(total_time, 2),
                     'query_time': round(query_time, 2),
                     'optimize_time': round(optimize_time if optimize else 0, 2),
-                    'mode': query_mode,
+                    'rag_type': rag_type, # Use rag_type here
+                    'db_name': db_name if rag_type != 'direct' else None, # Include db_name used
                     'hybrid': hybrid
                 }
             }
@@ -292,6 +303,36 @@ def list_models(provider):
     return jsonify(response_data), status_code
 # --- End New Endpoint ---
 
+# --- New Endpoint for Listing Databases ---
+@app.route('/api/list_dbs/<rag_type>', methods=['GET'])
+def get_list_dbs(rag_type):
+    """API endpoint to list available database names for a given RAG type."""
+    request_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f') # For logging
+    logging.info(f"Request {request_id}: Listing databases for rag_type: {rag_type}")
+
+    valid_rag_types = ['rag', 'kag', 'lightrag']
+    if rag_type not in valid_rag_types:
+        logging.warning(f"Request {request_id}: Invalid rag_type '{rag_type}' requested.")
+        return jsonify({
+            'error': f'Invalid rag_type. Must be one of: {", ".join(valid_rag_types)}',
+            'status': 'error'
+        }), 400
+
+    try:
+        db_names = list_available_dbs(rag_type)
+        logging.info(f"Request {request_id}: Found {len(db_names)} databases for {rag_type}: {db_names}")
+        return jsonify({
+            'rag_type': rag_type,
+            'databases': db_names,
+            'status': 'success'
+        }), 200
+    except Exception as e:
+        error_message = f"An unexpected server error occurred while listing databases for {rag_type}: {str(e)}"
+        logging.error(f"Request {request_id}: {error_message}", exc_info=True)
+        return jsonify({'error': error_message, 'status': 'error'}), 500
+# --- End New Endpoint ---
+
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint to verify server status"""
@@ -328,7 +369,8 @@ if __name__ == '__main__':
     logging.info("🚀 Server is running on http://127.0.0.1:5000/")
     logging.info("Available endpoints:")
     logging.info("- POST /api/query - Query the RAG system")
-    logging.info("- POST /api/models/<provider> - List available models (gemini/local)") # Added log
+    logging.info("- POST /api/models/<provider> - List available models (gemini/local)")
+    logging.info("- GET /api/list_dbs/<rag_type> - List available databases (rag/kag/lightrag)") # Added log
     logging.info("- GET /api/health - Health check endpoint")
     logging.info("- POST /api/clear_cache - Clear data service cache")
     logging.info("- GET / - Frontend application")

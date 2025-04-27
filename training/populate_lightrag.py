@@ -112,36 +112,52 @@ def process_file_to_vectorstore(file_path: Path) -> None:
         logger.error(f"Error processing file {file_path.name}: {str(e)}")
 
 def main():
-    """Main function to populate the LightRAG database."""
-    parser = argparse.ArgumentParser(description="Populate the LightRAG FAISS database.")
-    parser.add_argument("--name", type=str, default="lightrag", help="Name for the database instance (determines directory).")
+    """Main function to populate the LightRAG database (using ChromaDB)."""
+    parser = argparse.ArgumentParser(description="Populate a specific LightRAG (Chroma) database instance.") # Updated description
+    # Changed --name to --db_name and set a default
+    parser.add_argument("--db_name", type=str, default="default", help="Name for the database instance under the 'lightrag' directory.")
     parser.add_argument("--reset", action="store_true", help="Reset the vectorstore before processing.")
     parser.add_argument("--add-tags", action="store_true", help="Enable LLM-based tag generation if tags are not found in the document content.")
     args = parser.parse_args()
 
-    # --- Get dynamic paths based on name ---
-    db_paths = get_db_paths(args.name)
-    db_dir = db_paths["db_dir"] # Main directory for the instance
-    chroma_path = db_paths.get("chroma_path", db_paths["vectorstore_path"]) # Use chroma_path if available, fallback for safety
-    logger.info(f"Using database name: {args.name}")
+    # --- Get dynamic paths based on db_name for 'lightrag' type ---
+    rag_type = 'lightrag' # Explicitly set rag_type for this script
+    db_name = args.db_name
+    try:
+        db_paths = get_db_paths(rag_type, db_name)
+    except ValueError as e:
+         logger.error(f"Error getting database paths: {e}")
+         sys.exit(1) # Exit if paths are invalid
+
+    db_dir = db_paths["db_dir"] # Main directory for the instance (databases/lightrag/db_name)
+    # Use chroma_path if available, fallback to vectorstore_path for compatibility
+    chroma_path = db_paths.get("chroma_path", db_paths.get("vectorstore_path"))
+
+    if not chroma_path:
+        logger.error(f"Could not determine Chroma/VectorStore path for rag_type='{rag_type}', db_name='{db_name}'")
+        sys.exit(1)
+
+    logger.info(f"Target RAG Type: {rag_type}")
+    logger.info(f"Target DB Name: {db_name}")
     logger.info(f"Database directory: {db_dir}")
-    logger.info(f"Chroma path: {chroma_path}") # Updated log
+    logger.info(f"Chroma/VectorStore path: {chroma_path}") # Updated log
 
     try:
         # Initialize Chroma vectorstore using dynamic path and imported function
-        vectorstore = initialize_chroma_vectorstore(chroma_path, args.reset) # Use Chroma initializer
+        # The reset logic is handled within initialize_chroma_vectorstore based on the path existence check it performs
+        vectorstore = initialize_chroma_vectorstore(chroma_path, args.reset)
         if not vectorstore:
-             logger.error(f"Failed to initialize Chroma vectorstore for '{args.name}' at {chroma_path}") # Updated log
-             return # Exit if vectorstore fails
+             logger.error(f"Failed to initialize Chroma vectorstore for '{rag_type}/{db_name}' at {chroma_path}") # Updated log
+             sys.exit(1) # Exit if vectorstore fails
 
         # Process documents and collect chunks
         all_processed_chunks = []
         loaded_docs = load_documents()
         total_docs = len(loaded_docs)
-        
-        logger.info(f"Found {total_docs} documents to process.")
-        
-        with tqdm(total=total_docs, desc="Processing documents", unit="doc") as pbar:
+
+        logger.info(f"Found {total_docs} documents to process for '{rag_type}/{db_name}'.")
+
+        with tqdm(total=total_docs, desc=f"Processing documents for '{rag_type}/{db_name}'", unit="doc") as pbar:
             for doc in loaded_docs:
                 try:
                     processed_chunks = process_document(doc, add_tags_llm=args.add_tags)
@@ -154,18 +170,18 @@ def main():
 
         # Add collected chunks to vectorstore if any exist
         if all_processed_chunks:
-            logger.info(f"Adding {len(all_processed_chunks)} processed chunks to the vectorstore...")
+            logger.info(f"Adding {len(all_processed_chunks)} processed chunks to the vectorstore for '{rag_type}/{db_name}'...")
             vectorstore.add_documents(all_processed_chunks)
             logger.info("Chunks added successfully.")
         else:
              logger.warning("No valid chunks were processed to add to the Chroma vectorstore.") # Updated log
 
         # Persist vectorstore (Chroma persists automatically when initialized with persist_directory)
-        logger.info(f"Chroma vectorstore for '{args.name}' at {chroma_path} is up-to-date.") # Updated log
-        logger.info(f"LightRAG (using Chroma) database '{args.name}' populated successfully") # Updated log
+        logger.info(f"Chroma vectorstore for '{rag_type}/{db_name}' at {chroma_path} is up-to-date.") # Updated log
+        logger.info(f"LightRAG (using Chroma) database '{rag_type}/{db_name}' populated successfully") # Updated log
 
     except Exception as e:
-        logger.error(f"Error populating LightRAG (using Chroma) database '{args.name}': {str(e)}", exc_info=True) # Updated log
+        logger.error(f"Error populating LightRAG (using Chroma) database '{rag_type}/{db_name}': {str(e)}", exc_info=True) # Updated log
         raise
 
 if __name__ == "__main__":
