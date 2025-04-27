@@ -20,3 +20,5 @@ DATABASES_DIR = TRAINING_DIR / "databases"
 # Ensure directories exist
 for directory in [DATA_DIR, DATABASES_DIR]:
     directory.mkdir(exist_ok=True) 
+# --- Embedding Configuration ---
+EMBEDDING_CONTEXT_LENGTH = 1512  # Context length for embeddings

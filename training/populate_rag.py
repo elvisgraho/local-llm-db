@@ -31,6 +31,7 @@ from langchain.schema.document import Document
 from query.database_paths import get_db_paths # Updated import
 from load_documents import load_documents, extract_metadata, process_single_file
 from training.processing_utils import split_document, initialize_chroma_vectorstore, clear_db_directory, validate_metadata # Added validate_metadata
+from training.config import EMBEDDING_CONTEXT_LENGTH # Import the constant
 import re
 import argparse
 from typing import List
@@ -179,10 +180,24 @@ def main():
 
         # Add collected chunks to vectorstore if any exist
         if all_processed_chunks:
-            logger.info(f"Adding {len(all_processed_chunks)} processed chunks to the Chroma vectorstore for '{rag_type}/{db_name}'...")
-            # Consider batching adds for Chroma if performance is an issue for very large datasets
-            vectorstore.add_documents(all_processed_chunks)
-            logger.info("Chunks added successfully.")
+            total_chunks = len(all_processed_chunks)
+            batch_size = EMBEDDING_CONTEXT_LENGTH # Use the imported constant
+            logger.info(f"Adding {total_chunks} processed chunks to the Chroma vectorstore for '{rag_type}/{db_name}' in batches of {batch_size}...")
+
+            # Add chunks in batches with a progress bar
+            with tqdm(total=total_chunks, desc=f"Adding chunks to '{rag_type}/{db_name}'", unit="chunk") as pbar:
+                for i in range(0, total_chunks, batch_size):
+                    batch = all_processed_chunks[i:i + batch_size]
+                    try:
+                        vectorstore.add_documents(batch)
+                        pbar.update(len(batch))
+                    except Exception as batch_error:
+                        logger.error(f"Error adding batch {i // batch_size + 1} to vectorstore: {batch_error}")
+                        # Decide if you want to stop or continue on batch error
+                        # For now, we log and continue
+                        pbar.update(len(batch)) # Still update progress bar even if failed
+
+            logger.info("Finished adding chunks.")
         else:
              logger.warning("No valid chunks were processed to add to the vectorstore.")
 

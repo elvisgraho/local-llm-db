@@ -98,8 +98,13 @@ def process_single_file(file_path: Path) -> List[Document]:
                 metadata=combined_metadata
             )]
         elif file_path.suffix.lower() == '.txt':
-            loader = TextLoader(str(file_path))
-            documents = loader.load()
+            try:
+                # Explicitly set encoding and handle errors, enable autodetect
+                loader = TextLoader(str(file_path), encoding='utf-8', autodetect_encoding=True)
+                documents = loader.load()
+            except Exception as load_error:
+                logger.error(f"TextLoader failed for {file_path}: {load_error}")
+                return [] # Return empty list if loading fails
         elif file_path.suffix.lower() == '.md':
             loader = UnstructuredMarkdownLoader(str(file_path))
             documents = loader.load()
