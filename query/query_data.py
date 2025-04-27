@@ -91,20 +91,45 @@ def query_direct(query_text: str, llm_config: Optional[Dict] = None, conversatio
         logger.error(f"Error in direct query: {str(e)}", exc_info=True)
         raise  # Re-raise the exception to be caught by the main handler
 
+def _reorder_documents_for_context(docs: List[Document]) -> List[Document]:
+    """Reorders documents to place most relevant at start and end for LLM context.
+
+    Args:
+        docs (List[Document]): List of documents, assumed to be sorted by relevance (most relevant first).
+
+    Returns:
+        List[Document]: The reordered list of documents.
+    """
+    if len(docs) >= 3:
+        logger.debug(f"Reordering {len(docs)} documents for 'lost in the middle'.")
+        most_relevant = docs[0]
+        second_most_relevant = docs[1]
+        middle_docs = docs[2:]
+        # Place most relevant at start, second most relevant at end
+        reordered_docs = [most_relevant] + middle_docs + [second_most_relevant]
+        return reordered_docs
+    else:
+        # No reordering needed for less than 3 docs
+        return docs
+
 def _perform_hybrid_retrieval_and_rerank(
     query_text: str,
     db: VectorStore,
     bm25: Optional[Any], # Using Any for BM25Okapi as it's not a LangChain type
-    reranker: Optional[Any] # Using Any for CrossEncoder
+    reranker: Optional[Any], # Using Any for CrossEncoder
+    metadata_filter: Optional[Dict[str, Any]] = None # Added metadata filter
 ) -> Tuple[List[Document], List[str]]:
     """
-    Performs hybrid retrieval (semantic + keyword) and reranks the results.
+    Performs hybrid retrieval (semantic + keyword), optionally filters by metadata,
+    and reranks the results.
 
     Args:
         query_text (str): The user's query.
         db (VectorStore): The vector store (e.g., Chroma) for semantic search.
         bm25 (Optional[BM25Okapi]): The initialized BM25 index.
         reranker (Optional[CrossEncoder]): The initialized reranker model.
+        metadata_filter (Optional[Dict[str, Any]]): A dictionary for metadata filtering
+                                                     (passed to Chroma's `where` clause).
 
     Returns:
         Tuple[List[Document], List[str]]: A tuple containing the list of final
@@ -115,7 +140,16 @@ def _perform_hybrid_retrieval_and_rerank(
 
     # --- Semantic Search ---
     try:
-        results = db.similarity_search_with_score(query_text, k=RAG_MAX_DOCUMENTS)
+        # Apply metadata filter if provided
+        if metadata_filter:
+            logger.info(f"Applying metadata filter to semantic search: {metadata_filter}")
+            results = db.similarity_search_with_score(
+                query_text,
+                k=RAG_MAX_DOCUMENTS,
+                filter=metadata_filter # Use 'filter' which maps to 'where' in Chroma
+            )
+        else:
+            results = db.similarity_search_with_score(query_text, k=RAG_MAX_DOCUMENTS)
     except Exception as e:
         logger.error(f"Error during semantic search: {e}", exc_info=True)
         results = []
@@ -133,14 +167,37 @@ def _perform_hybrid_retrieval_and_rerank(
             top_bm25_ids = [doc_id for doc_id, _, score in bm25_scored_docs[:RAG_MAX_DOCUMENTS] if score > 0]
             if top_bm25_ids:
                 # Fetch metadata only for the top BM25 results to optimize
+                # Fetch documents matching BM25 IDs, potentially applying metadata filter again
+                # Note: BM25 itself doesn't filter by metadata, so we filter the *retrieved* BM25 docs
+                # This ensures consistency if a filter is applied.
                 chroma_bm25_docs = db.get(ids=top_bm25_ids, include=["metadatas", "documents"])
-                id_to_metadata = {id: meta for id, meta in zip(chroma_bm25_docs["ids"], chroma_bm25_docs["metadatas"])}
-                id_to_content = {id: content for id, content in zip(chroma_bm25_docs["ids"], chroma_bm25_docs["documents"])}
+
+                # Apply metadata filter post-retrieval for BM25 results if a filter is active
+                filtered_bm25_docs = []
+                if metadata_filter:
+                    for doc_id, content, metadata in zip(chroma_bm25_docs["ids"], chroma_bm25_docs["documents"], chroma_bm25_docs["metadatas"]):
+                        match = True
+                        for key, value in metadata_filter.items():
+                            # Basic equality check, more complex filters might need adjustment
+                            if metadata.get(key) != value:
+                                match = False
+                                break
+                        if match:
+                            filtered_bm25_docs.append((doc_id, content, metadata))
+                    logger.info(f"Applied metadata filter to {len(chroma_bm25_docs['ids'])} BM25 candidates, resulting in {len(filtered_bm25_docs)} matches.")
+                else:
+                    # No filter, use all retrieved docs
+                    filtered_bm25_docs = list(zip(chroma_bm25_docs["ids"], chroma_bm25_docs["documents"], chroma_bm25_docs["metadatas"]))
+
+                # Create Document objects only for the filtered BM25 results
+                id_to_doc_map = {doc_id: Document(page_content=content, metadata=metadata)
+                                 for doc_id, content, metadata in filtered_bm25_docs}
+
+                # Add filtered BM25 results with their original scores
                 for doc_id, _content, score in bm25_scored_docs:
-                    if doc_id in top_bm25_ids: # Ensure we only process top IDs with metadata
-                        bm25_results.append(
-                            (Document(page_content=id_to_content[doc_id], metadata=id_to_metadata[doc_id]), score)
-                        )
+                    if doc_id in id_to_doc_map: # Check if the doc passed the metadata filter
+                        bm25_results.append((id_to_doc_map[doc_id], score))
+
         except Exception as e:
             logger.error(f"Error during BM25 search: {e}", exc_info=True)
     else:
@@ -223,8 +280,10 @@ def query_hybrid(query_text: str, llm_config: Optional[Dict] = None, conversatio
             context_text = "No relevant context found."
             # Sources list is already empty from the helper function
         else:
-            context_text = "\n\n---\n\n".join([doc.page_content for doc in final_docs])
-            
+            # Reorder documents to mitigate "lost in the middle"
+            reordered_docs = _reorder_documents_for_context(final_docs)
+            context_text = "\n\n---\n\n".join([doc.page_content for doc in reordered_docs])
+
         # Create prompt using the HYBRID_TEMPLATE
         prompt_template = ChatPromptTemplate.from_template(HYBRID_TEMPLATE)
         prompt = prompt_template.format(context=context_text, question=query_text)
@@ -351,8 +410,10 @@ def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] 
             return {"text": "No relevant information found in the database to answer the query.", "sources": []}
 
         # Format context from the final documents
-        context_text = "\n\n---\n\n".join([doc.page_content for doc in final_docs])
-        
+        # Reorder documents to mitigate "lost in the middle"
+        reordered_docs = _reorder_documents_for_context(final_docs)
+        context_text = "\n\n---\n\n".join([doc.page_content for doc in reordered_docs])
+
         # Use hybrid template if hybrid mode is enabled
         template = HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE
         prompt_template = ChatPromptTemplate.from_template(template)
@@ -370,8 +431,14 @@ def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] 
         logger.error(f"Error in RAG query: {str(e)}", exc_info=True)
         raise # Re-raise the exception
 
-def query_lightrag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Union[str, List[str]]]:
-    """Query using the light RAG implementation.
+def query_lightrag(
+    query_text: str,
+    hybrid: bool = False,
+    llm_config: Optional[Dict] = None,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+    metadata_filter: Optional[Dict[str, Any]] = None # Added metadata filter
+) -> Dict[str, Union[str, List[str]]]:
+    """Query using the light RAG implementation, with optional metadata filtering and context reordering.
 
     LightRAG is a simplified version of RAG that focuses on speed and efficiency:
     1. Uses FAISS for faster similarity search
@@ -395,25 +462,50 @@ def query_lightrag(query_text: str, hybrid: bool = False, llm_config: Optional[D
         _ = data_service.qa_chain
         
         # Get relevant documents
-        results = data_service.vectorstore.similarity_search_with_score(query_text, k=RAG_MAX_DOCUMENTS)
-        
-        if not results:
-            logger.warning("No relevant information found in the database")
+        results_with_scores = data_service.vectorstore.similarity_search_with_score(query_text, k=RAG_MAX_DOCUMENTS)
+
+        if not results_with_scores:
+            logger.warning("No relevant information found in the database (initial search)")
             return {"text": "No relevant information found in the database", "sources": []}
-        
-        # Filter results by similarity score (optional for LightRAG)
-        filtered_results = [(doc, score) for doc, score in results if score >= RAG_SIMILARITY_THRESHOLD]
-        
-        if not filtered_results:
-            logger.warning("No sufficiently relevant information found in the database")
-            return {"text": "No sufficiently relevant information found in the database", "sources": []}
-        
-        # Format context
-        context_text = "\n\n---\n\n".join([doc.page_content for doc, _score in filtered_results])
-        
-        # Extract sources with basic validation
+
+        # --- Apply Metadata Filter (Post-Retrieval) ---
+        if metadata_filter:
+            logger.info(f"Applying metadata filter (post-retrieval) to LightRAG results: {metadata_filter}")
+            filtered_by_metadata = []
+            for doc, score in results_with_scores:
+                match = True
+                for key, value in metadata_filter.items():
+                    if doc.metadata.get(key) != value:
+                        match = False
+                        break
+                if match:
+                    filtered_by_metadata.append((doc, score))
+            results_with_scores = filtered_by_metadata
+            logger.info(f"LightRAG results after metadata filter: {len(results_with_scores)}")
+            if not results_with_scores:
+                 logger.warning("No documents matched the metadata filter in LightRAG.")
+                 return {"text": "No relevant information found matching the specified criteria.", "sources": []}
+
+        # --- Filter by Similarity Score ---
+        filtered_by_score = [(doc, score) for doc, score in results_with_scores if score >= RAG_SIMILARITY_THRESHOLD]
+
+        if not filtered_by_score:
+            logger.warning("No sufficiently relevant information found after score thresholding.")
+            return {"text": "No sufficiently relevant information found in the database.", "sources": []}
+
+        # Extract documents for reordering and context
+        final_docs = [doc for doc, _score in filtered_by_score]
+
+        # --- Reorder Documents ---
+        reordered_docs = _reorder_documents_for_context(final_docs)
+
+        # --- Format Context ---
+        context_text = "\n\n---\n\n".join([doc.page_content for doc in reordered_docs])
+
+        # --- Extract Sources ---
         sources = []
-        for doc, _score in filtered_results:
+        # Extract sources from the *reordered* docs to maintain consistency
+        for doc in reordered_docs:
             source = doc.metadata.get("source")
             if source and isinstance(source, str):
                 sources.append(source)
@@ -438,8 +530,14 @@ def query_lightrag(query_text: str, hybrid: bool = False, llm_config: Optional[D
         logger.error(f"Error in light RAG query: {str(e)}", exc_info=True)
         raise # Re-raise the exception
 
-def query_kag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Union[str, List[str]]]:
-    """Query using Knowledge-Augmented Generation (KAG) approach.
+def query_kag(
+    query_text: str,
+    hybrid: bool = False,
+    llm_config: Optional[Dict] = None,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+    metadata_filter: Optional[Dict[str, Any]] = None # Added metadata filter
+) -> Dict[str, Union[str, List[str]]]:
+    """Query using Knowledge-Augmented Generation (KAG) approach, with optional metadata filtering.
 
     Args:
         query_text (str): The query text.
@@ -473,12 +571,32 @@ def query_kag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] 
             if similarity > GRAPH_MIN_SIMILARITY:
                 relevant_nodes.append((node, similarity))
 
+    # --- Apply Metadata Filter (before sorting/selecting top N) ---
+    if metadata_filter and relevant_nodes:
+        logger.info(f"Applying metadata filter to KAG initial nodes: {metadata_filter}")
+        filtered_relevant_nodes = []
+        for node, similarity in relevant_nodes:
+            node_data = G.nodes[node]
+            metadata = node_data.get('metadata', {})
+            match = True
+            for key, value in metadata_filter.items():
+                if metadata.get(key) != value:
+                    match = False
+                    break
+            if match:
+                filtered_relevant_nodes.append((node, similarity))
+        relevant_nodes = filtered_relevant_nodes
+        logger.info(f"KAG initial nodes after metadata filter: {len(relevant_nodes)}")
+        if not relevant_nodes:
+            logger.warning("No initial KAG nodes matched the metadata filter.")
+            return {"text": "No relevant information found matching the specified criteria.", "sources": []}
+
     # Sort nodes by similarity score
     relevant_nodes.sort(key=lambda x: x[1], reverse=True)
     initial_nodes = [node for node, _ in relevant_nodes[:GRAPH_MAX_NODES]]
 
     if not initial_nodes:
-        logger.warning("No relevant information found in the knowledge graph")
+        logger.warning("No relevant information found in the knowledge graph (after filtering/sorting)")
         return {"text": "No relevant information found in the knowledge graph", "sources": []}
 
     # Collect context and relationships through graph traversal

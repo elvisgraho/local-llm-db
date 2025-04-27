@@ -72,14 +72,9 @@ function ChatArea() {
   const chatContainerRef = useRef(null);
 
   const updateMessages = useCallback(() => {
-    console.log("ChatArea: updateMessages listener CALLED."); // Log: Listener triggered
     if (window.chatManager) {
       const currentChat = window.chatManager.getCurrentChat();
       const newMessages = currentChat ? currentChat.messages : [];
-      console.log(
-        "ChatArea: Setting messages state with count:",
-        newMessages.length
-      ); // Log: State update attempt
       // Ensure a new array reference is passed to setMessages
       // even if chatManager returns the same mutated array instance.
       setMessages([...newMessages]);
@@ -89,13 +84,7 @@ function ChatArea() {
     }
   }, []);
 
-  // Log when the component body executes (re-renders)
-  console.log(
-    `ChatArea: Re-rendering component. Current message count in state: ${messages.length}`
-  );
-
   useEffect(() => {
-    console.log("ChatArea: Main useEffect running/re-running."); // Log: Effect execution
     if (window.chatManager) {
       // Initial load and listener setup
       console.log("ChatArea: Setting up chatManager listeners.");

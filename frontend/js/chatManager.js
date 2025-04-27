@@ -32,14 +32,12 @@
   }
 
   function _notifyHistoryListeners() {
-    console.log("Notifying history listeners...");
     // Provide a copy of the chat list to listeners
     const chatList = getChatList();
     historyListeners.forEach((listener) => listener(chatList));
   }
 
   function _notifyActiveChatListeners() {
-    console.log(`Notifying active chat listeners: ${currentChatId}`);
     activeChatListeners.forEach((listener) => listener(currentChatId));
   }
 
