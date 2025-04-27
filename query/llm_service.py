@@ -6,7 +6,7 @@ import re
 import time
 import json
 import logging
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple # Added Tuple
 from requests.exceptions import RequestException
 from tenacity import retry, stop_after_attempt, wait_exponential
 from google.api_core import exceptions as google_exceptions # Import google api exceptions
@@ -19,6 +19,86 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --- Constants ---
+DEFAULT_CONTEXT_LENGTH = 8000
+TOKEN_ESTIMATION_FACTOR_SERVICE = 4 # Simple approximation for backend
+
+# --- Local Token Estimation Helper ---
+def _estimate_tokens_service(text: str) -> int:
+    """Estimates the number of tokens in a string (backend version)."""
+    if not text or not isinstance(text, str):
+        return 0
+    return len(text) // TOKEN_ESTIMATION_FACTOR_SERVICE
+
+# --- Context Length Retrieval ---
+def get_model_context_length(llm_config: Optional[Dict] = None) -> int:
+    """Gets the context length for the specified model configuration.
+
+    Args:
+        llm_config (Optional[Dict]): Configuration containing provider and modelName.
+
+    Returns:
+        int: The context length (currently returns a default).
+    """
+    config = llm_config or {}
+    provider = config.get('provider', 'local')
+    model_name = config.get('modelName', '') # Expect camelCase
+
+    # TODO: Implement more sophisticated context length lookup
+    # - Could involve API calls if provider supports it
+    # - Could use a configuration file mapping models to lengths
+    # - For now, return a default value.
+    logger.debug(f"Context length requested for {provider}/{model_name}. Returning default: {DEFAULT_CONTEXT_LENGTH}")
+    return DEFAULT_CONTEXT_LENGTH
+
+# --- History Truncation ---
+def truncate_history(
+    conversation_history: Optional[List[Dict[str, str]]],
+    max_tokens: int
+) -> Tuple[List[Dict[str, str]], int]:
+    """Truncates conversation history to fit within a maximum token limit.
+
+    Args:
+        conversation_history (Optional[List[Dict[str, str]]]): The full history.
+        max_tokens (int): The maximum allowed estimated tokens for the history.
+
+    Returns:
+        Tuple[List[Dict[str, str]], int]: A tuple containing the truncated
+                                          history list and its estimated token count.
+    """
+    if not conversation_history or max_tokens <= 0:
+        return [], 0
+
+    truncated_history = []
+    current_token_count = 0
+
+    # Iterate backwards (newest to oldest)
+    for i in range(len(conversation_history) - 1, -1, -1):
+        message = conversation_history[i]
+        role = message.get('role')
+        content = message.get('content', '')
+
+        if not role or not content: # Skip invalid entries
+            continue
+
+        # Estimate tokens for this message (role + content + separators)
+        # Use a simple format for estimation
+        message_text_estimate = f"{role}: {content}\n"
+        message_tokens = _estimate_tokens_service(message_text_estimate)
+
+        if current_token_count + message_tokens <= max_tokens:
+            # Add to the beginning of our list (will be reversed later)
+            truncated_history.insert(0, message)
+            current_token_count += message_tokens
+        else:
+            # Stop adding messages if the limit is exceeded
+            logger.info(f"History truncated: Stopped after {len(truncated_history)} messages. Estimated tokens: {current_token_count}/{max_tokens}")
+            break # Stop iterating
+
+    return truncated_history, current_token_count
+
+
+# --- LLM Interaction ---
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=4, max=10),
@@ -28,74 +108,42 @@ def get_llm_response(
     prompt: str,
     llm_config: Optional[Dict] = None,
     temperature: float = 0.7,
-    conversation_history: Optional[List[Dict[str, str]]] = None
+    conversation_history: Optional[List[Dict[str, str]]] = None # This is now potentially truncated history
 ) -> str:
     """Helper function to get response from LLM with retries, supporting different providers and conversation history.
-
-    Args:
-        prompt (str): The current user prompt to send to the LLM.
-        llm_config (Optional[Dict]): Configuration for the LLM provider.
-                                     Expected keys: 'provider' ('local' or 'gemini'),
-                                                    'modelName', 'apiKey' (for gemini).
-        temperature (float): The temperature parameter for the LLM.
-        conversation_history (Optional[List[Dict[str, str]]]): Previous conversation turns,
-                                                                e.g., [{'role': 'user', 'content': '...'},
-                                                                       {'role': 'assistant', 'content': '...'}].
-
-    Returns:
-        str: The response from the LLM.
-        
-    Raises:
-        RequestException: If there's an error communicating with the LLM service.
-        ValueError: If the response is invalid or empty, or config is invalid.
+       Assumes conversation_history has already been truncated if necessary.
     """
-    # Determine provider and settings
     config = llm_config or {}
     provider = config.get('provider', 'local')
-    # Expect camelCase from the config dict passed down
     model_name = config.get('modelName')
-    api_key = config.get('apiKey') # Expect camelCase 'apiKey'
-    history = conversation_history or [] # Ensure history is a list
+    api_key = config.get('apiKey')
+    # Use the provided history directly (already truncated by caller if needed for context building)
+    history = conversation_history or []
 
     logger.info(f"Getting LLM response using provider: {provider}, model: {model_name or 'default'}, history_len: {len(history)}")
 
     if provider == 'local':
-        # Use local LLM (OpenAI compatible API)
         local_model = model_name or LOCAL_MAIN_MODEL
         headers = {"Content-Type": "application/json"}
-
-        # Construct messages including history
         messages = []
         for entry in history:
-            # Ensure role is 'user' or 'assistant' (or 'system' if needed later)
             role = entry.get('role')
             content = entry.get('content')
             if role in ['user', 'assistant'] and content:
                  messages.append({"role": role, "content": content})
-            else:
-                 logger.warning(f"Skipping invalid history entry: {entry}")
-        messages.append({"role": "user", "content": prompt}) # Add current prompt
+            else: logger.warning(f"Skipping invalid history entry: {entry}")
+        messages.append({"role": "user", "content": prompt})
 
-        payload = {
-            "model": local_model,
-            "messages": messages,
-            "temperature": temperature
-        }
+        payload = {"model": local_model, "messages": messages, "temperature": temperature}
 
         try:
             response = requests.post(LOCAL_LLM_API_URL, json=payload, headers=headers)
             response.raise_for_status()
             response_data = response.json()
-            
-            if not response_data.get("choices"):
-                raise ValueError("No choices in local LLM response")
-                
+            if not response_data.get("choices"): raise ValueError("No choices in local LLM response")
             content = response_data["choices"][0].get("message", {}).get("content", "")
-            if not content:
-                raise ValueError("Empty response from local LLM")
-                
+            if not content: raise ValueError("Empty response from local LLM")
             return content
-            
         except RequestException as e:
             logger.error(f"Error calling local LLM API ({LOCAL_LLM_API_URL}): {str(e)}")
             raise
@@ -104,60 +152,47 @@ def get_llm_response(
             raise ValueError(f"Failed to process local LLM response: {e}")
 
     elif provider == 'gemini':
-        # Use Gemini API
-        if not api_key:
-            logger.error("Gemini provider selected, but API key is missing in llm_config.")
-            raise ValueError("API key required for Gemini provider is missing.")
-        # Check model_name (which is now modelName from config)
-        if not model_name:
-            logger.error("Gemini provider selected, but modelName is missing in llm_config.")
-            raise ValueError("Model name (modelName) required for Gemini provider is missing.")
+        if not api_key: raise ValueError("API key required for Gemini provider is missing.")
+        if not model_name: raise ValueError("Model name (modelName) required for Gemini provider is missing.")
 
         try:
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel(model_name)
             generation_config = genai.types.GenerationConfig(temperature=temperature)
 
-            # Format history for Gemini API (list of content objects)
-            # Gemini expects alternating user/model roles. 'assistant' maps to 'model'.
             gemini_history = []
             for entry in history:
                 role = entry.get('role')
                 content = entry.get('content')
-                if role == 'user' and content:
-                    gemini_history.append({'role': 'user', 'parts': [content]})
-                elif role == 'assistant' and content:
-                    gemini_history.append({'role': 'model', 'parts': [content]})
-                else:
-                    logger.warning(f"Skipping invalid history entry for Gemini: {entry}")
+                if role == 'user' and content: gemini_history.append({'role': 'user', 'parts': [content]})
+                elif role == 'assistant' and content: gemini_history.append({'role': 'model', 'parts': [content]})
+                else: logger.warning(f"Skipping invalid history entry for Gemini: {entry}")
 
-            # Start a chat session if history exists
+            # --- Gemini History Truncation (Internal) ---
+            # Gemini library might handle context length internally, but we can add a safety check
+            # Note: This is a secondary check; primary truncation happens in query_data.py
+            # context_length_gemini = get_model_context_length(llm_config) # Get length again if needed
+            # TODO: Implement Gemini-specific token counting and truncation if library doesn't handle it well.
+            # For now, rely on the truncation done before calling get_llm_response.
+            # --- End Gemini History Truncation ---
+
+
             if gemini_history:
                  chat = model.start_chat(history=gemini_history)
                  response = chat.send_message(prompt, generation_config=generation_config)
             else:
-                 # Send single message if no history
                  response = model.generate_content(prompt, generation_config=generation_config)
 
-            # Accessing response text might differ based on Gemini library version
-            # Check response.text or response.parts
-            if hasattr(response, 'text'):
-                content = response.text
-            elif hasattr(response, 'parts') and response.parts:
-                content = "".join(part.text for part in response.parts)
+            if hasattr(response, 'text'): content = response.text
+            elif hasattr(response, 'parts') and response.parts: content = "".join(part.text for part in response.parts)
             else:
-                # Attempt to access prompt_feedback if generation failed
                 feedback = getattr(response, 'prompt_feedback', None)
-                if feedback and hasattr(feedback, 'block_reason'):
-                     raise ValueError(f"Gemini content generation blocked: {feedback.block_reason}")
-                else:
-                     raise ValueError("Could not extract text from Gemini response and no block reason found.")
+                if feedback and hasattr(feedback, 'block_reason'): raise ValueError(f"Gemini content generation blocked: {feedback.block_reason}")
+                else: raise ValueError("Could not extract text from Gemini response and no block reason found.")
 
-            if not content:
-                raise ValueError("Empty response from Gemini LLM")
-                
+            if not content: raise ValueError("Empty response from Gemini LLM")
             return content
-            
+
         except google_exceptions.PermissionDenied as e:
             logger.error(f"Gemini API Permission Denied (check API key?): {str(e)}")
             raise ValueError(f"Gemini API Permission Denied: {e}")
@@ -165,48 +200,31 @@ def get_llm_response(
             logger.error(f"Gemini API Invalid Argument (check model name or parameters?): {str(e)}")
             raise ValueError(f"Gemini API Invalid Argument: {e}")
         except Exception as e:
-            # Catch potential exceptions from the genai library or other issues
             logger.error(f"Error calling Gemini API (model: {model_name}): {str(e)}")
-            raise ValueError(f"Failed to get response from Gemini: {e}") # Keep original error message propagation
-            
+            raise ValueError(f"Failed to get response from Gemini: {e}")
+
     else:
         logger.error(f"Unsupported LLM provider: {provider}")
         raise ValueError(f"Unsupported LLM provider specified: {provider}")
 
-def optimize_query(query_text: str) -> str:
-        raise
-
-# TODO: Decide if optimize_query should also use the configured LLM or always use local.
-# Currently, it always uses the local LLM for optimization.
+# --- Query Optimization ---
 def optimize_query(query_text: str, llm_config: Optional[Dict] = None) -> str:
-    """Optimize the query using a separate LLM call (currently defaults to local).
-    
-    Args:
-        query_text (str): The original query text.
-        llm_config (Optional[Dict]): LLM configuration (currently unused here, but kept for signature consistency).
-        query_text (str): The original query text.
-        
-    Returns:
-        str: The optimized query text.
-    """
+    """Optimize the query using a separate LLM call using the provided configuration."""
     try:
+        logger.info(f"Optimizing query using LLM config: {llm_config}")
         prompt_template = ChatPromptTemplate.from_template(QUERY_OPTIMIZATION_TEMPLATE)
         prompt = prompt_template.format(query=query_text)
-        # Use a different model for optimization with lower temperature
-        # For now, explicitly call with provider='local' for optimization step
-        # Pass a minimal config forcing local provider
-        optimization_llm_config = {'provider': 'local', 'model_name': LOCAL_MAIN_MODEL}
-        optimized_query = get_llm_response(prompt, llm_config=optimization_llm_config, temperature=0.3).strip()
+        # Use the *same* llm_config as the main query, but with a lower temperature
+        # No history needed for optimization prompt
+        optimized_query = get_llm_response(prompt, llm_config=llm_config, temperature=0.3, conversation_history=None).strip()
 
-        # Filter out <think> and <reasoning> tags if present
         if optimized_query:
-            # Remove any <think> and <reasoning> tags and their contents
             optimized_query = re.sub(r'<think>.*?</think>', '', optimized_query, flags=re.DOTALL)
             optimized_query = re.sub(r'<reasoning>.*?</reasoning>', '', optimized_query, flags=re.DOTALL)
             optimized_query = optimized_query.strip()
-            
+
         return optimized_query if optimized_query else query_text
-        
+
     except Exception as e:
         logger.error(f"Error optimizing query: {str(e)}")
-        return query_text 
+        return query_text # Return original query on optimization error

@@ -35,49 +35,29 @@ const {
   CssBaseline,
 } = MaterialUI;
 
+// Define the dark theme globally *before* components that use it
+const darkTheme = createTheme({
+  palette: {
+    mode: "dark",
+    primary: { main: "#66bb6a" },
+    secondary: { main: "#ba68c8" },
+    background: { default: "#303030", paper: "#424242" },
+    text: { primary: "#ffffff", secondary: "#c5c5d2" },
+  },
+  typography: { fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif' },
+  components: {},
+});
+
 // Helper for Material Icons (Globally available)
 const Icon = ({ children, sx }) =>
   e("span", { className: "material-icons", style: sx }, children);
 
-// Define the dark theme globally (used by AppRoot and Modal)
-const darkTheme = createTheme({
-  palette: {
-    mode: "dark",
-    primary: {
-      main: "#66bb6a", // MUI green
-    },
-    secondary: {
-      main: "#ba68c8", // MUI purple
-    },
-    background: {
-      default: "#303030",
-      paper: "#424242",
-    },
-    text: {
-      primary: "#ffffff",
-      secondary: "#c5c5d2",
-    },
-  },
-  typography: {
-    fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
-  },
-  components: {
-    // Add global component overrides here if needed
-  },
-});
-
-// --- Export Chat (Run after DOM is loaded) ---
-document.addEventListener("DOMContentLoaded", () => {
-  // Export button functionality removed as requested.
-}); // End of document.addEventListener('DOMContentLoaded')
-
 // --- Main Query Function ---
-// --- Main Query Function ---
-// Modified to accept settings and db_name as arguments
+// Reverted to original signature, backend will handle context length and history truncation
 window.sendQuery = async function (
   queryText,
   includeHistory,
-  queryMode, // This is now rag_type
+  queryMode, // This is rag_type
   optimize,
   hybrid,
   selectedDbName // Added argument
@@ -85,14 +65,9 @@ window.sendQuery = async function (
   // Start thinking indicator
   window.chatAreaControl?.startThinking();
 
-  // --- Remove DOM reading for inputs and settings ---
-  // const queryInput = document.getElementById("queryInput");
-  // const includeHistoryCheckbox = document.getElementById("includeHistory");
-  // const query = queryInput?.value.trim() || ""; // Use queryText argument
-  // const includeHistory = includeHistoryCheckbox?.checked || false; // Use includeHistory argument
-
   // Use queryText argument directly
   if (!queryText) {
+    console.warn("Send Query: query_text is empty.");
     window.chatAreaControl?.stopThinking();
     return;
   }
@@ -104,32 +79,24 @@ window.sendQuery = async function (
     return;
   }
 
-  // --- Remove DOM reading for settings ---
-  // const queryModeSelect = document.getElementById("queryMode");
-  // const optimizeToggle = document.getElementById("optimizeToggle");
-  // const hybridToggle = document.getElementById("hybridToggle");
-  // const queryMode = queryModeSelect?.value || "rag"; // Use queryMode argument
-  // const optimize = optimizeToggle?.checked || false; // Use optimize argument
-  // const hybrid = hybridToggle?.checked || false; // Use hybrid argument
-
   // Add user message via chatManager (UI updates via ChatArea listener)
   const userMessage = {
-    content: queryText, // Use queryText argument
+    content: queryText,
     isUser: true,
     timestamp: new Date().toISOString(),
-    messageId: `msg_${Date.now()}`,
+    messageId: `msg_${Date.now()}`, // Simple ID for UI purposes
   };
   window.chatManager.addMessageToHistory(userMessage);
 
   // Prepare request body
   let requestBody = {
-    query_text: queryText, // Use queryText argument
+    query_text: queryText,
     rag_type: queryMode, // Rename 'mode' to 'rag_type' for backend consistency
-    db_name: selectedDbName, // Add db_name
-    optimize: optimize, // Use optimize argument
+    db_name: selectedDbName,
+    optimize: optimize,
     hybrid: hybrid,
     llm_config: {},
-    conversation_history: [],
+    conversation_history: [], // Send full history if included
   };
 
   // Load preferred LLM provider and its config from localStorage
@@ -142,53 +109,47 @@ window.sendQuery = async function (
 
   if (savedLlmConfig) {
     try {
-      requestBody.llm_config = JSON.parse(savedLlmConfig);
-      // Ensure the provider field in the loaded config matches the preference
-      // (This handles cases where config might be stale or manually edited)
-      requestBody.llm_config.provider = preferredProvider;
+      // Parse saved config, but remove contextLength if present
+      const parsedConfig = JSON.parse(savedLlmConfig);
+      delete parsedConfig.contextLength; // Remove frontend context length setting
+      requestBody.llm_config = parsedConfig;
+      requestBody.llm_config.provider = preferredProvider; // Ensure provider matches preference
     } catch (e) {
       console.error(`Failed to parse saved LLM config from ${configKey}:`, e);
-      // Fallback to just the provider name if parsing fails
       requestBody.llm_config = { provider: preferredProvider };
     }
   } else {
-    // If no specific config saved for the preferred provider, just send the provider name
     console.warn(
       `No specific config found for preferred provider ${preferredProvider}. Sending default.`
     );
     requestBody.llm_config = { provider: preferredProvider };
   }
 
-  // Ensure API key is explicitly null if the preferred provider is not Gemini
-  // (Cleans up potentially stale keys if user switches preference)
+  // Clean up potentially stale keys/models
   if (preferredProvider !== "gemini") {
     requestBody.llm_config.apiKey = null;
   }
-  // Ensure modelName is present, even if empty, for backend consistency
   if (!requestBody.llm_config.modelName) {
     requestBody.llm_config.modelName = "";
   }
 
-  // Include conversation history if checked
+  // Include *full* conversation history if checked (backend will truncate)
   if (includeHistory) {
     const currentChat = window.chatManager.getCurrentChat();
     // Include history *before* the current user message
     if (currentChat?.messages.length > 1) {
       requestBody.conversation_history = currentChat.messages
-        .slice(0, -1)
+        .slice(0, -1) // Exclude the user message just added
         .map((msg) => ({
           role: msg.isUser ? "user" : "assistant",
-          content: msg.content,
+          content: msg.content || "", // Ensure content is string
         }));
     }
   }
 
-  // Input clearing is handled by InputArea component
-
   try {
-    console.log("Sending query:", requestBody);
+    console.log("Sending query payload (full history):", requestBody);
     const response = await fetch("/api/query", {
-      // Use relative path
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
@@ -213,25 +174,23 @@ window.sendQuery = async function (
     }
 
     const assistantResponse =
-      responseData.data?.text ||
-      responseData.response ||
-      "No response text found.";
+      responseData.data?.text || "No response text found.";
     const assistantMessage = {
       content: assistantResponse,
       isUser: false,
       timestamp: new Date().toISOString(),
-      // Ensure unique ID, Date.now() might collide on rapid responses
       messageId: `msg_${Date.now()}_${Math.random()
         .toString(36)
-        .substring(2, 7)}`,
-      sources: responseData.data?.sources || [], // Add sources here
+        .substring(2, 7)}`, // Unique ID
+      sources: responseData.data?.sources || [],
+      // Display estimated context tokens if returned by backend
+      estimatedContextTokens: responseData.data?.estimated_context_tokens,
     };
     window.chatManager.addMessageToHistory(assistantMessage);
-    console.log("Assistant message should now be in history via chatManager."); // Log after adding
+    console.log("Assistant message added to history via chatManager.");
 
-    // Handle special sections
-    const specialSections =
-      responseData.data?.special_sections || responseData.special_sections;
+    // Handle special sections (remains the same)
+    const specialSections = responseData.data?.special_sections;
     if (specialSections) {
       handleSpecialSections(specialSections);
     }
@@ -250,7 +209,6 @@ window.sendQuery = async function (
 };
 
 // --- Handle Special Sections ---
-// Appends a separate div for special content like sources or file paths.
 function handleSpecialSections(sections) {
   const chatContainer = document.getElementById("chatContainer");
   if (!chatContainer) {
@@ -303,13 +261,13 @@ function handleSpecialSections(sections) {
       try {
         const cleanKey = key.replace(/[^a-zA-Z0-9_]/g, "").replace(/_/g, " ");
         const safeJson = JSON.stringify(sections[key], null, 2)
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;");
+          .replace(/</g, "<")
+          .replace(/>/g, ">");
         htmlContent += `<h6>${cleanKey}:</h6><pre><code>${safeJson}</code></pre>`;
       } catch (e) {
         htmlContent += `<h6>${key
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")}:</h6><p>[Could not display content]</p>`;
+          .replace(/</g, "<")
+          .replace(/>/g, ">")}:</h6><p>[Could not display content]</p>`;
       }
     }
   }
@@ -319,14 +277,138 @@ function handleSpecialSections(sections) {
     chatContainer.appendChild(specialSectionsDiv);
     chatContainer.scrollTop = chatContainer.scrollHeight;
 
-    // Apply Prism highlighting and copy buttons
     window.Prism?.highlightAllUnder(specialSectionsDiv);
-    // Rely on ChatArea/ChatMessage to re-run addCopyButtons after new message/section added
-    // window.uiUtils?.addCopyButtons(); // Avoid potentially redundant global calls here
   } else if (htmlContent) {
     console.error("DOMPurify not available to sanitize special sections HTML.");
-    // Avoid setting innerHTML without sanitization
   }
 }
+
+// --- App Root Component ---
+function AppRoot() {
+  // darkTheme is now defined globally above
+
+  // State for settings shared between Sidebar and InputArea
+  const [queryMode, setQueryMode] = useState("rag");
+  const [optimize, setOptimize] = useState(false);
+  const [hybrid, setHybrid] = useState(false);
+  const [selectedDbName, setSelectedDbName] = useState(
+    window.GLOBAL_CONFIG?.DEFAULT_DB_NAME || "default"
+  );
+
+  // Load settings on initial mount
+  useEffect(() => {
+    const savedMode = localStorage.getItem("queryMode") || "rag";
+    const savedOptimize = localStorage.getItem("optimize") === "true";
+    const savedHybrid = localStorage.getItem("hybrid") === "true";
+    const savedDbName =
+      localStorage.getItem(`dbName_${savedMode}`) ||
+      window.GLOBAL_CONFIG?.DEFAULT_DB_NAME ||
+      "default";
+
+    setQueryMode(savedMode);
+    setOptimize(savedOptimize);
+    setHybrid(savedHybrid);
+    setSelectedDbName(savedDbName);
+
+    console.log("AppRoot: Initial settings loaded", {
+      mode: savedMode,
+      optimize: savedOptimize,
+      hybrid: savedHybrid,
+      dbName: savedDbName,
+    });
+  }, []);
+
+  // Save settings whenever they change
+  useEffect(() => {
+    localStorage.setItem("queryMode", queryMode);
+    localStorage.setItem("optimize", optimize);
+    localStorage.setItem("hybrid", hybrid);
+    if (["rag", "kag", "lightrag"].includes(queryMode)) {
+      localStorage.setItem(`dbName_${queryMode}`, selectedDbName);
+    }
+    console.log("AppRoot: Settings saved", {
+      queryMode,
+      optimize,
+      hybrid,
+      selectedDbName,
+    });
+  }, [queryMode, optimize, hybrid, selectedDbName]);
+
+  // Handlers to update state
+  const handleQueryModeChange = useCallback((newMode) => {
+    setQueryMode(newMode);
+    const savedDbForNewMode =
+      localStorage.getItem(`dbName_${newMode}`) ||
+      window.GLOBAL_CONFIG?.DEFAULT_DB_NAME ||
+      "default";
+    setSelectedDbName(savedDbForNewMode);
+    console.log(`Mode changed to ${newMode}, loaded DB: ${savedDbForNewMode}`);
+  }, []);
+
+  const handleOptimizeChange = useCallback((newOptimize) => {
+    setOptimize(newOptimize);
+  }, []);
+
+  const handleHybridChange = useCallback((newHybrid) => {
+    setHybrid(newHybrid);
+  }, []);
+
+  const handleDbNameChange = useCallback(
+    (newDbName) => {
+      setSelectedDbName(newDbName);
+      if (["rag", "kag", "lightrag"].includes(queryMode)) {
+        localStorage.setItem(`dbName_${queryMode}`, newDbName);
+      }
+    },
+    [queryMode]
+  );
+
+  return e(
+    ThemeProvider,
+    { theme: darkTheme }, // Apply the theme here
+    e(CssBaseline),
+    e(
+      Box,
+      { sx: { display: "flex", height: "100vh" } },
+      e(Sidebar, {
+        queryMode,
+        optimize,
+        hybrid,
+        selectedDbName,
+        onQueryModeChange: handleQueryModeChange,
+        onOptimizeChange: handleOptimizeChange,
+        onHybridChange: handleHybridChange,
+        onDbNameChange: handleDbNameChange,
+      }),
+      e(
+        Box,
+        {
+          component: "main",
+          sx: {
+            flexGrow: 1,
+            display: "flex",
+            flexDirection: "column",
+            height: "100vh",
+            overflow: "hidden",
+          },
+        },
+        e(ChatArea),
+        e(InputArea, { queryMode, optimize, hybrid, selectedDbName })
+      )
+    )
+  );
+}
+
+// --- Mount App ---
+document.addEventListener("DOMContentLoaded", () => {
+  const domContainer = document.querySelector("#root");
+  if (domContainer) {
+    const root = ReactDOM.createRoot(domContainer);
+    root.render(e(AppRoot));
+    console.log("AppRoot mounted using createRoot."); // Moved log here
+  } else {
+    console.error("App Root container not found."); // Keep error log
+  }
+});
 
 console.log("app.js initialized.");

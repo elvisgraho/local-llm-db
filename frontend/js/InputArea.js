@@ -6,19 +6,23 @@ function InputArea({ queryMode, optimize, hybrid, selectedDbName }) {
   // Accept props
   const [inputValue, setInputValue] = useState("");
   const [includeHistory, setIncludeHistory] = useState(true);
-  const [tokenCount, setTokenCount] = useState(0);
+  const [tokenCount, setTokenCount] = useState(0); // Keep for display estimate
   const textareaRef = useRef(null);
 
+  // Keep token estimation for display purposes
   const estimateTokens = useCallback((text) => {
     // Simple estimation
-    return Math.ceil((text || "").length / 4);
+    if (!text || typeof text !== "string") return 0;
+    return Math.ceil(text.length / 4);
   }, []);
 
+  // Update token count display (remains a rough estimate based on full history)
   const updateTokenCount = useCallback(() => {
     let currentTokens = estimateTokens(inputValue);
     if (includeHistory && window.chatManager) {
       const currentChat = window.chatManager.getCurrentChat();
       if (currentChat) {
+        // Estimate based on full history for display
         const historyText = currentChat.messages
           .map((msg) => msg.content)
           .join("\n");
@@ -57,23 +61,21 @@ function InputArea({ queryMode, optimize, hybrid, selectedDbName }) {
     setIncludeHistory(event.target.checked);
   };
 
+  // Reverted handleSend to pass original arguments
   const handleSend = () => {
     if (!inputValue.trim()) return;
 
-    // Remove code updating hidden inputs - no longer needed
-
     if (window.sendQuery && typeof window.sendQuery === "function") {
-      // Pass query text and settings state (including selectedDbName) to sendQuery
-      // Note: sendQuery function itself will need to be updated to handle this new arg
+      // Pass query text and settings state directly
       window.sendQuery(
         inputValue,
         includeHistory,
         queryMode,
         optimize,
         hybrid,
-        selectedDbName
+        selectedDbName // Pass selected DB name
       );
-      setInputValue("");
+      setInputValue(""); // Clear input after sending
     } else {
       console.error("InputArea: sendQuery function not found.");
       alert("Error: Could not send message.");
@@ -126,7 +128,6 @@ function InputArea({ queryMode, optimize, hybrid, selectedDbName }) {
       e(
         Tooltip,
         { title: "Send Message" },
-        // Wrap IconButton in a span to allow Tooltip events when disabled
         e(
           "span",
           null,
@@ -138,7 +139,7 @@ function InputArea({ queryMode, optimize, hybrid, selectedDbName }) {
               disabled: !inputValue.trim(),
               size: "medium",
             },
-            e(Icon, null, "send") // Assumes Icon component is available globally
+            e(Icon, null, "send")
           )
         )
       )
@@ -156,7 +157,7 @@ function InputArea({ queryMode, optimize, hybrid, selectedDbName }) {
       e(
         Typography,
         {
-          id: "contextLength",
+          id: "contextLength", // ID remains, but value is a rough estimate
           variant: "caption",
           color: "text.secondary",
           sx: {
@@ -166,7 +167,7 @@ function InputArea({ queryMode, optimize, hybrid, selectedDbName }) {
             borderRadius: 1,
           },
         },
-        `${tokenCount} tokens`
+        `${tokenCount} tokens (estimated)` // Clarify it's an estimate
       ),
       e(FormControlLabel, {
         control: e(Checkbox, {

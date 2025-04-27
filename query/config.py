@@ -7,13 +7,15 @@ including model parameters, API endpoints, and system paths.
 
 import os
 from dataclasses import dataclass, field
+from typing import Optional
 
 @dataclass
 class LLMConfig:
     """Configuration for LLM-related settings."""
-    model_name: str = "reka-flash-3-21b-reasoning-uncensored-max-neo-imatrix"
-    api_url: str = "http://localhost:1234/v1/chat/completions"
-    temperature: float = 0.7
+    # Removed default values - these should be set via environment or frontend config
+    model_name: Optional[str] = None
+    api_url: Optional[str] = None
+    temperature: float = 0.7 # Keep other defaults for now
     max_retries: int = 3
     retry_wait_min: int = 1
     retry_wait_max: int = 10
@@ -22,7 +24,7 @@ class LLMConfig:
 class RAGConfig:
     """Configuration for RAG-related settings."""
     similarity_threshold: float = 0.5
-    max_documents: int = 10
+    max_documents: int = 15
     chunk_size: int = 1500
     chunk_overlap: int = 200
 
@@ -30,8 +32,8 @@ class RAGConfig:
 class GraphConfig:
     """Configuration for graph-related settings."""
     max_depth: int = 2
-    max_nodes: int = 5
-    min_similarity: float = 0.5
+    max_nodes: int = 15
+    min_similarity: float = 0.7
 
 @dataclass
 class SystemConfig:
@@ -47,10 +49,15 @@ class SystemConfig:
         Returns:
             SystemConfig: The configuration object.
         """
+        # Define fallback defaults here if environment variables are not set
+        default_model_name = "reka-flash-3-21b-reasoning-uncensored-max-neo-imatrix"
+        default_api_url = "http://localhost:1234/v1/chat/completions"
+
         return cls(
             llm=LLMConfig(
-                model_name=os.getenv('LLM_MODEL_NAME', LLMConfig.model_name),
-                api_url=os.getenv('LLM_API_URL', LLMConfig.api_url),
+                # Use explicit string defaults in getenv if env var is missing
+                model_name=os.getenv('LLM_MODEL_NAME', default_model_name),
+                api_url=os.getenv('LLM_API_URL', default_api_url),
                 temperature=float(os.getenv('LLM_TEMPERATURE', LLMConfig.temperature)),
                 max_retries=int(os.getenv('LLM_MAX_RETRIES', LLMConfig.max_retries)),
                 retry_wait_min=int(os.getenv('LLM_RETRY_WAIT_MIN', LLMConfig.retry_wait_min)),

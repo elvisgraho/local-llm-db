@@ -24,7 +24,6 @@ function LlmSettingsModal() {
   });
   const [isLoading, setIsLoading] = useState({ local: false, gemini: false });
   const [errors, setErrors] = useState({ local: null, gemini: null });
-  // New state to track if Gemini key is needed but missing for fetching
   const [geminiKeyNeeded, setGeminiKeyNeeded] = useState(false);
 
   const [isSaving, setIsSaving] = useState(false);
@@ -32,19 +31,14 @@ function LlmSettingsModal() {
 
   // --- Event Handlers ---
 
-  // handleOpen moved after loadSettingsForProvider
-
   const handleClose = useCallback(() => {
     setOpen(false);
     setIsSaving(false);
   }, []);
 
-  // Old handleProviderChange removed
-
   const handleApiKeyChange = (event) => {
     const newApiKey = event.target.value;
     setApiKeys((prev) => ({ ...prev, [currentProvider]: newApiKey }));
-    // If user types in Gemini key, clear the "key needed" flag and related errors
     if (currentProvider === "gemini") {
       setGeminiKeyNeeded(false);
       setErrors((prev) => ({ ...prev, gemini: null }));
@@ -56,23 +50,24 @@ function LlmSettingsModal() {
     setSelectedModels((prev) => ({ ...prev, [currentProvider]: newModel }));
   };
 
+  // Removed handleContextLengthChange
+
   // --- Data Fetching & Loading ---
 
   const fetchModels = useCallback(async (providerToFetch, apiKeyToUse) => {
     setIsLoading((prev) => ({ ...prev, [providerToFetch]: true }));
-    setErrors((prev) => ({ ...prev, [providerToFetch]: null })); // Clear previous error
-    setGeminiKeyNeeded(false); // Reset key needed flag
+    setErrors((prev) => ({ ...prev, [providerToFetch]: null }));
+    setGeminiKeyNeeded(false);
 
     let effectiveApiKey = null;
     if (providerToFetch === "gemini") {
       effectiveApiKey = apiKeyToUse?.trim();
-      // **MODIFIED:** Don't set error here. Just prevent fetch if key is missing.
       if (!effectiveApiKey) {
         console.warn("Gemini API Key missing, skipping fetch.");
-        setModelsByProvider((prev) => ({ ...prev, [providerToFetch]: [] })); // Clear models
-        setSelectedModels((prev) => ({ ...prev, [providerToFetch]: "" })); // Clear selection
+        setModelsByProvider((prev) => ({ ...prev, [providerToFetch]: [] }));
+        setSelectedModels((prev) => ({ ...prev, [providerToFetch]: "" }));
         setIsLoading((prev) => ({ ...prev, [providerToFetch]: false }));
-        setGeminiKeyNeeded(true); // Set flag to show prompt in dropdown
+        setGeminiKeyNeeded(true);
         return;
       }
     }
@@ -118,7 +113,7 @@ function LlmSettingsModal() {
             `Re-selected saved model for ${providerToFetch}: ${savedModelName}`
           );
         } else {
-          setSelectedModels((prev) => ({ ...prev, [providerToFetch]: "" })); // Clear selection if saved model not found
+          setSelectedModels((prev) => ({ ...prev, [providerToFetch]: "" }));
           if (savedModelName)
             console.warn(
               `Saved model "${savedModelName}" not found for ${providerToFetch}.`
@@ -129,7 +124,7 @@ function LlmSettingsModal() {
           ...prev,
           [providerToFetch]: `No models found for ${providerToFetch}. Check server/API key.`,
         }));
-        setModelsByProvider((prev) => ({ ...prev, [providerToFetch]: [] })); // Clear models on empty response
+        setModelsByProvider((prev) => ({ ...prev, [providerToFetch]: [] }));
         setSelectedModels((prev) => ({ ...prev, [providerToFetch]: "" }));
       }
     } catch (error) {
@@ -138,20 +133,20 @@ function LlmSettingsModal() {
         ...prev,
         [providerToFetch]: `Error fetching models: ${error.message}`,
       }));
-      setModelsByProvider((prev) => ({ ...prev, [providerToFetch]: [] })); // Clear models on fetch error
+      setModelsByProvider((prev) => ({ ...prev, [providerToFetch]: [] }));
       setSelectedModels((prev) => ({ ...prev, [providerToFetch]: "" }));
     } finally {
       setIsLoading((prev) => ({ ...prev, [providerToFetch]: false }));
     }
-  }, []); // No dependencies needed here as params are passed in
+  }, []);
 
-  // Define loadSettingsForProvider *before* handlers that depend on it
   const loadSettingsForProvider = useCallback(
     (providerToLoad) => {
       const configKey = `llmConfig_${providerToLoad}`;
       const savedConfig = localStorage.getItem(configKey);
-      let apiKeyFromStorage = providerToLoad === "gemini" ? "" : null; // Default API key state
+      let apiKeyFromStorage = providerToLoad === "gemini" ? "" : null;
       let modelNameFromStorage = "";
+      // Removed contextLengthFromStorage
 
       if (savedConfig) {
         try {
@@ -160,7 +155,8 @@ function LlmSettingsModal() {
           if (providerToLoad === "gemini" && llmConfig.apiKey) {
             apiKeyFromStorage = llmConfig.apiKey;
           }
-          modelNameFromStorage = llmConfig.modelName || ""; // Keep saved model name temporarily
+          modelNameFromStorage = llmConfig.modelName || "";
+          // Removed context length loading
         } catch (e) {
           console.error(
             `Failed to parse saved LLM config for ${providerToLoad}:`,
@@ -171,42 +167,34 @@ function LlmSettingsModal() {
         console.log(`No saved settings for ${providerToLoad}.`);
       }
 
-      // Update API key state for the provider
       setApiKeys((prev) => ({ ...prev, [providerToLoad]: apiKeyFromStorage }));
-      // Set selected model temporarily - fetchModels will confirm and set final state
       setSelectedModels((prev) => ({
         ...prev,
         [providerToLoad]: modelNameFromStorage,
       }));
+      // Removed context length state setting
 
-      // Fetch models using the loaded (or default) API key
       fetchModels(providerToLoad, apiKeyFromStorage);
     },
-    [fetchModels] // Depends on fetchModels
+    [fetchModels]
   );
 
-  // Load preferred provider on initial mount
   useEffect(() => {
     const savedPreference =
       localStorage.getItem("preferredLlmProvider") || "local";
     setPreferredProvider(savedPreference);
-    // Don't set currentProvider here, handleOpen will do it
     console.log("Initial preferred provider loaded:", savedPreference);
-  }, []); // Run only once on mount
+  }, []);
 
-  // Define handleOpen *after* loadSettingsForProvider and initial load effect
   const handleOpen = useCallback(() => {
-    // Use the loaded preferredProvider as the initial view
     const providerToOpen = preferredProvider;
     setCurrentProvider(providerToOpen);
-    loadSettingsForProvider(providerToOpen); // Load settings for the preferred provider
+    loadSettingsForProvider(providerToOpen);
     setOpen(true);
     setSaveSuccess(false);
-    // Clear errors when opening
     setErrors({ local: null, gemini: null });
-  }, [loadSettingsForProvider, preferredProvider]); // Depends on loader and loaded preference
+  }, [loadSettingsForProvider, preferredProvider]);
 
-  // Handler for the new Preferred Provider Select dropdown
   const handlePreferredProviderChange = useCallback(
     (event) => {
       const newPreference = event.target.value;
@@ -214,9 +202,7 @@ function LlmSettingsModal() {
       setPreferredProvider(newPreference);
       localStorage.setItem("preferredLlmProvider", newPreference);
 
-      // Also switch the modal view to the newly preferred provider
       setCurrentProvider(newPreference);
-      // Load settings if needed (might already be loaded)
       if (
         !modelsByProvider[newPreference] ||
         modelsByProvider[newPreference].length === 0
@@ -224,7 +210,7 @@ function LlmSettingsModal() {
         loadSettingsForProvider(newPreference);
       }
     },
-    [modelsByProvider, loadSettingsForProvider] // Depends on models and loader
+    [modelsByProvider, loadSettingsForProvider]
   );
 
   const handleRefreshModels = useCallback(() => {
@@ -232,50 +218,46 @@ function LlmSettingsModal() {
   }, [currentProvider, apiKeys, fetchModels]);
 
   const handleSave = useCallback(() => {
-    const currentApiKey = apiKeys[currentProvider]; // Get key for current tab
+    const currentApiKey = apiKeys[currentProvider];
+    const currentSelectedModel = selectedModels[currentProvider];
+    const currentModels = modelsByProvider[currentProvider];
+    // Removed currentContextLength
 
-    // **MODIFIED:** Check for Gemini API key *only on save*
     if (currentProvider === "gemini" && !currentApiKey?.trim()) {
-      alert("Please enter your Gemini API Key before saving."); // Use alert for immediate feedback
-      // Optionally set an error state instead of alert:
-      // setErrors(prev => ({ ...prev, gemini: "Gemini API Key is required to save." }));
-      return; // Stop the save
-    }
-
-    // --- Rest of save logic ---
-    setIsSaving(true);
-    setSaveSuccess(false);
-
-    // Get current model/list state *after* potential early return
-    const currentSelectedModel = selectedModels[currentProvider]; // Keep this
-    const currentModels = modelsByProvider[currentProvider]; // Keep this
-
-    // Only require model selection if models were successfully loaded
-    if (!currentSelectedModel && currentModels && currentModels.length > 0) {
-      alert("Please select a model from the list.");
-      setIsSaving(false);
+      alert("Please enter your Gemini API Key before saving.");
       return;
     }
+
+    if (!currentSelectedModel && currentModels && currentModels.length > 0) {
+      alert("Please select a model from the list.");
+      return;
+    }
+
+    // Removed context length validation
+
+    setIsSaving(true);
+    setSaveSuccess(false);
 
     const llmConfig = {
       provider: currentProvider,
       modelName: currentSelectedModel,
       apiKey: currentProvider === "gemini" ? currentApiKey?.trim() : null,
+      // Removed contextLength from saved config
     };
 
     const configKey = `llmConfig_${currentProvider}`;
     console.log(`Saving LLM config to ${configKey}:`, llmConfig);
     localStorage.setItem(configKey, JSON.stringify(llmConfig));
 
-    // Also save the *other* provider's config if it exists, to prevent accidental overwrite
+    // Preserve other provider's config
     const otherProvider = currentProvider === "local" ? "gemini" : "local";
     const otherConfigKey = `llmConfig_${otherProvider}`;
     const otherSavedConfig = localStorage.getItem(otherConfigKey);
     if (otherSavedConfig) {
       try {
         const otherLlmConfig = JSON.parse(otherSavedConfig);
-        // Ensure the provider field is correct in the saved data
         otherLlmConfig.provider = otherProvider;
+        // Removed contextLength preservation logic
         localStorage.setItem(otherConfigKey, JSON.stringify(otherLlmConfig));
         console.log(`Preserved existing config for ${otherProvider}`);
       } catch (e) {
@@ -290,28 +272,26 @@ function LlmSettingsModal() {
       setIsSaving(false);
       setSaveSuccess(true);
       console.log(`LLM Settings Saved to ${configKey}`);
-      setTimeout(handleClose, 1000); // Close after success message
+      setTimeout(handleClose, 1000);
     }, 500);
-  }, [currentProvider, apiKeys, selectedModels, modelsByProvider, handleClose]);
+  }, [currentProvider, apiKeys, selectedModels, modelsByProvider, handleClose]); // Removed contextLengths dependency
 
-  // --- Attach Listener ---
   useEffect(() => {
     const openBtn = document.getElementById("openLlmSettingsBtn");
     if (openBtn) {
-      // Define the handler here directly or ensure handleOpen is memoized correctly
-      const openHandler = handleOpen; // Use the memoized handleOpen
+      const openHandler = handleOpen;
       openBtn.addEventListener("click", openHandler);
       return () => openBtn.removeEventListener("click", openHandler);
     }
-  }, [handleOpen]); // Depend on the memoized handleOpen
+  }, [handleOpen]);
 
   // --- Render Logic ---
-  const currentApiKey = apiKeys[currentProvider] ?? ""; // Use ?? for null/undefined check
+  const currentApiKey = apiKeys[currentProvider] ?? "";
   const currentModels = modelsByProvider[currentProvider] || [];
   const currentSelectedModel = selectedModels[currentProvider] || "";
+  // Removed currentContextLengthValue
   const currentIsLoading = isLoading[currentProvider] || false;
   const currentError = errors[currentProvider] || null;
-  // Determine if the refresh button should be disabled
   const isRefreshDisabled =
     currentIsLoading || (currentProvider === "gemini" && !currentApiKey.trim());
 
@@ -336,8 +316,8 @@ function LlmSettingsModal() {
           {
             labelId: "preferred-provider-label",
             id: "preferredLlmProviderSelect",
-            value: preferredProvider, // Bind to the preferredProvider state
-            onChange: handlePreferredProviderChange, // Use the new handler
+            value: preferredProvider,
+            onChange: handlePreferredProviderChange,
             label: "Preferred LLM Provider",
           },
           e(MenuItem, { value: "local" }, "Local LLM"),
@@ -370,7 +350,7 @@ function LlmSettingsModal() {
         e(TextField, {
           label: "Gemini API Key",
           type: "password",
-          value: currentApiKey, // Use state for current provider
+          value: currentApiKey,
           onChange: handleApiKeyChange,
           fullWidth: true,
           margin: "normal",
@@ -395,12 +375,11 @@ function LlmSettingsModal() {
             {
               labelId: "model-select-label",
               id: "llmModelNameModal",
-              value: currentSelectedModel, // Use state for current provider
+              value: currentSelectedModel,
               onChange: handleModelChange,
               label: "Model Name",
-              disabled: currentIsLoading || currentModels.length === 0, // Use state for current provider
+              disabled: currentIsLoading || currentModels.length === 0,
             },
-            // Conditional rendering based on current provider's state
             currentIsLoading &&
               e(
                 MenuItem,
@@ -412,8 +391,6 @@ function LlmSettingsModal() {
                   "Loading models..."
                 )
               ),
-            // **MODIFIED:** Conditional rendering messages
-            // Show prompt if Gemini key is needed but missing
             !currentIsLoading &&
               currentProvider === "gemini" &&
               geminiKeyNeeded &&
@@ -422,13 +399,11 @@ function LlmSettingsModal() {
                 { value: "", disabled: true },
                 "Enter API Key and Refresh"
               ),
-            // Show generic 'no models' only if not loading, not needing key, and no error
             !currentIsLoading &&
               !geminiKeyNeeded &&
               currentModels.length === 0 &&
               !currentError &&
               e(MenuItem, { value: "", disabled: true }, "No models available"),
-            // Show error message if an error occurred (and not needing key)
             !currentIsLoading &&
               !geminiKeyNeeded &&
               currentError &&
@@ -437,7 +412,6 @@ function LlmSettingsModal() {
                 { value: "", disabled: true },
                 "Error loading models"
               ),
-            // List models if available
             !currentIsLoading &&
               currentModels.map((modelId) =>
                 e(MenuItem, { key: modelId, value: modelId }, modelId)
@@ -447,7 +421,6 @@ function LlmSettingsModal() {
         e(
           Tooltip,
           { title: "Refresh model list" },
-          // Wrap IconButton in a span for Tooltip accessibility when disabled
           e(
             "span",
             null,
@@ -455,7 +428,6 @@ function LlmSettingsModal() {
               IconButton,
               {
                 onClick: handleRefreshModels,
-                // Use calculated disabled state
                 disabled: isRefreshDisabled,
               },
               e(Icon, null, "refresh")
@@ -463,7 +435,9 @@ function LlmSettingsModal() {
           )
         )
       ),
-      // Error Alert for the current provider (but not the "key needed" error)
+      // Removed Context Length Input
+
+      // Error Alert for the current provider
       currentError &&
         e(Alert, { severity: "error", sx: { mt: 1 } }, currentError)
     ),
@@ -478,7 +452,7 @@ function LlmSettingsModal() {
           onClick: handleSave,
           color: "primary",
           variant: "contained",
-          disabled: isSaving || currentIsLoading, // Disable save if loading models for current provider
+          disabled: isSaving || currentIsLoading,
           startIcon: isSaving
             ? e(CircularProgress, { size: 20, color: "inherit" })
             : null,
@@ -496,20 +470,16 @@ document.addEventListener("DOMContentLoaded", () => {
     // Define 'e' locally for this mounting block and use React 18 createRoot API
     const { createElement: e } = React;
     const root = ReactDOM.createRoot(domContainer);
-    // Wrap modal in ThemeProvider using the global darkTheme
+    // Define darkTheme here or ensure it's globally available before this point
+    const darkTheme = createTheme({
+      /* ... theme definition ... */
+    });
     root.render(
-      e(
-        ThemeProvider,
-        { theme: darkTheme }, // Assumes ThemeProvider & darkTheme are global
-        e(LlmSettingsModal)
-      )
-    );
-    console.log(
-      "LlmSettingsModal component mounted using createRoot and ThemeProvider."
+      e(MaterialUI.ThemeProvider, { theme: darkTheme }, e(LlmSettingsModal))
     );
   } else {
-    console.error(
-      "Fatal Error: LLM Settings Modal container (#llmSettingsModalContainer) not found!"
-    );
+    console.error("LLM Settings Modal container not found.");
   }
 });
+
+console.log("modal.js loaded and LlmSettingsModal defined.");

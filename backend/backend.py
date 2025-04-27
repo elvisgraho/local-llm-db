@@ -7,8 +7,9 @@ import time
 import logging
 from datetime import datetime
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Pass llm_config and full history to query functions
 from query.query_data import query_direct, query_kag, query_lightrag, query_rag
-from query.llm_service import optimize_query
+from query.llm_service import optimize_query, get_model_context_length # Import context length getter
 from query.data_service import data_service
 from query.database_paths import list_available_dbs, DEFAULT_DB_NAME # Import list_available_dbs
 import traceback
@@ -57,68 +58,55 @@ def handle_query():
             }), 400
 
         query_text = data.get('query_text', '')
-        # Renamed 'mode' to 'rag_type' for clarity and consistency
-        rag_type = data.get('rag_type', 'rag') # Expect 'rag_type' from frontend
-        db_name = data.get('db_name', DEFAULT_DB_NAME) # Expect 'db_name', default if missing
+        rag_type = data.get('rag_type', 'rag')
+        db_name = data.get('db_name', DEFAULT_DB_NAME)
         optimize = data.get('optimize', False)
         hybrid = data.get('hybrid', False)
-        llm_config = data.get('llm_config', {}) # Extract llm_config
-        # Extract conversation history if present, default to None or empty list
+        llm_config = data.get('llm_config', {}) # Keep llm_config
+        # Get full conversation history from frontend
         conversation_history = data.get('conversation_history', None)
+        # Removed context_length extraction from request
 
         # Basic validation for llm_config
         provider = llm_config.get('provider')
-        # Expect camelCase from frontend payload
-        model_name = llm_config.get('modelName')
-        api_key = llm_config.get('apiKey') # Expect camelCase 'apiKey'
+        model_name = llm_config.get('modelName') # Still expect camelCase from frontend
+        api_key = llm_config.get('apiKey')
 
+        # --- llm_config validation remains the same ---
         if not provider or provider not in ['local', 'gemini']:
             return jsonify({
                 'error': 'Invalid or missing LLM provider in llm_config. Must be "local" or "gemini".',
                 'status': 'error'
             }), 400
-
-        # Check model_name (which is now modelName from payload)
         if not model_name:
              logging.warning(f"Query {request_id}: LLM model name (modelName) not provided in llm_config.")
-
-        # Check api_key (which is now apiKey from payload)
         if provider == 'gemini' and not api_key:
-            # Log warning if apiKey is missing for gemini
             logging.warning(f"Query {request_id}: Gemini provider selected but API key (apiKey) is missing in llm_config.")
+        # --- End llm_config validation ---
 
         if not query_text:
-            return jsonify({
-                'error': 'Query text is required',
-                'status': 'error'
-            }), 400
+            return jsonify({'error': 'Query text is required', 'status': 'error'}), 400
 
-        # Validate rag_type
         valid_rag_types = ['rag', 'direct', 'lightrag', 'kag']
         if rag_type not in valid_rag_types:
-            return jsonify({
-                'error': f'Invalid rag_type. Must be one of: {", ".join(valid_rag_types)}',
-                'status': 'error'
-            }), 400
+            return jsonify({'error': f'Invalid rag_type. Must be one of: {", ".join(valid_rag_types)}', 'status': 'error'}), 400
 
-        # Validate db_name (basic check, more specific checks happen in query functions)
         if rag_type != 'direct' and not db_name:
              return jsonify({'error': f'db_name is required for rag_type "{rag_type}"', 'status': 'error'}), 400
 
-        # Log the received parameters including rag_type and db_name
+        # Log received parameters (excluding context_length now)
         logging.info(f"Processing query {request_id}: rag_type={rag_type}, db_name={db_name}, optimize={optimize}, hybrid={hybrid}, provider={provider}, model={model_name}")
 
         # Optimize query if requested
-        # TODO: Pass llm_config to optimize_query if needed in the future
+        optimize_time = 0
         if optimize:
             try:
                 optimize_start = time.time()
-                optimized_query = optimize_query(query_text)
+                # Pass llm_config (which might contain apiKey)
+                optimized_query = optimize_query(query_text, llm_config=llm_config)
                 optimize_time = time.time() - optimize_start
-
                 if not optimized_query or optimized_query.startswith('<think>'):
                     raise ValueError("Incomplete query optimization response")
-
                 logging.info(f"Query {request_id} optimized in {optimize_time:.2f}s")
             except Exception as e:
                 logging.error(f"Error during query optimization: {str(e)}")
@@ -129,8 +117,10 @@ def handle_query():
         # Call appropriate query function based on mode
         try:
             query_start = time.time()
-            # Pass rag_type, db_name, llm_config, and conversation_history
+            # Pass llm_config and the full conversation_history
+            # The query functions will handle context length lookup and history truncation
             if rag_type == 'direct':
+                # Direct query doesn't need context length for retrieval/truncation here
                 query_response = query_direct(optimized_query, llm_config=llm_config, conversation_history=conversation_history)
             elif rag_type == 'lightrag':
                 query_response = query_lightrag(optimized_query, hybrid, rag_type=rag_type, db_name=db_name, llm_config=llm_config, conversation_history=conversation_history)
@@ -141,7 +131,6 @@ def handle_query():
 
             query_time = time.time() - query_start
 
-            # Validate query response
             if not query_response or not query_response.get('text'):
                 raise ValueError("Empty or invalid query response")
 
@@ -149,13 +138,13 @@ def handle_query():
 
             response = {
                 'status': 'success',
-                'data': query_response,
+                'data': query_response, # Includes estimated_context_tokens from query_data
                 'stats': {
                     'total_time': round(total_time, 2),
                     'query_time': round(query_time, 2),
-                    'optimize_time': round(optimize_time if optimize else 0, 2),
-                    'rag_type': rag_type, # Use rag_type here
-                    'db_name': db_name if rag_type != 'direct' else None, # Include db_name used
+                    'optimize_time': round(optimize_time, 2),
+                    'rag_type': rag_type,
+                    'db_name': db_name if rag_type != 'direct' else None,
                     'hybrid': hybrid
                 }
             }
@@ -173,18 +162,18 @@ def handle_query():
         except Exception as e:
             error_msg = f"Error during query processing: {str(e)}"
             logging.error(f"{error_msg}\n{traceback.format_exc()}")
-            status_code = 500 # Explicitly define status code
+            status_code = 500
             response_data = {
                 'error': error_msg,
                 'status': 'error',
                 'request_id': request_id,
                 'traceback': traceback.format_exc() if DEBUG_MODE else None
             }
-            logging.error(f"Query {request_id}: Returning error response with status {status_code}: {response_data}") # Add log here
+            logging.error(f"Query {request_id}: Returning error response with status {status_code}: {response_data}")
             return jsonify(response_data), status_code
 
     except Exception as e:
-        error_msg = f"Error processing query: {str(e)}"
+        error_msg = f"Error processing query request: {str(e)}"
         logging.error(f"{error_msg}\n{traceback.format_exc()}")
         return jsonify({
             'error': error_msg,
@@ -193,12 +182,12 @@ def handle_query():
             'traceback': traceback.format_exc() if DEBUG_MODE else None
         }), 500
 
-# --- New Endpoint for Listing Models ---
-@app.route('/api/models/<provider>', methods=['POST']) # Use POST to send API key securely
+# --- Endpoint for Listing Models ---
+@app.route('/api/models/<provider>', methods=['POST'])
 def list_models(provider):
     """API endpoint to list available models for a given provider."""
     api_key = request.json.get('apiKey') if provider == 'gemini' else None
-    request_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f') # For logging
+    request_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     logging.info(f"Request {request_id}: Fetching models for provider: {provider}")
 
     models = []
@@ -209,29 +198,20 @@ def list_models(provider):
         if provider == 'gemini':
             if not api_key:
                 raise ValueError("API key is required to list Gemini models.")
-
             try:
                 genai.configure(api_key=api_key)
-                # List models and filter for those supporting 'generateContent'
                 for m in genai.list_models():
-                    # Check based on supported_generation_methods if available
                     if hasattr(m, 'supported_generation_methods') and 'generateContent' in m.supported_generation_methods:
-                         # Prefer 'models/model-name' format if available, else use name
-                         model_id = getattr(m, 'name', None) # Usually 'models/...'
+                         model_id = getattr(m, 'name', None)
                          if model_id:
                              models.append(model_id)
-                    # Fallback check if supported_generation_methods isn't present (older versions?)
                     elif not hasattr(m, 'supported_generation_methods'):
                          model_id = getattr(m, 'name', None)
                          if model_id:
                               models.append(model_id)
                               logging.warning(f"Model {model_id} missing supported_generation_methods, including anyway.")
-
-
                 if not models:
                      logging.warning(f"Request {request_id}: No Gemini models supporting 'generateContent' found with the provided key.")
-                     # Don't raise an error, just return empty list, maybe key is valid but has no models?
-
             except google_exceptions.PermissionDenied as e:
                 logging.error(f"Request {request_id}: Gemini API Permission Denied while listing models: {e}")
                 raise ValueError(f"Invalid Gemini API Key or insufficient permissions.") from e
@@ -239,59 +219,49 @@ def list_models(provider):
                 logging.error(f"Request {request_id}: Error listing Gemini models: {e}", exc_info=True)
                 raise ValueError(f"Failed to retrieve Gemini models: {e}") from e
 
-
         elif provider == 'local':
-            # Assuming LM Studio compatible API at LOCAL_LLM_API_URL/v1/models
-            # Construct the models URL carefully, removing potential /chat/completions suffix
             base_url = LOCAL_LLM_API_URL
             if base_url.endswith('/chat/completions'):
                 base_url = base_url[:-len('/chat/completions')]
             elif base_url.endswith('/'):
                  base_url = base_url[:-1]
-            # Construct the models URL correctly, checking if /v1 is already present
             if base_url.endswith('/v1'):
                 models_url = f"{base_url}/models"
             else:
-                # Append /v1/models if /v1 is not already part of the base URL
                 models_url = f"{base_url}/v1/models"
             logging.info(f"Request {request_id}: Attempting to fetch local models from: {models_url}")
             try:
-                response = requests.get(models_url, timeout=10) # Add timeout
-                response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+                response = requests.get(models_url, timeout=10)
+                response.raise_for_status()
                 data = response.json()
-                # Structure is often {'data': [{'id': 'model-name', ...}, ...]}
                 if 'data' in data and isinstance(data['data'], list):
                     models = [model.get('id') for model in data['data'] if model.get('id')]
                 else:
                      logging.warning(f"Request {request_id}: Unexpected format from local models endpoint ({models_url}): {data}")
                      raise ValueError("Received unexpected format from local models endpoint.")
-
                 if not models:
                      logging.warning(f"Request {request_id}: No models found at local endpoint: {models_url}")
-                     # Return empty list, server might be running but have no models loaded
-
             except requests.exceptions.RequestException as e:
                 logging.error(f"Request {request_id}: Error connecting to local LLM models endpoint ({models_url}): {e}")
                 raise ValueError(f"Could not connect to local LLM at {models_url}. Is the server running?") from e
             except Exception as e:
                 logging.error(f"Request {request_id}: Error parsing local LLM models response: {e}", exc_info=True)
                 raise ValueError(f"Failed to retrieve or parse local models: {e}") from e
-
         else:
             raise ValueError(f"Unsupported provider for listing models: {provider}")
 
     except ValueError as e:
         error_message = str(e)
-        status_code = 400 # Bad request (e.g., missing key, unsupported provider)
+        status_code = 400
         logging.error(f"Request {request_id}: Validation error listing models for {provider}: {error_message}")
     except Exception as e:
         error_message = f"An unexpected server error occurred: {str(e)}"
-        status_code = 500 # Internal server error
+        status_code = 500
         logging.error(f"Request {request_id}: Unexpected error listing models for {provider}: {error_message}", exc_info=True)
 
     response_data = {
         'provider': provider,
-        'models': sorted(list(set(models))) # Sort and remove duplicates
+        'models': sorted(list(set(models)))
     }
     if error_message:
         response_data['error'] = error_message
@@ -301,67 +271,50 @@ def list_models(provider):
 
     logging.info(f"Request {request_id}: Returning {len(response_data['models'])} models for {provider}. Status: {status_code}")
     return jsonify(response_data), status_code
-# --- End New Endpoint ---
+# --- End Listing Models Endpoint ---
 
-# --- New Endpoint for Listing Databases ---
+# --- Endpoint for Listing Databases ---
 @app.route('/api/list_dbs/<rag_type>', methods=['GET'])
 def get_list_dbs(rag_type):
-    """API endpoint to list available database names for a given RAG type."""
-    request_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f') # For logging
+    request_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     logging.info(f"Request {request_id}: Listing databases for rag_type: {rag_type}")
-
     valid_rag_types = ['rag', 'kag', 'lightrag']
     if rag_type not in valid_rag_types:
         logging.warning(f"Request {request_id}: Invalid rag_type '{rag_type}' requested.")
-        return jsonify({
-            'error': f'Invalid rag_type. Must be one of: {", ".join(valid_rag_types)}',
-            'status': 'error'
-        }), 400
-
+        return jsonify({'error': f'Invalid rag_type. Must be one of: {", ".join(valid_rag_types)}', 'status': 'error'}), 400
     try:
         db_names = list_available_dbs(rag_type)
         logging.info(f"Request {request_id}: Found {len(db_names)} databases for {rag_type}: {db_names}")
-        return jsonify({
-            'rag_type': rag_type,
-            'databases': db_names,
-            'status': 'success'
-        }), 200
+        return jsonify({'rag_type': rag_type, 'databases': db_names, 'status': 'success'}), 200
     except Exception as e:
         error_message = f"An unexpected server error occurred while listing databases for {rag_type}: {str(e)}"
         logging.error(f"Request {request_id}: {error_message}", exc_info=True)
         return jsonify({'error': error_message, 'status': 'error'}), 500
-# --- End New Endpoint ---
+# --- End Listing Databases Endpoint ---
 
-
+# --- Health Check Endpoint ---
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    """Health check endpoint to verify server status"""
     return jsonify({
         'status': 'healthy',
         'message': 'Server is running',
         'timestamp': datetime.now().isoformat(),
         'debug_mode': DEBUG_MODE
     })
+# --- End Health Check Endpoint ---
 
+# --- Clear Cache Endpoint ---
 @app.route('/api/clear_cache', methods=['POST'])
 def clear_cache():
-    """Clear the data service cache"""
     try:
         data_service.clear_cache()
         logging.info("Cache cleared successfully")
-        return jsonify({
-            'status': 'success',
-            'message': 'Cache cleared successfully',
-            'timestamp': datetime.now().isoformat()
-        })
+        return jsonify({'status': 'success', 'message': 'Cache cleared successfully', 'timestamp': datetime.now().isoformat()})
     except Exception as e:
         error_msg = f"Error clearing cache: {str(e)}"
         logging.error(f"{error_msg}\n{traceback.format_exc()}")
-        return jsonify({
-            'status': 'error',
-            'error': error_msg,
-            'traceback': traceback.format_exc() if DEBUG_MODE else None
-        }), 500
+        return jsonify({'status': 'error', 'error': error_msg, 'traceback': traceback.format_exc() if DEBUG_MODE else None}), 500
+# --- End Clear Cache Endpoint ---
 
 if __name__ == '__main__':
     logging.info("🚀 Initializing server...")
@@ -370,7 +323,7 @@ if __name__ == '__main__':
     logging.info("Available endpoints:")
     logging.info("- POST /api/query - Query the RAG system")
     logging.info("- POST /api/models/<provider> - List available models (gemini/local)")
-    logging.info("- GET /api/list_dbs/<rag_type> - List available databases (rag/kag/lightrag)") # Added log
+    logging.info("- GET /api/list_dbs/<rag_type> - List available databases (rag/kag/lightrag)")
     logging.info("- GET /api/health - Health check endpoint")
     logging.info("- POST /api/clear_cache - Clear data service cache")
     logging.info("- GET / - Frontend application")

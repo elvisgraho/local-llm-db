@@ -16,7 +16,6 @@
       console.log("Chats saved to localStorage.");
     } catch (error) {
       console.error("Error saving chats to localStorage:", error);
-      // Consider notifying the user or implementing a fallback
     }
   }
 
@@ -32,7 +31,6 @@
   }
 
   function _notifyHistoryListeners() {
-    // Provide a copy of the chat list to listeners
     const chatList = getChatList();
     historyListeners.forEach((listener) => listener(chatList));
   }
@@ -49,10 +47,9 @@
     if (
       chat &&
       chat.title === "New Chat" &&
-      chat.messages.length > 0 && // Ensure message was actually added
-      !newMessageData.isUser // Only update on first assistant message
+      chat.messages.length > 0 &&
+      !newMessageData.isUser
     ) {
-      // Find the first assistant message to base the title on
       const firstAssistantMessage = chat.messages.find((m) => !m.isUser);
       if (firstAssistantMessage) {
         const content = firstAssistantMessage.content || "";
@@ -60,16 +57,15 @@
         chat.title =
           firstWords + (content.length > firstWords.length ? "..." : "");
         console.log(`Chat title updated to: "${chat.title}"`);
-        return true; // Indicate title was updated
+        return true;
       }
     }
-    return false; // Title not updated
+    return false;
   }
 
   // --- Public API ---
 
   function getChatList() {
-    // Return only ID and title, sorted by timestamp descending
     return [...chats]
       .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
       .map((chat) => ({ id: chat.id, title: chat.title }));
@@ -97,22 +93,21 @@
     _saveChats();
     console.log("New chat created:", chatId);
 
-    // Set as current and notify
     currentChatId = chatId;
-    _notifyHistoryListeners(); // New chat added to list
-    _notifyActiveChatListeners(); // Active chat changed
+    _notifyHistoryListeners();
+    _notifyActiveChatListeners();
     return chatId;
   }
 
   function switchToChat(chatId) {
-    if (chatId === currentChatId) return; // No change
+    if (chatId === currentChatId) return;
 
     const chatExists = chats.some((c) => c.id === chatId);
     if (!chatExists) {
       console.error("Cannot switch to non-existent chat:", chatId);
-      // Optionally switch to the first available chat or create new
       if (chats.length > 0) {
-        switchToChat(chats[0].id); // Switch to the first one (after sorting)
+        const sortedList = getChatList();
+        switchToChat(sortedList[0].id);
       } else {
         createNewChat();
       }
@@ -121,8 +116,7 @@
 
     currentChatId = chatId;
     console.log("Switched to chat:", currentChatId);
-    _notifyActiveChatListeners(); // Notify components about the change
-    // History listeners are not notified as the list itself didn't change
+    _notifyActiveChatListeners();
   }
 
   function deleteChat(chatId) {
@@ -133,29 +127,25 @@
     }
 
     const deletedChatTitle = chats[chatIndex].title;
-    chats.splice(chatIndex, 1); // Remove chat from array
+    chats.splice(chatIndex, 1);
     _saveChats();
     console.log(`Deleted chat "${deletedChatTitle}" (${chatId})`);
 
     let nextChatId = null;
     if (currentChatId === chatId) {
-      // If deleted chat was current, switch to most recent remaining chat
       if (chats.length > 0) {
-        const sortedChats = getChatList(); // Gets sorted list
+        const sortedChats = getChatList();
         nextChatId = sortedChats[0].id;
       } else {
-        // No chats left, create a new one
-        nextChatId = createNewChat(); // This will set currentChatId and notify
-        return; // createNewChat already notified
+        nextChatId = createNewChat();
+        return;
       }
     }
 
-    // Notify history listeners first (list has changed)
     _notifyHistoryListeners();
 
-    // If we needed to switch chats, do it now and notify active listeners
     if (nextChatId && nextChatId !== currentChatId) {
-      switchToChat(nextChatId); // This will notify active listeners
+      switchToChat(nextChatId);
     }
   }
 
@@ -166,25 +156,21 @@
     }
     const chat = getCurrentChat();
     if (chat) {
-      // Ensure message has a unique ID if not provided
       if (!messageData.messageId) {
         messageData.messageId = `msg_${Date.now()}_${Math.random()
           .toString(36)
           .substring(2, 7)}`;
       }
       chat.messages.push(messageData);
-      chat.timestamp = new Date().toISOString(); // Update chat timestamp on new message
+      chat.timestamp = new Date().toISOString();
 
-      const titleUpdated = _updateChatTitleIfNeeded(chat, messageData);
-
+      _updateChatTitleIfNeeded(chat, messageData);
       _saveChats();
       console.log(
         "Message added to chat:",
         currentChatId,
         messageData.messageId
       );
-
-      // Notify history listeners (content changed, maybe title/order changed)
       _notifyHistoryListeners();
     } else {
       console.error("Cannot add message: Current chat object not found.");
@@ -221,17 +207,15 @@
   function initialize() {
     _loadChats();
     if (chats.length === 0) {
-      createNewChat(); // Creates first chat and sets it as current
+      createNewChat();
     } else {
-      // Set the most recent chat as current initially, but don't trigger full switch logic
-      const sortedList = getChatList(); // Gets sorted list
+      const sortedList = getChatList();
       currentChatId = sortedList[0].id;
       console.log("ChatManager initialized. Current chat:", currentChatId);
-      // Components will read initial state on mount
     }
   }
 
-  initialize(); // Initialize on script load
+  initialize();
 
   // --- Global Exposure ---
   window.chatManager = {
