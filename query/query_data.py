@@ -4,7 +4,6 @@ from typing import Any, Optional, List, Dict, Union # Added for type hinting
 from langchain.prompts import ChatPromptTemplate
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain.schema import Document # Added import
-from query.database_paths import CHROMA_PATH
 from query.data_service import data_service
 from query.templates import (
     RAG_ONLY_TEMPLATE,
@@ -394,11 +393,7 @@ def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] 
         # BM25 and reranker will be accessed by the helper function
         
         # Verify database exists and has data
-        # Note: BM25 index loading depends on ChromaDB, so this check is important
-        if not os.path.exists(os.path.join(str(CHROMA_PATH), "chroma.sqlite3")):
-            logger.error("RAG database not found")
-            return {"text": "RAG database not found. Please run populate_rag.py first.", "sources": []}
-            
+        # Note: BM25 index loading depends on ChromaDB. data_service handles loading.
         # Perform retrieval and reranking using the helper function
         final_docs, sources = _perform_hybrid_retrieval_and_rerank(
             query_text, db, data_service.bm25_index, data_service.reranker
@@ -423,9 +418,7 @@ def query_rag(query_text: str, hybrid: bool = False, llm_config: Optional[Dict] 
         response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
 
         # Sources are obtained from the helper function
-        # Ensure database is persisted after query
-        data_service.persist_chroma_db()
-        
+        # Persistence is handled by ChromaDB automatically.
         return {"text": response_text, "sources": sources}
     except Exception as e:
         logger.error(f"Error in RAG query: {str(e)}", exc_info=True)
@@ -456,13 +449,13 @@ def query_lightrag(
         Dict[str, Union[str, List[str]]]: The response containing text and sources.
     """
     try:
-        logger.debug("Processing light RAG query")
-        # Initialize only vectorstore and QA chain
-        _ = data_service.vectorstore
-        _ = data_service.qa_chain
-        
+        logger.debug("Processing light RAG query using ChromaDB") # Updated log
+        # Initialize the LightRAG ChromaDB instance
+        db = data_service.lightrag_chroma_db # Use the specific lightrag chroma db
+        # _ = data_service.qa_chain # Removed unused QA chain initialization
+
         # Get relevant documents
-        results_with_scores = data_service.vectorstore.similarity_search_with_score(query_text, k=RAG_MAX_DOCUMENTS)
+        results_with_scores = db.similarity_search_with_score(query_text, k=RAG_MAX_DOCUMENTS) # Use db variable
 
         if not results_with_scores:
             logger.warning("No relevant information found in the database (initial search)")
@@ -512,18 +505,15 @@ def query_lightrag(
             else:
                 logger.debug(f"Missing or invalid source in document metadata: {doc.metadata}")
         
-        # Determine how to get the response
-        if conversation_history or hybrid:
-            # Always use get_llm_response if history is present or hybrid is explicitly requested
-            template = LIGHTRAG_HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE # Use RAG_ONLY if history but not hybrid
-            prompt_template = ChatPromptTemplate.from_template(template)
-            prompt = prompt_template.format(context=context_text, question=query_text)
-            response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
-        else:
-            # Use regular QA chain only if no history and not hybrid mode (for potential speed)
-            # Note: QA chain does not support conversation history or llm_config easily
-            logger.info("Using QA chain for lightrag query (no history, non-hybrid)")
-            response_text = data_service.qa_chain.invoke({"query": query_text})["result"]
+        # Always construct prompt manually using retrieved context and call LLM directly
+        # This avoids the FAISS-dependent qa_chain entirely for lightrag mode.
+        template = LIGHTRAG_HYBRID_TEMPLATE if hybrid else RAG_ONLY_TEMPLATE
+        prompt_template = ChatPromptTemplate.from_template(template)
+
+        prompt = prompt_template.format(context=context_text, question=query_text)
+        logger.debug(logging.DEBUG, f"Prompt for LightRAG: {prompt}") # Log the prompt for debugging
+        logger.debug(f"Using template: {'Hybrid' if hybrid else 'RAG Only'} for LightRAG")
+        response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=conversation_history)
 
         return {"text": response_text, "sources": sources}
     except Exception as e:

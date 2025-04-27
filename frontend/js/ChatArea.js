@@ -61,7 +61,76 @@ function ChatMessage({ message }) {
         position: "relative",
       },
     },
-    e(Box, { ref: contentRef, className: "message-content-mui" })
+    e(Box, { ref: contentRef, className: "message-content-mui" }),
+    // Add source rendering logic here
+    message.sources &&
+      message.sources.length > 0 &&
+      e(
+        Box,
+        {
+          sx: {
+            mt: 1, // Margin top to separate from main content
+            pt: 1, // Padding top
+            borderTop: 1, // Separator line
+            borderColor: "divider",
+            fontSize: "0.8rem", // Smaller font size
+            color: isUser ? "primary.contrastText" : "text.secondary", // Adjust color based on sender
+            opacity: 0.8, // Slightly faded
+          },
+        },
+        e(
+          Typography,
+          {
+            variant: "caption",
+            component: "strong",
+            sx: { display: "block", mb: 0.5 },
+          },
+          "Sources:"
+        ),
+        e(
+          "ul",
+          { style: { paddingLeft: "20px", margin: 0 } },
+          message.sources.map((source, index) =>
+            e(
+              "li",
+              { key: index },
+              // Render source path with a copy button
+              typeof source === "string"
+                ? e(
+                    Box,
+                    { sx: { display: "flex", alignItems: "center", gap: 0.5 } },
+                    e("span", { style: { wordBreak: "break-all" } }, source), // Display path
+                    e(
+                      Tooltip,
+                      { title: "Copy path" },
+                      e(
+                        IconButton,
+                        {
+                          size: "small",
+                          onClick: () => {
+                            navigator.clipboard
+                              .writeText(source)
+                              .then(() => console.log("Path copied:", source)) // Optional: Add visual feedback later
+                              .catch((err) =>
+                                console.error("Failed to copy path:", err)
+                              );
+                          },
+                          sx: {
+                            padding: "2px", // Smaller padding
+                            color: "inherit", // Inherit color
+                            opacity: 0.7, // Slightly faded
+                            "&:hover": { opacity: 1 },
+                          },
+                        },
+                        e(Icon, { sx: { fontSize: "1rem" } }, "content_copy") // Smaller icon
+                      )
+                    )
+                  )
+                : JSON.stringify(source) // Fallback for non-string sources
+            )
+          )
+        )
+      )
   );
 }
 

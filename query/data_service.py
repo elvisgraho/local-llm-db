@@ -27,7 +27,13 @@ from langchain_chroma import Chroma
 from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from langchain.llms.base import LLM
-from query.database_paths import CHROMA_PATH, GRAPHRAG_GRAPH_PATH, KAG_GRAPH_PATH, VECTORSTORE_PATH
+from query.database_paths import (
+    DEFAULT_CHROMA_PATH,
+    DEFAULT_GRAPHRAG_GRAPH_PATH,
+    DEFAULT_KAG_GRAPH_PATH,
+    DEFAULT_VECTORSTORE_PATH,
+    get_db_paths # Import get_db_paths
+)
 from query.llm_service import get_llm_response
 from training.get_embedding_function import get_embedding_function, LMStudioEmbeddings
 
@@ -72,8 +78,9 @@ class DataService:
         _instance (Optional[DataService]): The singleton instance.
         _initialized (bool): Whether the instance has been initialized.
         _embedding_function (Optional[LMStudioEmbeddings]): The embedding function.
-        _chroma_db (Optional[Chroma]): The Chroma vector store.
-        _vectorstore (Optional[FAISS]): The FAISS vector store.
+        _chroma_db (Optional[Chroma]): The default Chroma vector store (for 'rag').
+        _lightrag_chroma_db (Optional[Chroma]): The Chroma vector store for 'lightrag'.
+        _vectorstore (Optional[FAISS]): The FAISS vector store (legacy/unused?).
         _graphrag_graph (Optional[nx.DiGraph]): The GraphRAG graph.
         _kag_graph (Optional[nx.DiGraph]): The KAG graph.
         _qa_chain (Optional[RetrievalQA]): The QA chain.
@@ -100,8 +107,9 @@ class DataService:
         """Initialize the data service if not already initialized."""
         if not self._initialized:
             self._embedding_function: Optional[LMStudioEmbeddings] = None
-            self._chroma_db: Optional[Chroma] = None
-            self._vectorstore: Optional[FAISS] = None
+            self._chroma_db: Optional[Chroma] = None # For default 'rag'
+            self._lightrag_chroma_db: Optional[Chroma] = None # For 'lightrag'
+            self._vectorstore: Optional[FAISS] = None # Legacy FAISS path
             self._graphrag_graph: Optional[nx.DiGraph] = None
             self._kag_graph: Optional[nx.DiGraph] = None
             self._qa_chain: Optional[RetrievalQA] = None
@@ -134,44 +142,75 @@ class DataService:
         """
         if self._chroma_db is None:
             # Ensure the database directory exists
-            os.makedirs(str(CHROMA_PATH), exist_ok=True)
+            os.makedirs(str(DEFAULT_CHROMA_PATH), exist_ok=True)
             
             # Check if database exists
-            db_exists = os.path.exists(str(CHROMA_PATH)) and os.path.exists(os.path.join(str(CHROMA_PATH), "chroma.sqlite3"))
+            db_exists = os.path.exists(str(DEFAULT_CHROMA_PATH)) and os.path.exists(os.path.join(str(DEFAULT_CHROMA_PATH), "chroma.sqlite3"))
             
             try:
                 if db_exists:
                     # Load existing database
                     self._chroma_db = Chroma(
-                        persist_directory=str(CHROMA_PATH),
+                        persist_directory=str(DEFAULT_CHROMA_PATH),
                         embedding_function=self.embedding_function
                     )
                 else:
                     # Create new database
                     self._chroma_db = Chroma(
-                        persist_directory=str(CHROMA_PATH),
+                        persist_directory=str(DEFAULT_CHROMA_PATH),
                         embedding_function=self.embedding_function
                     )
-                    # Ensure the database is created
-                    self._chroma_db.persist()
+                    # Persistence is typically handled automatically by ChromaDB
+                    # when initialized with a persist_directory.
+                    # No explicit persist() call needed here.
             except Exception as e:
                 print(f"Error initializing Chroma database: {e}")
                 raise
                 
         return self._chroma_db
 
-    def persist_chroma_db(self) -> None:
-        """Explicitly persist the Chroma database.
-        
+    @property
+    def lightrag_chroma_db(self) -> Chroma:
+        """Get or initialize the Chroma database specifically for LightRAG.
+
+        Returns:
+            Chroma: The LightRAG Chroma database.
+
         Raises:
-            Exception: If there's an error persisting the database.
+            Exception: If there's an error initializing the database.
         """
-        if self._chroma_db is not None:
+        if self._lightrag_chroma_db is None:
+            db_name = 'lightrag' # Hardcode for this property
+            db_paths = get_db_paths(db_name)
+            # Use chroma_path, fallback to vectorstore_path if needed for older configs
+            lightrag_path_str = str(db_paths.get("chroma_path", db_paths.get("vectorstore_path")))
+
+            if not lightrag_path_str:
+                 raise ValueError(f"Could not determine Chroma path for database '{db_name}'")
+
+            # Ensure the database directory exists
+            os.makedirs(lightrag_path_str, exist_ok=True)
+
+            # Check if database exists (basic check)
+            db_exists = os.path.exists(lightrag_path_str) and os.path.exists(os.path.join(lightrag_path_str, "chroma.sqlite3"))
+
             try:
-                self._chroma_db.persist()
+                print(f"Attempting to load LightRAG ChromaDB from: {lightrag_path_str}")
+                # Always try to load, Chroma handles creation if directory is empty/new
+                self._lightrag_chroma_db = Chroma(
+                    persist_directory=lightrag_path_str,
+                    embedding_function=self.embedding_function
+                )
+                print(f"LightRAG ChromaDB loaded successfully from {lightrag_path_str}")
             except Exception as e:
-                print(f"Error persisting Chroma database: {e}")
+                print(f"Error initializing LightRAG Chroma database at {lightrag_path_str}: {e}")
                 raise
+
+        return self._lightrag_chroma_db
+
+    # Removed persist_chroma_db method as explicit persistence calls
+    # are likely unnecessary with current ChromaDB versions when using
+    # persist_directory during initialization.
 
     @property
     def bm25_index(self) -> Optional[BM25Okapi]:
@@ -231,7 +270,7 @@ class DataService:
         """
         if self._vectorstore is None:
             self._vectorstore = FAISS.load_local(
-                VECTORSTORE_PATH,
+                DEFAULT_VECTORSTORE_PATH,
                 self.embedding_function,
                 allow_dangerous_deserialization=True  # Safe since we created the file ourselves
             )
@@ -245,7 +284,7 @@ class DataService:
             nx.DiGraph: The GraphRAG graph.
         """
         if self._graphrag_graph is None:
-            with open(GRAPHRAG_GRAPH_PATH, 'r') as f:
+            with open(DEFAULT_GRAPHRAG_GRAPH_PATH, 'r') as f:
                 graph_data = json.load(f)
             
             self._graphrag_graph = nx.DiGraph()
@@ -263,7 +302,7 @@ class DataService:
             nx.DiGraph: The KAG graph.
         """
         if self._kag_graph is None:
-            with open(KAG_GRAPH_PATH, 'r') as f:
+            with open(DEFAULT_KAG_GRAPH_PATH, 'r') as f:
                 graph_data = json.load(f)
             
             self._kag_graph = nx.DiGraph()
@@ -312,6 +351,7 @@ class DataService:
         """Clear all cached resources."""
         self._embedding_function = None
         self._chroma_db = None
+        self._lightrag_chroma_db = None # Clear lightrag cache too
         self._vectorstore = None
         self._graphrag_graph = None
         self._kag_graph = None
@@ -325,9 +365,15 @@ def initialize_data_service() -> None:
     """Initialize the data service by pre-loading resources."""
     print("Initializing data service...")
     # Access properties to trigger lazy loading
+    print("Initializing embedding function...")
     _ = data_service.embedding_function
+    print("Initializing default Chroma DB...")
     _ = data_service.chroma_db
-    _ = data_service.vectorstore
+    print("Initializing LightRAG Chroma DB...")
+    _ = data_service.lightrag_chroma_db # Initialize lightrag db too
+    # print("Initializing FAISS vectorstore (legacy)...") # Keep FAISS initialization commented unless needed
+    # _ = data_service.vectorstore
+    print("Initializing GraphRAG graph...")
     _ = data_service.graphrag_graph
     _ = data_service.kag_graph
     _ = data_service.qa_chain

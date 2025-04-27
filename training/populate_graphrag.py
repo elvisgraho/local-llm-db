@@ -1,3 +1,10 @@
+import sys
+import os
+from pathlib import Path
+
+# Add project root to the Python path
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
 """
 Graph-based RAG Implementation
 
@@ -16,23 +23,18 @@ The GraphRAG implementation provides:
 """
 
 import argparse
-import os
 import logging
-from typing import List, Dict, Any, Optional
 from pathlib import Path
 from tqdm import tqdm
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
 from langchain_community.vectorstores import FAISS
 from get_embedding_function import get_embedding_function
-from extract_metadata_llm import add_metadata_to_document, format_source_filename
-from query.database_paths import VECTORSTORE_PATH, GRAPHRAG_DB_DIR, GRAPHRAG_GRAPH_PATH
-from load_documents import load_documents, process_single_file, extract_metadata
-import re
+from query.database_paths import get_db_paths
+from load_documents import load_documents
+from training.processing_utils import validate_metadata, split_document, initialize_vectorstore
 import shutil
 import json
 import networkx as nx
-from datetime import datetime
 from sklearn.metrics.pairwise import cosine_similarity
 
 # Configure logging
@@ -42,47 +44,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def validate_metadata(metadata: Dict[str, Any]) -> bool:
-    """Validate document metadata.
-    
-    Args:
-        metadata (Dict[str, Any]): Document metadata
-        
-    Returns:
-        bool: True if metadata is valid, False otherwise
-    """
-    if not metadata or not isinstance(metadata, dict):
-        return False
-        
-    # Required fields
-    required_fields = ["source", "file_name", "file_type"]
-    if not all(field in metadata for field in required_fields):
-        return False
-        
-    # Validate source
-    if not metadata["source"] or not isinstance(metadata["source"], str):
-        return False
-        
-    # Validate file name
-    if not metadata["file_name"] or not isinstance(metadata["file_name"], str):
-        return False
-        
-    # Validate file type
-    if not metadata["file_type"] or not isinstance(metadata["file_type"], str):
-        return False
-        
-    return True
+# --- validate_metadata function removed, imported from processing_utils ---
 
-def load_graph() -> nx.DiGraph:
+def load_graph(graph_path: Path) -> nx.DiGraph:
     """Load existing graph or create new one.
-    
+
+    Args:
+        graph_path (Path): Path to the graph JSON file.
+
     Returns:
         nx.DiGraph: The loaded or new graph
     """
     try:
-        if os.path.exists(GRAPHRAG_GRAPH_PATH):
-            logger.info("Loading existing knowledge graph")
-            with open(GRAPHRAG_GRAPH_PATH, 'r') as f:
+        if graph_path.exists():
+            logger.info(f"Loading existing knowledge graph from {graph_path}")
+            with open(graph_path, 'r') as f:
                 graph_data = json.load(f)
                 graph = nx.DiGraph()
                 for node in graph_data['nodes']:
@@ -90,22 +66,24 @@ def load_graph() -> nx.DiGraph:
                 for edge in graph_data['edges']:
                     graph.add_edge(edge['source'], edge['target'], **edge['data'])
         else:
-            logger.info("Creating new knowledge graph")
+            logger.info(f"Creating new knowledge graph at {graph_path}")
             graph = nx.DiGraph()
         return graph
     except Exception as e:
-        logger.error(f"Error loading graph: {str(e)}")
+        logger.error(f"Error loading graph from {graph_path}: {str(e)}")
         return nx.DiGraph()
 
-def save_graph(graph: nx.DiGraph):
+def save_graph(graph: nx.DiGraph, graph_path: Path, db_dir: Path):
     """Save the graph structure to disk.
-    
+
     Args:
-        graph (nx.DiGraph): The graph to save
+        graph (nx.DiGraph): The graph to save.
+        graph_path (Path): Path to save the graph JSON file.
+        db_dir (Path): Directory to ensure exists.
     """
     try:
-        os.makedirs(GRAPHRAG_DB_DIR, exist_ok=True)
-        
+        db_dir.mkdir(parents=True, exist_ok=True) # Use the passed db_dir
+
         # Convert graph to JSON-serializable format
         graph_data = {
             "nodes": [{"id": n, "data": d} for n, d in graph.nodes(data=True)],
@@ -113,101 +91,14 @@ def save_graph(graph: nx.DiGraph):
         }
         
         # Save to file
-        with open(GRAPHRAG_GRAPH_PATH, "w") as f:
+        with open(graph_path, "w") as f: # Use the passed graph_path
             json.dump(graph_data, f, indent=2)
-        
-        logger.info(f"Saved knowledge graph to {GRAPHRAG_GRAPH_PATH}")
-    except Exception as e:
-        logger.error(f"Error saving graph: {str(e)}")
 
-def split_document(doc: Document, add_tags_llm: bool, max_chunk_size: int = 1500, max_total_chunks: int = 1000) -> List[Document]:
-    """
-    Split a single document into chunks with semantic boundaries.
-    Optionally adds LLM-based metadata if add_tags_llm is True and no tags found in content.
-    
-    Args:
-        doc (Document): The document to split
-        add_tags_llm (bool): Whether to use LLM for tag extraction.
-        doc (Document): The document to split
-        max_chunk_size (int): Maximum size of each chunk
-        max_total_chunks (int): Maximum total number of chunks
-        
-    Returns:
-        List[Document]: List of document chunks
-    """
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=max_chunk_size,
-        chunk_overlap=200,
-        length_function=len,
-        is_separator_regex=False,
-        separators=[
-            "\n\n## ",  # Main headers
-            "\n\n### ",  # Subheaders
-            "\n\n#### ",  # Sub-subheaders
-            "\n\n",     # Double newlines
-            "\n```",    # Code blocks
-            "\n",       # Single newlines
-            "\n**",     # Bold text
-            " ",        # Spaces
-            ""         # No separator
-        ],
-        keep_separator=True
-    )
-    
-    try:
-        # Pre-process content
-        content = doc.page_content
-        
-        # Normalize formatting
-        content = re.sub(r'^\s*[-•]\s*', '• ', content, flags=re.MULTILINE)
-        content = re.sub(r'^\s*(\d+\.)\s*', r'\1 ', content, flags=re.MULTILINE)
-        content = re.sub(r'```(\w+)?\n', r'```\n', content)
-        
-        # Update document content
-        doc.page_content = content
-        
-        # Split the document
-        doc_chunks = text_splitter.split_documents([doc])
-        
-        # Limit total chunks
-        if len(doc_chunks) > max_total_chunks:
-            logger.warning(f"Document {doc.metadata.get('source', 'unknown')} has too many chunks ({len(doc_chunks)}). Limiting to {max_total_chunks} chunks.")
-            doc_chunks = doc_chunks[:max_total_chunks]
-        
-        # Process chunks with progress bar
-        processed_chunks = []
-        total_chunks = len(doc_chunks)
-        source = doc.metadata.get("source", "unknown")
-        # Truncate source filename for display
-        display_source = format_source_filename(source)
-        
-        with tqdm(total=total_chunks, desc=f"Processing {display_source}", unit="chunk", leave=False) as pbar:
-            for chunk in doc_chunks:
-                try:
-                    # Add metadata (from content or LLM based on flag)
-                    chunk = add_metadata_to_document(chunk, add_tags_llm=add_tags_llm)
-                    
-                    # Add file metadata (ensure it doesn't overwrite extracted/LLM tags)
-                    chunk.metadata.update(extract_metadata(chunk.metadata.get("source", "")))
-                    
-                    # Add chunk-specific metadata
-                    chunk.metadata.update({
-                        "chunk_index": len(processed_chunks),
-                        "total_chunks": len(doc_chunks),
-                        "processed_at": datetime.now().isoformat()
-                    })
-                    
-                    processed_chunks.append(chunk)
-                    pbar.update(1)
-                except Exception as e:
-                    logger.error(f"Error processing chunk from {source}: {str(e)}")
-                    continue
-            
-        return processed_chunks
-            
+        logger.info(f"Saved knowledge graph to {graph_path}")
     except Exception as e:
-        logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
-        return []
+        logger.error(f"Error saving graph to {graph_path}: {str(e)}")
+
+# --- split_document function removed, imported from processing_utils ---
 
 def process_document(doc: Document, graph: nx.DiGraph, vectorstore: FAISS, add_tags_llm: bool) -> None:
     """Process a single document, split it, add metadata, and update the knowledge graph and vectorstore.
@@ -351,76 +242,56 @@ def process_document(doc: Document, graph: nx.DiGraph, vectorstore: FAISS, add_t
     except Exception as e:
         logger.error(f"Error processing document: {str(e)}", exc_info=True)
 
-def clear_graph():
-    """Clear the GraphRAG database."""
+def clear_graph(db_dir: Path):
+    """Clear the GraphRAG database directory."""
     try:
-        if os.path.exists(GRAPHRAG_DB_DIR):
-            for file in os.listdir(GRAPHRAG_DB_DIR):
-                file_path = os.path.join(GRAPHRAG_DB_DIR, file)
+        if db_dir.exists():
+            logger.info(f"Clearing GraphRAG database directory: {db_dir}")
+            for item in db_dir.iterdir():
                 try:
-                    if os.path.isfile(file_path):
-                        os.remove(file_path)
-                    elif os.path.isdir(file_path):
-                        shutil.rmtree(file_path)
+                    if item.is_file():
+                        item.unlink()
+                    elif item.is_dir():
+                        shutil.rmtree(item)
                 except Exception as e:
-                    logger.error(f"Error removing {file_path}: {str(e)}")
-            logger.info("Cleared GraphRAG database")
+                    logger.error(f"Error removing {item}: {str(e)}")
+            logger.info(f"Cleared GraphRAG database directory: {db_dir}")
+        else:
+            logger.info(f"GraphRAG database directory {db_dir} does not exist, nothing to clear.")
     except Exception as e:
-        logger.error(f"Error clearing graph: {str(e)}")
+        logger.error(f"Error clearing graph directory {db_dir}: {str(e)}")
 
-def initialize_vectorstore(reset: bool = False) -> Optional[FAISS]:
-    """Initialize or load the FAISS vectorstore.
-    
-    Args:
-        reset (bool): Whether to reset the vectorstore
-        
-    Returns:
-        Optional[FAISS]: The initialized vectorstore or None if initialization failed
-    """
-    try:
-        if reset:
-            logger.info("Resetting vectorstore...")
-            if os.path.exists(VECTORSTORE_PATH):
-                shutil.rmtree(VECTORSTORE_PATH)
-            
-        # Create initial vectorstore
-        vectorstore = FAISS.from_texts(
-            ["Initial empty document"],
-            embedding_function=get_embedding_function(),
-            metadatas=[{
-                "source": "initial",
-                "file_name": "initial.txt",
-                "file_type": "text",
-                "processed_at": datetime.now().isoformat()
-            }]
-        )
-        
-        # Save initial vectorstore
-        vectorstore.save_local(VECTORSTORE_PATH)
-        return vectorstore
-        
-    except Exception as e:
-        logger.error(f"Error initializing vectorstore: {str(e)}")
-        return None
+# --- initialize_vectorstore function removed, imported from processing_utils ---
 
 def main():
     """Main function to populate the GraphRAG database."""
     parser = argparse.ArgumentParser(description="Populate the GraphRAG database (Graph + FAISS).")
+    parser.add_argument("--name", type=str, default="graphrag", help="Name for the database instance (determines directory).")
     parser.add_argument("--reset", action="store_true", help="Reset the database before processing.")
     parser.add_argument("--add-tags", action="store_true", help="Enable LLM-based tag generation if tags are not found in the document content.")
     args = parser.parse_args()
-    
+
+    # --- Get dynamic paths based on name ---
+    db_paths = get_db_paths(args.name)
+    db_dir = db_paths["db_dir"]
+    graph_path = db_paths["graph_path"]
+    vectorstore_path = db_paths["vectorstore_path"]
+    logger.info(f"Using database name: {args.name}")
+    logger.info(f"Database directory: {db_dir}")
+    logger.info(f"Graph path: {graph_path}")
+    logger.info(f"Vectorstore path: {vectorstore_path}")
+
     try:
-        # Initialize graph and vectorstore
+        # Initialize graph and vectorstore using dynamic paths
         if args.reset:
-            clear_graph()
-            logger.info("Cleared existing GraphRAG database")
-            
-        graph = load_graph()
-        vectorstore = initialize_vectorstore(args.reset)
-        
+            clear_graph(db_dir) # Pass db_dir
+            logger.info(f"Cleared existing GraphRAG database '{args.name}'")
+
+        graph = load_graph(graph_path) # Pass graph_path
+        vectorstore = initialize_vectorstore(vectorstore_path, args.reset) # Pass vectorstore_path
+
         if not vectorstore:
-            logger.error("Failed to initialize vectorstore")
+            logger.error(f"Failed to initialize vectorstore for '{args.name}'")
             return
             
         # Process documents
@@ -448,12 +319,12 @@ def main():
                         "failed": failed_docs
                     })
                     
-        # Save final state
-        save_graph(graph)
-        vectorstore.save_local(VECTORSTORE_PATH)
-        
+        # Save final state using dynamic paths
+        save_graph(graph, graph_path, db_dir) # Pass paths
+        vectorstore.save_local(str(vectorstore_path)) # FAISS expects string path
+
         # Log statistics
-        logger.info(f"GraphRAG database population completed:")
+        logger.info(f"GraphRAG database population completed for '{args.name}':")
         logger.info(f"- Total documents: {total_docs}")
         logger.info(f"- Successfully processed: {processed_docs}")
         logger.info(f"- Failed: {failed_docs}")
@@ -463,10 +334,10 @@ def main():
         if processed_docs == 0:
             logger.error("No documents were successfully processed")
         else:
-            logger.info("Successfully populated GraphRAG database")
-            
+            logger.info(f"Successfully populated GraphRAG database '{args.name}'")
+
     except Exception as e:
-        logger.error(f"Error populating GraphRAG database: {str(e)}", exc_info=True)
+        logger.error(f"Error populating GraphRAG database '{args.name}': {str(e)}", exc_info=True)
         raise
 
 if __name__ == "__main__":

@@ -239,7 +239,12 @@ def list_models(provider):
                 base_url = base_url[:-len('/chat/completions')]
             elif base_url.endswith('/'):
                  base_url = base_url[:-1]
-            models_url = f"{base_url}/v1/models"
+            # Construct the models URL correctly, checking if /v1 is already present
+            if base_url.endswith('/v1'):
+                models_url = f"{base_url}/models"
+            else:
+                # Append /v1/models if /v1 is not already part of the base URL
+                models_url = f"{base_url}/v1/models"
             logging.info(f"Request {request_id}: Attempting to fetch local models from: {models_url}")
             try:
                 response = requests.get(models_url, timeout=10) # Add timeout

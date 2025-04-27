@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 LM_STUDIO_API_URL = "http://localhost:1234/v1/embeddings"  # Change if needed
-EMBEDDING_MODEL_NAME = "text-embedding-mxbai-embed-large-v1"  # Update this!
+EMBEDDING_MODEL_NAME = "text-embedding-embedder_collection"  # Update this!
 
 
 class LMStudioEmbeddings(Embeddings):

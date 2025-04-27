@@ -222,6 +222,7 @@ window.sendQuery = async function (
       messageId: `msg_${Date.now()}_${Math.random()
         .toString(36)
         .substring(2, 7)}`,
+      sources: responseData.data?.sources || [], // Add sources here
     };
     window.chatManager.addMessageToHistory(assistantMessage);
     console.log("Assistant message should now be in history via chatManager."); // Log after adding

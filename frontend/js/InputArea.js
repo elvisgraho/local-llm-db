@@ -117,15 +117,20 @@ function InputArea({ queryMode, optimize, hybrid }) {
       e(
         Tooltip,
         { title: "Send Message" },
+        // Wrap IconButton in a span to allow Tooltip events when disabled
         e(
-          IconButton,
-          {
-            color: "primary",
-            onClick: handleSend,
-            disabled: !inputValue.trim(),
-            size: "medium",
-          },
-          e(Icon, null, "send") // Assumes Icon component is available globally
+          "span",
+          null,
+          e(
+            IconButton,
+            {
+              color: "primary",
+              onClick: handleSend,
+              disabled: !inputValue.trim(),
+              size: "medium",
+            },
+            e(Icon, null, "send") // Assumes Icon component is available globally
+          )
         )
       )
     ),

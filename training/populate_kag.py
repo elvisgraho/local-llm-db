@@ -1,3 +1,10 @@
+import sys
+import os
+from pathlib import Path
+
+# Add project root to the Python path
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
 """
 Knowledge-Augmented Generation (KAG) Implementation
 
@@ -15,22 +22,17 @@ The KAG implementation provides:
 - Hybrid query interface
 """
 
-import os
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List
 from pathlib import Path
 from tqdm import tqdm
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
-from langchain_community.vectorstores import FAISS
-from get_embedding_function import get_embedding_function
-from extract_metadata_llm import add_metadata_to_document, format_source_filename
-from query.database_paths import VECTORSTORE_PATH, KAG_DB_DIR
-from load_documents import load_documents, process_single_file, extract_metadata
+from query.database_paths import get_db_paths # Updated import
+from load_documents import load_documents, extract_metadata
+from training.processing_utils import validate_metadata, split_document, initialize_vectorstore
 import re
 import argparse
 import shutil
-import json
 from datetime import datetime
 
 # Configure logging
@@ -40,38 +42,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def validate_metadata(metadata: Dict[str, Any]) -> bool:
-    """Validate document metadata.
-    
-    Args:
-        metadata (Dict[str, Any]): Document metadata
-        
-    Returns:
-        bool: True if metadata is valid, False otherwise
-    """
-    if not metadata or not isinstance(metadata, dict):
-        return False
-        
-    # Required fields
-    required_fields = ["source", "file_name", "file_type"]
-    if not all(field in metadata for field in required_fields):
-        return False
-        
-    # Validate source
-    if not metadata["source"] or not isinstance(metadata["source"], str):
-        return False
-        
-    # Validate file name
-    if not metadata["file_name"] or not isinstance(metadata["file_name"], str):
-        return False
-        
-    # Validate file type
-    if not metadata["file_type"] or not isinstance(metadata["file_type"], str):
-        return False
-        
-    return True
+# --- validate_metadata function removed, imported from processing_utils ---
 
-def split_document(doc: Document, add_tags_llm: bool, max_chunk_size: int = 1500, max_total_chunks: int = 1000) -> List[Document]:
+# --- split_document function removed, imported from processing_utils ---
+
+def process_document(doc: Document, add_tags_llm: bool) -> List[Document]:
     """
     Split a single document into chunks with semantic boundaries.
     Optionally adds LLM-based metadata if add_tags_llm is True and no tags found in content.
@@ -160,9 +135,8 @@ def split_document(doc: Document, add_tags_llm: bool, max_chunk_size: int = 1500
         logger.error(f"Error splitting document {doc.metadata.get('source', 'unknown')}: {str(e)}")
         return []
 
-def process_document(doc: Document, add_tags_llm: bool) -> List[Document]:
-    """Process a single document, split it, add metadata. Returns processed chunks.
-    
+    """Process a single document using utility functions, split it, add metadata. Returns processed chunks.
+
     Args:
         doc (Document): The document to process
         add_tags_llm (bool): Whether to use LLM for tag extraction.
@@ -201,69 +175,54 @@ def process_document(doc: Document, add_tags_llm: bool) -> List[Document]:
         logger.error(f"Error processing document {source}: {str(e)}", exc_info=True)
         return [] # Return empty list on error
 
-def clear_vectorstore():
-    """Clear the KAG database."""
+def clear_vectorstore_dir(db_dir: Path):
+    """Clear the KAG database directory."""
     try:
-        if os.path.exists(KAG_DB_DIR):
-            for file in os.listdir(KAG_DB_DIR):
-                file_path = os.path.join(KAG_DB_DIR, file)
+        if db_dir.exists():
+            logger.info(f"Clearing KAG database directory: {db_dir}")
+            for item in db_dir.iterdir():
                 try:
-                    if os.path.isfile(file_path):
-                        os.remove(file_path)
-                    elif os.path.isdir(file_path):
-                        shutil.rmtree(file_path)
+                    if item.is_file():
+                        item.unlink()
+                    elif item.is_dir():
+                        # Be careful here, ensure it's the correct directory structure
+                        # If vectorstore is a sub-directory, target that specifically
+                        # Assuming db_dir IS the vectorstore directory for KAG based on old structure
+                        shutil.rmtree(item)
                 except Exception as e:
-                    logger.error(f"Error removing {file_path}: {str(e)}")
-            logger.info("Cleared KAG database")
+                    logger.error(f"Error removing {item}: {str(e)}")
+            logger.info(f"Cleared KAG database directory: {db_dir}")
+        else:
+            logger.info(f"KAG database directory {db_dir} does not exist, nothing to clear.")
     except Exception as e:
-        logger.error(f"Error clearing vectorstore: {str(e)}")
+        logger.error(f"Error clearing KAG directory {db_dir}: {str(e)}")
 
-def initialize_vectorstore(reset: bool = False) -> Optional[FAISS]:
-    """Initialize or load the FAISS vectorstore.
-    
-    Args:
-        reset (bool): Whether to reset the vectorstore
-        
-    Returns:
-        Optional[FAISS]: The initialized vectorstore or None if initialization failed
-    """
-    try:
-        if reset:
-            logger.info("Resetting vectorstore...")
-            clear_vectorstore()
-            
-        # Create initial vectorstore
-        vectorstore = FAISS.from_texts(
-            ["Initial empty document"],
-            embedding_function=get_embedding_function(),
-            metadatas=[{
-                "source": "initial",
-                "file_name": "initial.txt",
-                "file_type": "text",
-                "processed_at": datetime.now().isoformat()
-            }]
-        )
-        
-        # Save initial vectorstore
-        vectorstore.save_local(VECTORSTORE_PATH)
-        return vectorstore
-        
-    except Exception as e:
-        logger.error(f"Error initializing vectorstore: {str(e)}")
-        return None
+# --- initialize_vectorstore function removed, imported from processing_utils ---
 
 def main():
     """Main function to populate the KAG FAISS database."""
     parser = argparse.ArgumentParser(description="Populate the KAG FAISS database.")
+    parser.add_argument("--name", type=str, default="kag", help="Name for the database instance (determines directory).")
     parser.add_argument("--reset", action="store_true", help="Reset the vectorstore before processing.")
     parser.add_argument("--add-tags", action="store_true", help="Enable LLM-based tag generation if tags are not found in the document content.")
     args = parser.parse_args()
-    
+
+    # --- Get dynamic paths based on name ---
+    # KAG primarily uses a vectorstore, potentially within its named directory
+    db_paths = get_db_paths(args.name)
+    db_dir = db_paths["db_dir"] # This is the main directory for the instance, e.g., databases/kag_custom
+    vectorstore_path = db_paths["vectorstore_path"] # Path within the instance dir, e.g., databases/kag_custom/vectorstore
+    logger.info(f"Using database name: {args.name}")
+    logger.info(f"Database directory: {db_dir}")
+    logger.info(f"Vectorstore path: {vectorstore_path}")
+
+
     try:
-        # Initialize vectorstore
-        vectorstore = initialize_vectorstore(args.reset)
+        # Initialize vectorstore using dynamic path
+        # Note: The initialize_vectorstore from utils handles reset internally based on the path
+        vectorstore = initialize_vectorstore(vectorstore_path, args.reset)
         if not vectorstore:
-            logger.error("Failed to initialize vectorstore")
+            logger.error(f"Failed to initialize vectorstore for '{args.name}' at {vectorstore_path}")
             return
             
         # Process documents
@@ -306,12 +265,12 @@ def main():
         else:
              logger.warning("No valid chunks were processed to add to the vectorstore.")
 
-        # Save final vectorstore
-        logger.info(f"Saving vectorstore to {VECTORSTORE_PATH}...")
-        vectorstore.save_local(VECTORSTORE_PATH)
-        
+        # Save final vectorstore using dynamic path
+        logger.info(f"Saving vectorstore for '{args.name}' to {vectorstore_path}...")
+        vectorstore.save_local(str(vectorstore_path)) # FAISS expects string path
+
         # Log statistics
-        logger.info(f"KAG database population completed:")
+        logger.info(f"KAG database population completed for '{args.name}':")
         logger.info(f"- Total documents: {total_docs}")
         logger.info(f"- Successfully processed: {processed_docs}")
         logger.info(f"- Failed: {failed_docs}")
@@ -319,10 +278,10 @@ def main():
         if processed_docs == 0:
             logger.error("No documents were successfully processed")
         else:
-            logger.info("Successfully populated KAG database")
-            
+            logger.info(f"Successfully populated KAG database '{args.name}'")
+
     except Exception as e:
-        logger.error(f"Error populating KAG database: {str(e)}", exc_info=True)
+        logger.error(f"Error populating KAG database '{args.name}': {str(e)}", exc_info=True)
         raise
 
 if __name__ == "__main__":
