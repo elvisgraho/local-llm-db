@@ -7,9 +7,7 @@ import time
 import logging
 from datetime import datetime
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-# Pass llm_config and full history to query functions
 from query.query_data import query_direct, query_kag, query_lightrag, query_rag
-from query.llm_service import optimize_query, get_model_context_length # Import context length getter
 from query.data_service import data_service
 from query.database_paths import list_available_dbs, DEFAULT_DB_NAME # Import list_available_dbs
 import traceback
@@ -97,23 +95,6 @@ def handle_query():
         # Log received parameters (excluding context_length now)
         logging.info(f"Processing query {request_id}: rag_type={rag_type}, db_name={db_name}, optimize={optimize}, hybrid={hybrid}, provider={provider}, model={model_name}")
 
-        # Optimize query if requested
-        optimize_time = 0
-        if optimize:
-            try:
-                optimize_start = time.time()
-                # Pass llm_config (which might contain apiKey)
-                optimized_query = optimize_query(query_text, llm_config=llm_config)
-                optimize_time = time.time() - optimize_start
-                if not optimized_query or optimized_query.startswith('<think>'):
-                    raise ValueError("Incomplete query optimization response")
-                logging.info(f"Query {request_id} optimized in {optimize_time:.2f}s")
-            except Exception as e:
-                logging.error(f"Error during query optimization: {str(e)}")
-                optimized_query = query_text
-        else:
-            optimized_query = query_text
-
         # Call appropriate query function based on mode
         try:
             query_start = time.time()
@@ -121,13 +102,13 @@ def handle_query():
             # The query functions will handle context length lookup and history truncation
             if rag_type == 'direct':
                 # Direct query doesn't need context length for retrieval/truncation here
-                query_response = query_direct(optimized_query, llm_config=llm_config, conversation_history=conversation_history)
+                query_response = query_direct(query_text, llm_config=llm_config, conversation_history=conversation_history)
             elif rag_type == 'lightrag':
-                query_response = query_lightrag(optimized_query, hybrid, rag_type=rag_type, db_name=db_name, llm_config=llm_config, conversation_history=conversation_history)
+                query_response = query_lightrag(query_text, hybrid, rag_type=rag_type, db_name=db_name, llm_config=llm_config, conversation_history=conversation_history, optimize=optimize)
             elif rag_type == 'kag':
-                query_response = query_kag(optimized_query, hybrid, rag_type=rag_type, db_name=db_name, llm_config=llm_config, conversation_history=conversation_history)
+                query_response = query_kag(query_text, hybrid, rag_type=rag_type, db_name=db_name, llm_config=llm_config, conversation_history=conversation_history, optimize=optimize)
             else: # Default to RAG
-                query_response = query_rag(optimized_query, hybrid, rag_type=rag_type, db_name=db_name, llm_config=llm_config, conversation_history=conversation_history)
+                query_response = query_rag(query_text, hybrid, rag_type=rag_type, db_name=db_name, llm_config=llm_config, conversation_history=conversation_history, optimize=optimize)
 
             query_time = time.time() - query_start
 
@@ -142,7 +123,6 @@ def handle_query():
                 'stats': {
                     'total_time': round(total_time, 2),
                     'query_time': round(query_time, 2),
-                    'optimize_time': round(optimize_time, 2),
                     'rag_type': rag_type,
                     'db_name': db_name if rag_type != 'direct' else None,
                     'hybrid': hybrid
@@ -152,8 +132,7 @@ def handle_query():
             if DEBUG_MODE:
                 response['debug'] = {
                     'request_id': request_id,
-                    'original_query': query_text,
-                    'optimized_query': optimized_query if optimize else None
+                    'original_query': query_text
                 }
 
             logging.info(f"Query {request_id} completed in {total_time:.2f}s")

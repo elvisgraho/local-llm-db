@@ -1,7 +1,7 @@
 import requests
 from langchain.prompts import ChatPromptTemplate
 from query.global_vars import LOCAL_LLM_API_URL, LOCAL_MAIN_MODEL
-from query.templates import QUERY_OPTIMIZATION_TEMPLATE
+from query.templates import OPTIMIZE_INITIAL_ANSWER_TEMPLATE
 import re
 import time
 import json
@@ -221,24 +221,42 @@ def get_llm_response(
         logger.error(f"Unsupported LLM provider: {provider}")
         raise ValueError(f"Unsupported LLM provider specified: {provider}")
 
-# --- Query Optimization ---
-def optimize_query(query_text: str, llm_config: Optional[Dict] = None) -> str:
-    """Optimize the query using a separate LLM call using the provided configuration."""
+# --- Draft Answer Generation (for Optimized Pipeline) ---
+def generate_draft_answer(
+    query_text: str,
+    conversation_history: Optional[List[Dict[str, str]]],
+    llm_config: Optional[Dict] = None
+) -> str:
+    """Generates an initial draft answer using only history and query."""
     try:
-        logger.info(f"Optimizing query using LLM config: {llm_config}")
-        prompt_template = ChatPromptTemplate.from_template(QUERY_OPTIMIZATION_TEMPLATE)
-        prompt = prompt_template.format(query=query_text)
-        # Use the *same* llm_config as the main query, but with a lower temperature
-        # No history needed for optimization prompt
-        optimized_query = get_llm_response(prompt, llm_config=llm_config, temperature=0.3, conversation_history=None).strip()
+        logger.info(f"Generating draft answer for query using LLM config: {llm_config}")
 
-        if optimized_query:
-            optimized_query = re.sub(r'<think>.*?</think>', '', optimized_query, flags=re.DOTALL)
-            optimized_query = re.sub(r'<reasoning>.*?</reasoning>', '', optimized_query, flags=re.DOTALL)
-            optimized_query = optimized_query.strip()
+        # Format history for the template placeholder
+        history_str = "No history provided."
+        if conversation_history:
+            # Simple formatting, newest first as per template description
+            history_lines = [f"{msg.get('role', 'unknown')}: {msg.get('content', '')}" for msg in reversed(conversation_history)]
+            history_str = "\n".join(history_lines)
 
-        return optimized_query if optimized_query else query_text
+        prompt_template = ChatPromptTemplate.from_template(OPTIMIZE_INITIAL_ANSWER_TEMPLATE)
+        prompt = prompt_template.format(query=query_text, history_placeholder=history_str)
+
+        draft_answer = get_llm_response(prompt, llm_config=llm_config, temperature=0.7, conversation_history=conversation_history).strip()
+
+        if not draft_answer:
+            logger.error("LLM returned an empty draft answer.")
+            # Raise an error or return a default message? Let's raise for now.
+            raise ValueError("Failed to generate a draft answer.")
+
+        # Filter out common LLM thinking/reasoning tags
+        filtered_draft_answer = re.sub(r'<think>.*?</think>', '', draft_answer, flags=re.DOTALL)
+        filtered_draft_answer = re.sub(r'<reasoning>.*?</reasoning>', '', filtered_draft_answer, flags=re.DOTALL)
+        filtered_draft_answer = filtered_draft_answer.strip()
+
+        logger.debug(f"Generated draft answer: {draft_answer[:100]}...")
+        return filtered_draft_answer if filtered_draft_answer else draft_answer # Return original if filtering makes it empty
 
     except Exception as e:
-        logger.error(f"Error optimizing query: {str(e)}")
-        return query_text # Return original query on optimization error
+        logger.error(f"Error generating draft answer: {str(e)}.", exc_info=True)
+        # Re-raise the exception to be handled by the caller
+        raise

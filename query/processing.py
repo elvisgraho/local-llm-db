@@ -7,13 +7,23 @@ from langchain.schema import Document
 from query.data_service import data_service
 from query.llm_service import get_llm_response
 from query.query_helpers import _estimate_tokens, _reorder_documents_for_context
+# --- Modular Template Imports ---
 from query.templates import (
-    RAG_ONLY_TEMPLATE,
-    KAG_TEMPLATE,
-    HYBRID_TEMPLATE,
-    LIGHTRAG_HYBRID_TEMPLATE,
-    KAG_HYBRID_TEMPLATE
+    BASE_RESPONSE_STRUCTURE,
+    # Personas
+    PERSONA_PRECISE_ACCURATE, PERSONA_KNOWLEDGE_AWARE, PERSONA_COMPREHENSIVE, PERSONA_LIGHTWEIGHT,
+    DESC_PRECISE_ACCURATE, DESC_KNOWLEDGE_AWARE, DESC_COMPREHENSIVE, DESC_LIGHTWEIGHT,
+    # Instruction Sets
+    STRICT_CONTEXT_INSTRUCTIONS, HYBRID_INSTRUCTIONS, OPTIMIZED_INSTRUCTIONS,
+    # Optional Blocks
+    CONTEXT_BLOCK, SOURCES_BLOCK, RELATIONSHIPS_BLOCK, INITIAL_ANSWER_BLOCK, QUESTION_BLOCK,
+    # Helper Strings
+    KAG_CONTEXT_TYPE, STANDARD_CONTEXT_TYPE,
+    KAG_RELATIONSHIP_QUALIFIER, KAG_RELATIONSHIP_QUALIFIER_CITE,
+    KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT, KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID, KAG_SPECIFIC_DETAIL_INSTRUCTION_OPTIMIZED,
+    EMPTY_STRING
 )
+# --- End Modular Template Imports ---
 
 logger = logging.getLogger(__name__)
 
@@ -71,55 +81,135 @@ def _select_docs_for_context(docs_with_scores: List[Tuple[Document, float]], ava
 
 def _generate_response(
     query_text: str,
+    # --- Parameters for standard and optimized flow ---
     final_docs: List[Document],
     sources: List[str],
     rag_type: str,
-    hybrid: bool,
     llm_config: Optional[Dict],
     truncated_history: Optional[List[Dict[str, str]]],
     estimated_context_tokens: int,
+    # --- Parameters specific to standard flow ---
+    hybrid: bool = False, # Default to False, only relevant if optimize=False
+    # --- Parameters specific to optimized flow ---
+    optimize: bool = False,
+    original_query: Optional[str] = None,
+    draft_answer: Optional[str] = None, # Changed from concise_summary
     formatted_relationships: Optional[List[str]] = None # Add relationships parameter
 ) -> Dict[str, Union[str, List[str], int]]:
-    """Formats context, selects template, generates prompt, and calls LLM."""
-
+    """Dynamically builds the prompt using modular components and calls the LLM."""
+    # --- Handle case where no documents are found ---
     if not final_docs:
-        logger.warning(f"No documents provided to _generate_response for {rag_type} mode.")
-        no_info_msg = "No relevant information found in the knowledge graph." if rag_type == 'kag' else "No relevant information found in the database."
-        return {"text": no_info_msg, "sources": [], "estimated_context_tokens": 0}
+        # If optimize is True, we might still want to return the draft answer even if no docs were found
+        if optimize and draft_answer:
+             logger.warning(f"No documents found for context, returning draft answer for {rag_type} mode.")
+             # Return draft answer, indicating no sources were used for refinement
+             return {"text": draft_answer, "sources": [], "estimated_context_tokens": 0}
+        else:
+            logger.warning(f"No documents provided to _generate_response for {rag_type} mode.")
+            no_info_msg = "No relevant information found in the knowledge graph." if rag_type == 'kag' else "No relevant information found in the database."
+            return {"text": no_info_msg, "sources": [], "estimated_context_tokens": 0}
 
+
+    # --- Prepare core data ---
     reordered_docs = _reorder_documents_for_context(final_docs)
     context_text = "\n\n---\n\n".join([doc.page_content for doc in reordered_docs])
-
-    # Select template
-    if hybrid:
-        template_str = KAG_HYBRID_TEMPLATE if rag_type == 'kag' else \
-                       LIGHTRAG_HYBRID_TEMPLATE if rag_type == 'lightrag' else \
-                       HYBRID_TEMPLATE # Default RAG hybrid
-    else:
-        template_str = KAG_TEMPLATE if rag_type == 'kag' else RAG_ONLY_TEMPLATE # RAG/LightRAG non-hybrid
-
-    prompt_template = ChatPromptTemplate.from_template(template_str)
-
-    # Format sources
     sources_text = "\n".join(f"- {s}" for s in sources if s and s != 'unknown')
     if not sources_text: sources_text = "No specific sources identified for this context."
 
-    # Prepare prompt arguments
-    prompt_args = {"question": query_text, "context": context_text}
-    if "{sources}" in template_str: prompt_args["sources"] = sources_text
-    if "{relationships}" in template_str:
-        if rag_type == 'kag' and formatted_relationships:
-            relationships_text = "\n\n".join(formatted_relationships)
-            if not relationships_text: # Handle case where list is empty
-                 relationships_text = "No specific relationships were identified for this context."
-        else:
-            relationships_text = "Relationship information is not applicable or was not provided." # Default/fallback
-        prompt_args["relationships"] = relationships_text
+    # --- Dynamically Assemble Prompt Components ---
+    assistant_persona = PERSONA_PRECISE_ACCURATE # Default
+    persona_description = DESC_PRECISE_ACCURATE # Default
+    instructions = ""
+    initial_answer_block_placeholder = EMPTY_STRING
+    context_block_placeholder = EMPTY_STRING
+    relationships_block_placeholder = EMPTY_STRING
+    sources_block_placeholder = EMPTY_STRING
+    question_block_placeholder = EMPTY_STRING
 
-    prompt = prompt_template.format(**prompt_args)
-    logger.debug(f"Using template: {'Hybrid' if hybrid else 'Standard'} for {rag_type}")
+    # Determine Context Type Label
+    context_type_label = KAG_CONTEXT_TYPE if rag_type == 'kag' else STANDARD_CONTEXT_TYPE
+    context_type_label_lower = context_type_label.lower()
+
+    # Determine KAG specific instruction details
+    kag_specific_instruction = EMPTY_STRING
+    relationship_qualifier = EMPTY_STRING
+    relationship_qualifier_cite = EMPTY_STRING
+    if rag_type == 'kag':
+        relationship_qualifier = KAG_RELATIONSHIP_QUALIFIER
+        relationship_qualifier_cite = KAG_RELATIONSHIP_QUALIFIER_CITE
+
+    # Select Instructions and Persona based on flags
+    if optimize:
+        logger.debug(f"Assembling Optimized prompt for {rag_type}")
+        instructions_base = OPTIMIZED_INSTRUCTIONS
+        assistant_persona = PERSONA_PRECISE_ACCURATE # Optimized flow uses precise persona
+        persona_description = DESC_PRECISE_ACCURATE
+        if rag_type == 'kag': kag_specific_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_OPTIMIZED
+        # Ensure required data for optimized flow exists
+        if not original_query or not draft_answer:
+            raise ValueError("Original query and draft answer are required for optimized pipeline.")
+        initial_answer_block_placeholder = INITIAL_ANSWER_BLOCK.format(draft_answer=draft_answer)
+        question_block_placeholder = QUESTION_BLOCK.format(question=original_query).replace("Question:", "Original Query:") # Rename label
+    elif hybrid:
+        logger.debug(f"Assembling Hybrid prompt for {rag_type}")
+        instructions_base = HYBRID_INSTRUCTIONS
+        if rag_type == 'kag':
+            assistant_persona = PERSONA_KNOWLEDGE_AWARE # KAG Hybrid
+            persona_description = DESC_KNOWLEDGE_AWARE
+            kag_specific_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID
+        elif rag_type == 'lightrag':
+             assistant_persona = PERSONA_LIGHTWEIGHT # LightRAG Hybrid
+             persona_description = DESC_LIGHTWEIGHT
+        else: # Default RAG Hybrid
+             assistant_persona = PERSONA_COMPREHENSIVE
+             persona_description = DESC_COMPREHENSIVE
+        question_block_placeholder = QUESTION_BLOCK.format(question=query_text)
+    else: # Strict Context (Non-Hybrid, Non-Optimized)
+        logger.debug(f"Assembling Strict Context prompt for {rag_type}")
+        instructions_base = STRICT_CONTEXT_INSTRUCTIONS
+        if rag_type == 'kag':
+            assistant_persona = PERSONA_KNOWLEDGE_AWARE # KAG Strict
+            persona_description = DESC_KNOWLEDGE_AWARE
+            kag_specific_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT
+        else: # RAG/LightRAG Strict
+            assistant_persona = PERSONA_PRECISE_ACCURATE
+            persona_description = DESC_PRECISE_ACCURATE
+        question_block_placeholder = QUESTION_BLOCK.format(question=query_text)
+
+    # Format instructions with KAG specifics if applicable
+    instructions = instructions_base.format(
+        context_type=context_type_label,
+        context_type_lower=context_type_label_lower,
+        relationship_qualifier=relationship_qualifier,
+        relationship_qualifier_cite=relationship_qualifier_cite,
+        kag_specific_instruction_placeholder=kag_specific_instruction
+    )
+
+    # Format optional blocks
+    context_block_placeholder = CONTEXT_BLOCK.format(context_type=context_type_label, context=context_text)
+    sources_block_placeholder = SOURCES_BLOCK.format(sources=sources_text)
+
+    # Format relationships block only if KAG and relationships exist
+    relationships_text = ""
+    if rag_type == 'kag' and formatted_relationships:
+        relationships_text = "\n\n".join(formatted_relationships)
+        if not relationships_text: # Handle case where list is empty
+             relationships_text = "No specific relationships were identified for this context."
+        relationships_block_placeholder = RELATIONSHIPS_BLOCK.format(relationships=relationships_text)
+
+    # Assemble the final prompt using the base structure
+    final_prompt_str = BASE_RESPONSE_STRUCTURE.format(
+        assistant_persona=assistant_persona,
+        persona_description=persona_description,
+        initial_answer_block_placeholder=initial_answer_block_placeholder,
+        context_block_placeholder=context_block_placeholder,
+        relationships_block_placeholder=relationships_block_placeholder,
+        sources_block_placeholder=sources_block_placeholder,
+        instructions=instructions,
+        question_block_placeholder=question_block_placeholder
+    )
 
     # Get response from LLM, passing truncated history
-    response_text = get_llm_response(prompt, llm_config=llm_config, conversation_history=truncated_history)
+    response_text = get_llm_response(final_prompt_str, llm_config=llm_config, conversation_history=truncated_history)
 
     return {"text": response_text, "sources": sources, "estimated_context_tokens": estimated_context_tokens}

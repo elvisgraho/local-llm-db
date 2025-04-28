@@ -140,10 +140,17 @@ window.sendQuery = async function (
     if (currentChat?.messages.length > 1) {
       requestBody.conversation_history = currentChat.messages
         .slice(0, -1) // Exclude the user message just added
-        .map((msg) => ({
-          role: msg.isUser ? "user" : "assistant",
-          content: msg.content || "", // Ensure content is string
-        }));
+        .map((msg) => {
+          // Remove [Source: ...] patterns from content before sending
+          const cleanedContent = (msg.content || "").replace(
+            /\[Source:.*?\]/g,
+            ""
+          );
+          return {
+            role: msg.isUser ? "user" : "assistant",
+            content: cleanedContent.trim(), // Send cleaned content
+          };
+        });
     }
   }
 

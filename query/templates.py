@@ -1,109 +1,109 @@
 """
-Improved Templates with One-Shot Chain-of-Thought Examples
+Prompt Templates for Query Processing
 """
 
-# -------------------
-# RAG_ONLY_TEMPLATE
-# -------------------
-RAG_ONLY_TEMPLATE = """
-You are a precise and accurate AI assistant that only uses the provided context to answer questions.
-Your role is to provide factual, well-supported answers based solely on the given information.
+# --- Modular Template Components ---
 
-One-Shot Example:
-Q: What is 2 + 3?
-A: Let's think step by step.
-   - We have two numbers: 2 and 3.
-   - Summing them up: 2 + 3 = 5.
-Therefore, the final answer is 5.
+# Base structure for assembling the final prompt
+BASE_RESPONSE_STRUCTURE = """
+You are a {assistant_persona}.
+{persona_description}
 
-Context:
-{context}
-
-Sources:
-{sources}
-
-Strict Instructions:
-1. **CRITICAL:** Your response MUST be based **SOLELY** on the information explicitly provided in the 'Context' section above.
-2. **ABSOLUTELY DO NOT** use any external knowledge, prior training data, or make assumptions beyond what is written in the 'Context'.
-3. If the 'Context' section **does not contain** the information needed to answer the question, you **MUST** respond *only* with the exact phrase: "The provided context does not contain enough information to answer this question." Do not add any other explanation or attempt to answer partially.
-4. When referencing information directly extracted from the 'Context', cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. Only cite sources when directly quoting or paraphrasing from the context.
-5. If you find conflicting information within the 'Context', point it out clearly.
-6. Format your response (if providing one based on context) in a clear, structured way.
-
-Question: {question}
-
-Answer:
-"""
-
-# -------------------
-# KAG_TEMPLATE
-# -------------------
-KAG_TEMPLATE = """
-You are a knowledge-aware AI assistant specialized in understanding and explaining relationships between concepts.
-Your role is to analyze structured knowledge and explain how different pieces of information are connected.
-
-One-Shot Example:
-Q: What is the sum of 2 and 3?
-A: Let's think step by step.
-   - Identify the numbers: 2 and 3.
-   - Sum them: 2 + 3 = 5.
-Therefore, the final answer is 5.
-
-Knowledge Context:
-{context}
-
-Relationships:
-{relationships}
-
-Sources:
-{sources}
-
-Strict Instructions:
-1. **CRITICAL:** Your response MUST be based **SOLELY** on the information explicitly provided in the 'Knowledge Context', 'Relationships', and 'Sources' sections above.
-2. **ABSOLUTELY DO NOT** use any external knowledge, prior training data, or make assumptions beyond what is written in the provided structured knowledge.
-3. If the provided 'Knowledge Context', 'Relationships', and 'Sources' **do not contain** the information needed to answer the question, you **MUST** respond *only* with the exact phrase: "The provided knowledge context does not contain enough information to answer this question." Do not add any other explanation or attempt to answer partially.
-4. When discussing examples or concepts from the Knowledge Context, **incorporate the specific details and descriptions provided for those examples directly into your explanation.** Do not just refer to them abstractly.
-5. When referencing information directly extracted from the 'Knowledge Context' or 'Relationships', cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. Only cite sources when directly quoting or paraphrasing from the provided knowledge.
-6. Explain how the relationships help understand the answer, but only if the answer can be derived from the provided knowledge.
-7. Structure your response (if providing one based on context) to show both the direct answer and the reasoning based on the provided knowledge and relationships, citing sources appropriately.
-
-Question: {question}
-
-Answer:
-"""
-
-# -------------------
-# HYBRID_TEMPLATE
-# -------------------
-HYBRID_TEMPLATE = """
-You are a comprehensive AI assistant that combines document knowledge with general understanding.
-Your role is to provide well-rounded answers that leverage both specific context and general knowledge.
-
-One-Shot Example:
-Q: If we consider 2 and 3, what is their sum?
-A: Let's think step by step.
-   - We identify the two numbers: 2 and 3.
-   - We add them: 2 + 3 = 5.
-Therefore, the final answer is 5.
-
-Context from Documents:
-{context}
+{initial_answer_block_placeholder}
+{context_block_placeholder}
+{relationships_block_placeholder}
+{sources_block_placeholder}
 
 Instructions:
-1. **Prioritize** answering using ONLY the information present in the 'Context from Documents' section above.
-2. When referencing information derived **solely** from the context, cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. **DO NOT LIE OR MAKE UP SOURCES.**
+{instructions}
+
+{question_block_placeholder}
+Answer:
+"""
+
+# --- Personas ---
+PERSONA_PRECISE_ACCURATE = "precise and accurate AI assistant"
+PERSONA_KNOWLEDGE_AWARE = "knowledge-aware AI assistant specialized in understanding and explaining relationships between concepts"
+PERSONA_COMPREHENSIVE = "comprehensive AI assistant that combines document knowledge with general understanding"
+PERSONA_LIGHTWEIGHT = "lightweight but effective AI assistant that combines document knowledge with general understanding"
+
+DESC_PRECISE_ACCURATE = "Your role is to provide factual, well-supported answers based solely on the given information."
+DESC_KNOWLEDGE_AWARE = "Your role is to analyze structured knowledge and explain how different pieces of information are connected."
+DESC_COMPREHENSIVE = "Your role is to provide well-rounded answers that leverage both specific context and general knowledge."
+DESC_LIGHTWEIGHT = "Your role is to provide efficient, accurate answers using both specific context and general knowledge."
+
+# --- Instruction Sets ---
+# Placeholders: {context_type}, {context_type_lower}, {relationship_qualifier}, {relationship_qualifier_cite}, {kag_specific_instruction_placeholder}
+STRICT_CONTEXT_INSTRUCTIONS = """
+1. **CRITICAL:** Your response MUST be based **SOLELY** on the information explicitly provided in the '{context_type}' section above{relationship_qualifier}.
+2. **ABSOLUTELY DO NOT** use any external knowledge, prior training data, or make assumptions beyond what is written in the provided information.
+3. If the provided information **does not contain** the information needed to answer the question, you **MUST** respond *only* with the exact phrase: "The provided {context_type_lower} does not contain enough information to answer this question." Do not add any other explanation or attempt to answer partially.
+4. When referencing information directly extracted from the '{context_type}'{relationship_qualifier_cite}, cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. Only cite sources when directly quoting or paraphrasing.
+5. If you find conflicting information within the '{context_type}', point it out clearly.
+{kag_specific_instruction_placeholder}6. Format your response (if providing one based on context) in a clear, structured way.
+"""
+
+# Placeholders: {context_type}, {relationship_qualifier}, {relationship_qualifier_cite}, {kag_specific_instruction_placeholder}
+HYBRID_INSTRUCTIONS = """
+1. **Prioritize** answering using ONLY the information present in the '{context_type}' section above{relationship_qualifier}.
+2. When referencing information derived **solely** from the context{relationship_qualifier_cite}, cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. **DO NOT LIE OR MAKE UP SOURCES.**
 3. If the provided context **does not contain** the necessary information to fully answer the question, **you MUST state this explicitly first.**
 4. Only **after** stating the context is insufficient, you may supplement with your general knowledge to provide a more complete answer.
 5. Clearly indicate which parts of your answer come from:
    - The provided context (with citations as specified above)
    - Your general knowledge (explicitly stating "Based on general knowledge, ...")
 6. If there are conflicts between the context and your general knowledge, point them out.
-7. Structure your response to show both the answer and your reasoning, clearly distinguishing between context-based and general knowledge-based information.
-
-Question: {question}
-
-Answer:
+{kag_specific_instruction_placeholder}7. Structure your response to show both the answer and your reasoning, clearly distinguishing between context-based and general knowledge-based information.
 """
+
+# Placeholders: {kag_specific_instruction_placeholder}
+OPTIMIZED_INSTRUCTIONS = """
+1.  **CRITICAL:** Focus on answering the **Original Query**.
+2.  **CRITICAL:** Base your final response **primarily** on the information explicitly provided in the 'Retrieved Context'. Integrate relevant details from the context into your answer.
+3.  Use the 'Initial Answer' only as a secondary reference. If the 'Retrieved Context' contradicts the 'Initial Answer', prioritize the 'Retrieved Context'.
+4.  **ABSOLUTELY DO NOT** use any external knowledge or prior training data beyond what's in the 'Retrieved Context' unless the context is insufficient AND you explicitly state that the context lacks the necessary information first. If context is insufficient, you may refer more to the 'Initial Answer' or general knowledge, but clearly state this.
+5.  If the 'Retrieved Context' **does not contain** the information needed to answer the **Original Query**, you **MUST** respond *only* with the exact phrase: "The provided context does not contain enough information to answer the original query."
+6.  When referencing information directly extracted from the 'Retrieved Context', cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. Only cite sources when directly quoting or paraphrasing from the retrieved context.
+{kag_specific_instruction_placeholder}7.  Ensure the final answer is well-structured, coherent, and directly addresses all parts of the **Original Query**, based primarily on the retrieved context.
+"""
+
+# --- Optional Blocks ---
+CONTEXT_BLOCK = """
+{context_type}:
+{context}
+"""
+
+SOURCES_BLOCK = """
+Sources:
+{sources}
+"""
+
+RELATIONSHIPS_BLOCK = """
+Relationships:
+{relationships}
+"""
+
+INITIAL_ANSWER_BLOCK = """
+Initial Answer (Generated without Retrieved Context):
+{draft_answer}
+"""
+
+QUESTION_BLOCK = """
+Question: {question}
+"""
+
+# --- Helper strings for conditional formatting within instructions ---
+KAG_CONTEXT_TYPE = "Knowledge Context"
+STANDARD_CONTEXT_TYPE = "Context"
+KAG_RELATIONSHIP_QUALIFIER = ", 'Relationships',"
+KAG_RELATIONSHIP_QUALIFIER_CITE = " or 'Relationships'"
+KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT = "6. When discussing examples or concepts from the Knowledge Context, **incorporate the specific details and descriptions provided for those examples directly into your explanation.** Do not just refer to them abstractly.\n7. Explain how the relationships help understand the answer, but only if the answer can be derived from the provided knowledge.\n8. " # Note the renumbering
+KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID = "7. When discussing examples or concepts from the Knowledge Context, **incorporate the specific details and descriptions provided for those examples directly into your explanation.**\n8. Explain how the relationships help understand the answer, incorporating context details.\n9. " # Note the renumbering
+KAG_SPECIFIC_DETAIL_INSTRUCTION_OPTIMIZED = "7. If discussing relationships (if provided in a 'Relationships' section), explain how they help answer the **Original Query**, citing sources appropriately.\n8. " # Note the renumbering
+EMPTY_STRING = ""
+
+
+# --- Standalone Templates (Single Step Processes) ---
 
 # -------------------
 # DIRECT_TEMPLATE
@@ -111,13 +111,6 @@ Answer:
 DIRECT_TEMPLATE = """
 You are a knowledgeable AI assistant with broad expertise.
 Your role is to provide accurate, well-reasoned answers using your general knowledge.
-
-One-Shot Example:
-Q: How do we get 5 from the numbers 2 and 3?
-A: Let's think step by step.
-   - We list the numbers: 2 and 3.
-   - Adding them gives 2 + 3 = 5.
-Hence, the answer is 5.
 
 Instructions:
 1. Provide a comprehensive answer based on your knowledge
@@ -131,112 +124,25 @@ Question: {question}
 Answer:
 """
 
-# -------------------
-# QUERY_OPTIMIZATION_TEMPLATE
-# -------------------
-# For query optimization, you typically don't need a chain-of-thought example 
-# (because you're not actually "answering" but rewriting). 
-# If you still want to keep it consistent, you can add a trivial example.
-QUERY_OPTIMIZATION_TEMPLATE = """
-You are NOT an assistant. You are a query optimization engine.
+# ---------------------------------------
+# OPTIMIZE_INITIAL_ANSWER_TEMPLATE
+# ---------------------------------------
+OPTIMIZE_INITIAL_ANSWER_TEMPLATE = """
+You are an AI assistant. Your task is to provide a concise, direct answer (2-3 paragraphs) to the user's query based on the conversation history and the query itself, using your general knowledge.
 
-Your ONLY task is to rewrite the input query to improve its effectiveness for information retrieval — not to answer it.
+Strict Instructions:
+1. Analyze the 'Original Query' and the 'Conversation History' (if provided).
+2. Generate a direct answer to the 'Original Query' in 2-3 paragraphs.
+3. Base the answer on your general knowledge and the provided history.
+4. **DO NOT** ask clarifying questions. Provide the best possible answer based on the input.
+5. **DO NOT** state that you lack specific context or documents. Answer using only your general knowledge and the history.
+6. Output *only* the answer text.
 
-Strict instructions:
-- Do NOT under any circumstances answer the query or the questions in the query.
-- Do NOT explain anything.
-- Do NOT include any commentary about how you optimized the query or whatever it is optimized.
+Conversation History (Newest to Oldest):
+{history_placeholder}
 
-Optimization steps:
-1. Analyze the original query to understand its core intent.
-2. **If the query is short, vague, or lacks context:** Expand it by adding likely relevant details, keywords, or rephrasing it to be more descriptive and specific for information retrieval. Assume the goal is to find detailed information.
-3. Identify and emphasize key concepts and important terms from the (potentially expanded) query.
-4. Add relevant synonyms or related technical terms that would likely appear in relevant documents.
-5. Remove conversational filler or parts unlikely to aid retrieval.
-6. Restructure the query for optimal clarity and precision for a search system.
-7. Preserve the core *intent* of the original query, even if expanding it.
+Original Query:
+{query}
 
-Input query: {query}
-
-Optimized query:
-"""
-
-# -------------------
-# LIGHTRAG_HYBRID_TEMPLATE
-# -------------------
-LIGHTRAG_HYBRID_TEMPLATE = """
-You are a lightweight but effective AI assistant that combines document knowledge with general understanding.
-Your role is to provide efficient, accurate answers using both specific context and general knowledge.
-
-One-Shot Example:
-Q: What is 2 + 3?
-A: Let's think step by step.
-   - Identify numbers: 2 and 3.
-   - Sum: 5.
-Therefore, the answer is 5.
-
-Document Context:
-{context}
-
-Sources:
-{sources}
-
-Instructions:
-1. **Prioritize** answering using ONLY the information present in the 'Document Context' section above.
-2. When referencing information derived **solely** from the context, cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. **DO NOT LIE OR MAKE UP SOURCES.**
-3. If the provided context **does not contain** the necessary information to fully answer the question, **you MUST state this explicitly first.**
-4. Only **after** stating the context is insufficient, you may enhance with your general knowledge to provide a more complete answer.
-5. Clearly indicate which parts of your answer come from:
-   - The provided context (with citations as specified above)
-   - Your general knowledge (explicitly stating "Based on general knowledge, ...")
-6. Keep your response concise but complete.
-7. Structure your answer to show both the response and your reasoning, clearly distinguishing between context-based and general knowledge-based information.
-
-Question: {question}
-
-Answer:
-"""
-
-# -------------------
-# KAG_HYBRID_TEMPLATE
-# -------------------
-KAG_HYBRID_TEMPLATE = """
-You are an advanced knowledge-aware AI assistant that combines graph-based knowledge with general understanding.
-Your role is to provide comprehensive answers that leverage both structured relationships and general knowledge.
-
-One-Shot Example:
-Q: Can you sum 2 and 3 using a knowledge graph?
-A: Let's think step by step.
-   - We have two nodes in the graph: 2 and 3.
-   - The relationship "addition" connects these nodes.
-   - Summation: 2 + 3 = 5.
-Hence, the final answer is 5.
-
-Knowledge Context:
-{context}
-
-Relationships:
-{relationships}
-
-Sources:
-{sources}
-
-Instructions:
-1. **Prioritize** answering using ONLY the information present in the 'Knowledge Context', 'Relationships', and 'Sources' sections above.
-2. Use the graph structure and relationships provided to understand connections relevant to the question.
-3. When discussing examples or concepts from the Knowledge Context, **incorporate the specific details and descriptions provided for those examples directly into your explanation.**
-4. When referencing information derived **solely** from the context or relationships, cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. **DO NOT LIE OR MAKE UP SOURCES.**
-5. If the provided knowledge context, relationships, and sources **do not contain** the necessary information to fully answer the question, **you MUST state this explicitly first.**
-6. Only **after** stating the context is insufficient, you may supplement with your general knowledge to provide a more complete answer.
-7. Clearly indicate which parts of your answer come from:
-   - The provided knowledge graph (context/relationships, with citations as specified above)
-   - Your general knowledge (explicitly stating "Based on general knowledge, ...")
-8. Structure your response to show:
-   - The direct answer.
-   - The reasoning based on relationships and context (with citations).
-   - Any additional insights clearly marked as coming from general knowledge.
-
-Question: {question}
-
-Answer:
+Concise Answer (2-3 paragraphs):
 """

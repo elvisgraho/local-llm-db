@@ -53,6 +53,34 @@ function InputArea({ queryMode, optimize, hybrid, selectedDbName }) {
     }
   }, [inputValue]);
 
+  // Effect to listen for chat changes and update token count
+  useEffect(() => {
+    if (window.chatManager) {
+      console.log(
+        "InputArea: Setting up chatManager listeners for token count."
+      );
+      // Define the listener function (which is updateTokenCount)
+      const listener = updateTokenCount;
+
+      // Register listeners
+      window.chatManager.onHistoryUpdate(listener);
+      window.chatManager.onActiveChatChange(listener); // Update on chat switch too
+
+      // Cleanup function
+      return () => {
+        console.log(
+          "InputArea: Cleaning up chatManager listeners for token count."
+        );
+        window.chatManager.offHistoryUpdate(listener);
+        window.chatManager.offActiveChatChange(listener);
+      };
+    } else {
+      console.warn(
+        "InputArea: chatManager not found for token count listeners."
+      );
+    }
+  }, [updateTokenCount]); // Depend on updateTokenCount to get the latest version
+
   const handleInputChange = (event) => {
     setInputValue(event.target.value);
   };
