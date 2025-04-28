@@ -35,21 +35,35 @@ def get_model_context_length(llm_config: Optional[Dict] = None) -> int:
     """Gets the context length for the specified model configuration.
 
     Args:
-        llm_config (Optional[Dict]): Configuration containing provider and modelName.
+        llm_config (Optional[Dict]): Configuration containing provider, modelName,
+                                     and potentially 'contextLength' for local models.
 
     Returns:
-        int: The context length (currently returns a default).
+        int: The context length for the model.
     """
     config = llm_config or {}
     provider = config.get('provider', 'local')
     model_name = config.get('modelName', '') # Expect camelCase
 
-    # TODO: Implement more sophisticated context length lookup
-    # - Could involve API calls if provider supports it
-    # - Could use a configuration file mapping models to lengths
-    # - For now, return a default value.
-    logger.debug(f"Context length requested for {provider}/{model_name}. Returning default: {DEFAULT_CONTEXT_LENGTH}")
-    return DEFAULT_CONTEXT_LENGTH
+    if provider == 'local':
+        # For local models, check if a specific context length is provided in the config
+        custom_length = config.get('contextLength') # Expect camelCase from frontend
+        if isinstance(custom_length, int) and custom_length > 0:
+            logger.debug(f"Using custom context length for local model {model_name}: {custom_length}")
+            return custom_length
+        else:
+            logger.debug(f"Using default context length for local model {model_name}: {DEFAULT_CONTEXT_LENGTH}")
+            return DEFAULT_CONTEXT_LENGTH
+    elif provider == 'gemini':
+        # For Gemini, assume a very large context window. The API handles its own limits.
+        # Using 1,000,000 as a practical upper bound for our internal logic.
+        large_context_length = 1_000_000
+        logger.debug(f"Using large context length for Gemini model {model_name}: {large_context_length}")
+        return large_context_length
+    else:
+        # Fallback for other or unknown providers
+        logger.warning(f"Unknown or unsupported provider '{provider}' for context length lookup. Using default: {DEFAULT_CONTEXT_LENGTH}")
+        return DEFAULT_CONTEXT_LENGTH
 
 # --- History Truncation ---
 def truncate_history(

@@ -109,11 +109,11 @@ window.sendQuery = async function (
 
   if (savedLlmConfig) {
     try {
-      // Parse saved config, but remove contextLength if present
+      // Parse saved config. It might include contextLength for local provider.
       const parsedConfig = JSON.parse(savedLlmConfig);
-      delete parsedConfig.contextLength; // Remove frontend context length setting
+      // Ensure provider matches preference, as saved config might be stale if preference changed
+      parsedConfig.provider = preferredProvider;
       requestBody.llm_config = parsedConfig;
-      requestBody.llm_config.provider = preferredProvider; // Ensure provider matches preference
     } catch (e) {
       console.error(`Failed to parse saved LLM config from ${configKey}:`, e);
       requestBody.llm_config = { provider: preferredProvider };

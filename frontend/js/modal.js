@@ -25,6 +25,10 @@ function LlmSettingsModal() {
   const [isLoading, setIsLoading] = useState({ local: false, gemini: false });
   const [errors, setErrors] = useState({ local: null, gemini: null });
   const [geminiKeyNeeded, setGeminiKeyNeeded] = useState(false);
+  const [contextLengths, setContextLengths] = useState({
+    local: 8000,
+    gemini: null,
+  }); // Add state for context length, default for local
 
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -50,7 +54,17 @@ function LlmSettingsModal() {
     setSelectedModels((prev) => ({ ...prev, [currentProvider]: newModel }));
   };
 
-  // Removed handleContextLengthChange
+  const handleContextLengthChange = (event) => {
+    const newValue = event.target.value;
+    // Allow empty string temporarily, validate on save
+    if (newValue === "" || /^\d+$/.test(newValue)) {
+      const numericValue = newValue === "" ? "" : parseInt(newValue, 10);
+      // Only update state for the local provider
+      if (currentProvider === "local") {
+        setContextLengths((prev) => ({ ...prev, local: numericValue }));
+      }
+    }
+  };
 
   // --- Data Fetching & Loading ---
 
@@ -146,7 +160,7 @@ function LlmSettingsModal() {
       const savedConfig = localStorage.getItem(configKey);
       let apiKeyFromStorage = providerToLoad === "gemini" ? "" : null;
       let modelNameFromStorage = "";
-      // Removed contextLengthFromStorage
+      let contextLengthFromStorage = providerToLoad === "local" ? 8000 : null; // Default for local
 
       if (savedConfig) {
         try {
@@ -156,7 +170,14 @@ function LlmSettingsModal() {
             apiKeyFromStorage = llmConfig.apiKey;
           }
           modelNameFromStorage = llmConfig.modelName || "";
-          // Removed context length loading
+          // Load context length only for local provider
+          if (
+            providerToLoad === "local" &&
+            typeof llmConfig.contextLength === "number" &&
+            llmConfig.contextLength > 0
+          ) {
+            contextLengthFromStorage = llmConfig.contextLength;
+          }
         } catch (e) {
           console.error(
             `Failed to parse saved LLM config for ${providerToLoad}:`,
@@ -172,7 +193,13 @@ function LlmSettingsModal() {
         ...prev,
         [providerToLoad]: modelNameFromStorage,
       }));
-      // Removed context length state setting
+      // Set context length state only for local
+      if (providerToLoad === "local") {
+        setContextLengths((prev) => ({
+          ...prev,
+          local: contextLengthFromStorage,
+        }));
+      }
 
       fetchModels(providerToLoad, apiKeyFromStorage);
     },
@@ -193,6 +220,35 @@ function LlmSettingsModal() {
     setOpen(true);
     setSaveSuccess(false);
     setErrors({ local: null, gemini: null });
+    // Attempt to fix aria-hidden issue by ensuring root is not hidden
+    // Need a slight delay for the dialog's own potential manipulations
+    setTimeout(() => {
+      const rootElement = document.getElementById("root");
+      if (rootElement && rootElement.getAttribute("aria-hidden") === "true") {
+        console.warn(
+          "Modal open: Removing aria-hidden='true' from #root to prevent focus conflict."
+        );
+        rootElement.removeAttribute("aria-hidden");
+      }
+      // Also ensure focus moves into the dialog. MUI usually handles this.
+      // Find first focusable element within the dialog and focus it.
+      const dialogElement = document.querySelector(".MuiDialog-root"); // Find the dialog
+      if (dialogElement) {
+        const focusableElements = dialogElement.querySelectorAll(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusableElements.length > 0) {
+          // Check if focus is already inside the dialog before forcing it
+          if (!dialogElement.contains(document.activeElement)) {
+            console.log(
+              "Modal open: Forcing focus onto first element:",
+              focusableElements[0]
+            );
+            focusableElements[0].focus();
+          }
+        }
+      }
+    }, 50); // Small delay
   }, [loadSettingsForProvider, preferredProvider]);
 
   const handlePreferredProviderChange = useCallback(
@@ -221,7 +277,7 @@ function LlmSettingsModal() {
     const currentApiKey = apiKeys[currentProvider];
     const currentSelectedModel = selectedModels[currentProvider];
     const currentModels = modelsByProvider[currentProvider];
-    // Removed currentContextLength
+    const currentContextLength = contextLengths[currentProvider]; // Get context length for current provider
 
     if (currentProvider === "gemini" && !currentApiKey?.trim()) {
       alert("Please enter your Gemini API Key before saving.");
@@ -233,7 +289,18 @@ function LlmSettingsModal() {
       return;
     }
 
-    // Removed context length validation
+    // Validate context length only for local provider
+    if (currentProvider === "local") {
+      if (
+        currentContextLength === "" ||
+        currentContextLength === null ||
+        isNaN(currentContextLength) ||
+        currentContextLength <= 0
+      ) {
+        alert("Please enter a valid positive number for the Context Length.");
+        return;
+      }
+    }
 
     setIsSaving(true);
     setSaveSuccess(false);
@@ -242,7 +309,10 @@ function LlmSettingsModal() {
       provider: currentProvider,
       modelName: currentSelectedModel,
       apiKey: currentProvider === "gemini" ? currentApiKey?.trim() : null,
-      // Removed contextLength from saved config
+      // Add contextLength only if provider is local
+      ...(currentProvider === "local" && {
+        contextLength: Number(currentContextLength),
+      }),
     };
 
     const configKey = `llmConfig_${currentProvider}`;
@@ -257,7 +327,20 @@ function LlmSettingsModal() {
       try {
         const otherLlmConfig = JSON.parse(otherSavedConfig);
         otherLlmConfig.provider = otherProvider;
-        // Removed contextLength preservation logic
+        // Ensure contextLength is preserved correctly if it exists (only for local)
+        if (
+          otherProvider === "local" &&
+          typeof otherLlmConfig.contextLength !== "number"
+        ) {
+          // If missing or invalid, maybe set a default? Or just leave it as is from storage.
+          // For now, just ensure it's not accidentally removed if it was there.
+          // The loading logic handles defaults if it's missing/invalid.
+        } else if (
+          otherProvider !== "local" &&
+          otherLlmConfig.hasOwnProperty("contextLength")
+        ) {
+          delete otherLlmConfig.contextLength; // Remove if it somehow got added to non-local
+        }
         localStorage.setItem(otherConfigKey, JSON.stringify(otherLlmConfig));
         console.log(`Preserved existing config for ${otherProvider}`);
       } catch (e) {
@@ -274,7 +357,14 @@ function LlmSettingsModal() {
       console.log(`LLM Settings Saved to ${configKey}`);
       setTimeout(handleClose, 1000);
     }, 500);
-  }, [currentProvider, apiKeys, selectedModels, modelsByProvider, handleClose]); // Removed contextLengths dependency
+  }, [
+    currentProvider,
+    apiKeys,
+    selectedModels,
+    modelsByProvider,
+    contextLengths,
+    handleClose,
+  ]); // Add contextLengths dependency
 
   useEffect(() => {
     const openBtn = document.getElementById("openLlmSettingsBtn");
@@ -289,7 +379,7 @@ function LlmSettingsModal() {
   const currentApiKey = apiKeys[currentProvider] ?? "";
   const currentModels = modelsByProvider[currentProvider] || [];
   const currentSelectedModel = selectedModels[currentProvider] || "";
-  // Removed currentContextLengthValue
+  const currentContextLengthValue = contextLengths[currentProvider] ?? ""; // Get value for input
   const currentIsLoading = isLoading[currentProvider] || false;
   const currentError = errors[currentProvider] || null;
   const isRefreshDisabled =
@@ -435,7 +525,20 @@ function LlmSettingsModal() {
           )
         )
       ),
-      // Removed Context Length Input
+      // Context Length Input (Only for Local LLM)
+      currentProvider === "local" &&
+        e(TextField, {
+          label: "Context Length (Tokens)",
+          type: "number",
+          value: currentContextLengthValue,
+          onChange: handleContextLengthChange,
+          fullWidth: true,
+          margin: "normal",
+          variant: "outlined",
+          required: true,
+          helperText: "Max tokens for prompt and history (e.g., 8000)",
+          inputProps: { min: 1 }, // Basic HTML5 validation
+        }),
 
       // Error Alert for the current provider
       currentError &&

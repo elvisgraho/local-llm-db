@@ -152,14 +152,6 @@ body {
   background-color: #0e8f6d; /* Darker accent */
 }
 
-/* Message Search Highlight (If search is implemented) */
-.highlight {
-  background-color: rgba(16, 163, 127, 0.3); /* Use accent with alpha */
-  padding: 0.1rem 0.3rem;
-  border-radius: 2px;
-  color: #fff; /* Ensure highlighted text is readable */
-}
-
 /* Special Section Container (Added via app.js) */
 .special-section-container {
   /* Inherits .message .assistant-message styles */

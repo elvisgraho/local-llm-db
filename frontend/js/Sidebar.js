@@ -129,21 +129,6 @@ function Sidebar({
   // Handler for DB name selection
   const handleDbNameChange = (event) => onDbNameChange(event.target.value);
 
-  const handleSearchChange = (event) => {
-    const newSearchTerm = event.target.value;
-    setSearchTerm(newSearchTerm);
-    // TODO: Implement actual search filtering if needed
-    console.log("Search term:", newSearchTerm);
-    // Optional: Trigger global search if uiUtils handles it
-    if (window.uiUtils?.handleSearchInput) {
-      const searchInputEl = document.getElementById("sidebarSearchInput");
-      if (searchInputEl) {
-        searchInputEl.value = newSearchTerm;
-        window.uiUtils.handleSearchInput();
-      }
-    }
-  };
-
   const handleOpenLlmSettings = () => {
     // Prefer calling an exposed function from the modal component
     if (window.llmSettingsModalControl?.open) {
@@ -202,16 +187,6 @@ function Sidebar({
     e(
       Box,
       { sx: { p: 2 } },
-      e(TextField, {
-        id: "sidebarSearchInput",
-        label: "Search Chats",
-        variant: "outlined",
-        size: "small",
-        fullWidth: true,
-        value: searchTerm,
-        onChange: handleSearchChange,
-        sx: { mb: 2 },
-      }),
       e(
         FormControl,
         { fullWidth: true, size: "small", sx: { mb: 2 } },
