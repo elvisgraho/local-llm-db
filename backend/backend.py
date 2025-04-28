@@ -63,7 +63,6 @@ def handle_query():
         llm_config = data.get('llm_config', {}) # Keep llm_config
         # Get full conversation history from frontend
         conversation_history = data.get('conversation_history', None)
-        # Removed context_length extraction from request
 
         # Basic validation for llm_config
         provider = llm_config.get('provider')

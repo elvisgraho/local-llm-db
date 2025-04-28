@@ -1,10 +1,7 @@
 import requests
 from langchain.prompts import ChatPromptTemplate
 from query.global_vars import LOCAL_LLM_API_URL, LOCAL_MAIN_MODEL
-from query.templates import OPTIMIZE_INITIAL_ANSWER_TEMPLATE
-import re
-import time
-import json
+from query.templates import REFINE_SEARCH_QUERY_TEMPLATE # Updated import
 import logging
 from typing import List, Optional, Dict, Tuple # Added Tuple
 from requests.exceptions import RequestException
@@ -221,42 +218,44 @@ def get_llm_response(
         logger.error(f"Unsupported LLM provider: {provider}")
         raise ValueError(f"Unsupported LLM provider specified: {provider}")
 
-# --- Draft Answer Generation (for Optimized Pipeline) ---
-def generate_draft_answer(
+# --- Refined Search Query Generation (for Optimized Pipeline) ---
+def generate_refined_search_query( # Renamed function
     query_text: str,
     conversation_history: Optional[List[Dict[str, str]]],
     llm_config: Optional[Dict] = None
 ) -> str:
-    """Generates an initial draft answer using only history and query."""
+    """Generates a refined search query using only history and the original query."""
     try:
-        logger.info(f"Generating draft answer for query using LLM config: {llm_config}")
+        logger.info(f"Generating refined search query for original query using LLM config: {llm_config}")
 
         # Format history for the template placeholder
         history_str = "No history provided."
         if conversation_history:
             # Simple formatting, newest first as per template description
-            history_lines = [f"{msg.get('role', 'unknown')}: {msg.get('content', '')}" for msg in reversed(conversation_history)]
-            history_str = "\n".join(history_lines)
+            # Filter out messages indicating insufficient context
+            filter_message = "The provided knowledge context does not contain enough information to answer this question."
+            history_lines = [
+                f"{msg.get('role', 'unknown')}: {msg.get('content', '')}"
+                for msg in reversed(conversation_history)
+                if msg.get('content', '') != filter_message
+            ]
+            history_str = "\n".join(history_lines) if history_lines else "No relevant history provided." # Handle case where all history is filtered
 
-        prompt_template = ChatPromptTemplate.from_template(OPTIMIZE_INITIAL_ANSWER_TEMPLATE)
+        prompt_template = ChatPromptTemplate.from_template(REFINE_SEARCH_QUERY_TEMPLATE) # Use new template
         prompt = prompt_template.format(query=query_text, history_placeholder=history_str)
+        logger.info(f"Prompt for LLM: {prompt}")
 
-        draft_answer = get_llm_response(prompt, llm_config=llm_config, temperature=0.7, conversation_history=conversation_history).strip()
+        # Get the refined query from the LLM
+        refined_query = get_llm_response(prompt, llm_config=llm_config, temperature=0.7, conversation_history=conversation_history).strip()
 
-        if not draft_answer:
-            logger.error("LLM returned an empty draft answer.")
-            # Raise an error or return a default message? Let's raise for now.
-            raise ValueError("Failed to generate a draft answer.")
+        if not refined_query:
+            logger.warning("LLM returned an empty refined search query. Falling back to original query.")
+            refined_query = query_text # Fallback to original query
 
-        # Filter out common LLM thinking/reasoning tags
-        filtered_draft_answer = re.sub(r'<think>.*?</think>', '', draft_answer, flags=re.DOTALL)
-        filtered_draft_answer = re.sub(r'<reasoning>.*?</reasoning>', '', filtered_draft_answer, flags=re.DOTALL)
-        filtered_draft_answer = filtered_draft_answer.strip()
-
-        logger.debug(f"Generated draft answer: {draft_answer[:100]}...")
-        return filtered_draft_answer if filtered_draft_answer else draft_answer # Return original if filtering makes it empty
+        logger.debug(f"Generated Refined Search Query: {refined_query}")
+        return refined_query
 
     except Exception as e:
-        logger.error(f"Error generating draft answer: {str(e)}.", exc_info=True)
+        logger.error(f"Error generating refined search query: {str(e)}.", exc_info=True)
         # Re-raise the exception to be handled by the caller
         raise

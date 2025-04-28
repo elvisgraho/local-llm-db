@@ -23,19 +23,15 @@ The KAG implementation provides:
 """
 
 import logging
-from typing import List
 from pathlib import Path
 from tqdm import tqdm
-import json # Added for graph saving
-import networkx as nx # Added for graph operations
-from langchain.schema.document import Document
-from query.database_paths import get_db_paths # Updated import
-from load_documents import load_documents # Removed extract_metadata
-# Removed initialize_vectorstore, added get_embedding_function
+import json
+import networkx as nx
+from query.database_paths import get_db_paths
+from load_documents import load_documents
 from training.processing_utils import validate_metadata, split_document
-from training.get_embedding_function import get_embedding_function # Added
-from training.config import EMBEDDING_CONTEXT_LENGTH # Import the constant
-# Removed unused 're' and 'datetime' imports
+from training.get_embedding_function import get_embedding_function
+from training.config import EMBEDDING_CONTEXT_LENGTH 
 import argparse
 import shutil
 
@@ -45,12 +41,6 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-# --- validate_metadata function removed, imported from processing_utils ---
-
-# --- split_document function removed, imported from processing_utils ---
-
-# --- Graph Loading/Saving Functions (adapted from populate_graphrag.py) ---
 
 def load_graph(graph_path: Path) -> nx.DiGraph:
     """Load existing graph or create new one."""

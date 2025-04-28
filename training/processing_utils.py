@@ -64,7 +64,6 @@ def validate_metadata(metadata: Dict[str, Any]) -> bool:
 
 
 def split_document(doc: Document, add_tags_llm: bool, max_chunk_size: int = 1500, max_total_chunks: int = 1000) -> List[Document]:
-    # from langchain_text_splitters import RecursiveCharacterTextSplitter # Removed from inside function
     """
     Split a single document into chunks with semantic boundaries.
     Optionally adds LLM-based metadata if add_tags_llm is True and no tags found in content.

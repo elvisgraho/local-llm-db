@@ -7,11 +7,11 @@ from query.llm_service import get_model_context_length, truncate_history
 # --- Modular Template Imports ---
 from query.templates import (
     BASE_RESPONSE_STRUCTURE,
-    STRICT_CONTEXT_INSTRUCTIONS, HYBRID_INSTRUCTIONS, OPTIMIZED_INSTRUCTIONS,
-    CONTEXT_BLOCK, SOURCES_BLOCK, RELATIONSHIPS_BLOCK, INITIAL_ANSWER_BLOCK, QUESTION_BLOCK,
+    STRICT_CONTEXT_INSTRUCTIONS, HYBRID_INSTRUCTIONS, # OPTIMIZED_INSTRUCTIONS removed
+    CONTEXT_BLOCK, SOURCES_BLOCK, RELATIONSHIPS_BLOCK, QUESTION_BLOCK, # INITIAL_ANSWER_BLOCK removed
     KAG_CONTEXT_TYPE, STANDARD_CONTEXT_TYPE,
     KAG_RELATIONSHIP_QUALIFIER, KAG_RELATIONSHIP_QUALIFIER_CITE,
-    KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT, KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID, KAG_SPECIFIC_DETAIL_INSTRUCTION_OPTIMIZED,
+    KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT, KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID, # KAG_SPECIFIC_DETAIL_INSTRUCTION_OPTIMIZED removed
     EMPTY_STRING
 )
 # --- End Modular Template Imports ---
@@ -58,7 +58,7 @@ def _calculate_available_context(
     hybrid: bool = False,
     rag_type: str = 'rag', # Need rag_type to determine KAG specifics
     # --- Data specific to optimized flow ---
-    draft_answer: Optional[str] = None,
+    # draft_answer removed
     # --- Common parameters ---
     reserved_for_context: int = RESERVED_FOR_RETRIEVAL_DEFAULT
 ) -> Tuple[Optional[List[Dict[str, str]]], int]:
@@ -95,23 +95,17 @@ def _calculate_available_context(
     context_type_label = KAG_CONTEXT_TYPE if is_kag else STANDARD_CONTEXT_TYPE
     context_type_label_lower = context_type_label.lower()
     if optimize:
-        if not draft_answer:
-            raise ValueError("Draft answer must be provided for optimized context calculation.")
-        fixed_tokens += _estimate_tokens(query_text) # Original query
-        draft_answer_tokens = _estimate_tokens(draft_answer)
-        fixed_tokens += draft_answer_tokens
-        fixed_tokens += _estimate_tokens(INITIAL_ANSWER_BLOCK.replace("{draft_answer}", "")) # Block overhead
-        fixed_tokens += _estimate_tokens(QUESTION_BLOCK.replace("{question}", "").replace("Question:", "Original Query:")) # Block overhead + label change
-        if is_kag: kag_specific_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_OPTIMIZED
-        instruction_text = OPTIMIZED_INSTRUCTIONS.format(kag_specific_instruction_placeholder=kag_specific_instruction)
-        fixed_tokens += _estimate_tokens(instruction_text)
-    elif hybrid:
+        # Optimize flag only affects retrieval query now, not prompt structure for context calculation.
+        # Fall through to hybrid/strict calculation based on the hybrid flag.
+        pass
+
+    if hybrid: # This now applies if optimize=True and hybrid=True, or optimize=False and hybrid=True
         fixed_tokens += _estimate_tokens(query_text) # Query
         fixed_tokens += _estimate_tokens(QUESTION_BLOCK.replace("{question}", "")) # Block overhead
         if is_kag: kag_specific_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID
         instruction_text = HYBRID_INSTRUCTIONS.format(context_type=context_type_label, relationship_qualifier=relationship_qualifier, relationship_qualifier_cite=relationship_qualifier_cite, kag_specific_instruction_placeholder=kag_specific_instruction)
         fixed_tokens += _estimate_tokens(instruction_text)
-    else: # Strict Context
+    else: # Strict Context (applies if optimize=True/False and hybrid=False)
         fixed_tokens += _estimate_tokens(query_text) # Query
         fixed_tokens += _estimate_tokens(QUESTION_BLOCK.replace("{question}", "")) # Block overhead
         if is_kag: kag_specific_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT

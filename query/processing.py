@@ -11,16 +11,16 @@ from query.query_helpers import _estimate_tokens, _reorder_documents_for_context
 from query.templates import (
     BASE_RESPONSE_STRUCTURE,
     # Personas
-    PERSONA_PRECISE_ACCURATE, PERSONA_KNOWLEDGE_AWARE, PERSONA_COMPREHENSIVE, PERSONA_LIGHTWEIGHT,
-    DESC_PRECISE_ACCURATE, DESC_KNOWLEDGE_AWARE, DESC_COMPREHENSIVE, DESC_LIGHTWEIGHT,
+    PERSONA_PRECISE_ACCURATE, PERSONA_KNOWLEDGE_AWARE, PERSONA_COMPREHENSIVE, PERSONA_LIGHTWEIGHT, # noqa
+    DESC_PRECISE_ACCURATE, DESC_KNOWLEDGE_AWARE, DESC_COMPREHENSIVE, DESC_LIGHTWEIGHT, # noqa
     # Instruction Sets
-    STRICT_CONTEXT_INSTRUCTIONS, HYBRID_INSTRUCTIONS, OPTIMIZED_INSTRUCTIONS,
+    STRICT_CONTEXT_INSTRUCTIONS, HYBRID_INSTRUCTIONS, # OPTIMIZED_INSTRUCTIONS removed
     # Optional Blocks
-    CONTEXT_BLOCK, SOURCES_BLOCK, RELATIONSHIPS_BLOCK, INITIAL_ANSWER_BLOCK, QUESTION_BLOCK,
+    CONTEXT_BLOCK, SOURCES_BLOCK, RELATIONSHIPS_BLOCK, QUESTION_BLOCK, # INITIAL_ANSWER_BLOCK removed
     # Helper Strings
     KAG_CONTEXT_TYPE, STANDARD_CONTEXT_TYPE,
     KAG_RELATIONSHIP_QUALIFIER, KAG_RELATIONSHIP_QUALIFIER_CITE,
-    KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT, KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID, KAG_SPECIFIC_DETAIL_INSTRUCTION_OPTIMIZED,
+    KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT, KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID, # KAG_SPECIFIC_DETAIL_INSTRUCTION_OPTIMIZED removed
     EMPTY_STRING
 )
 # --- End Modular Template Imports ---
@@ -82,30 +82,22 @@ def _select_docs_for_context(docs_with_scores: List[Tuple[Document, float]], ava
 def _generate_response(
     query_text: str,
     # --- Parameters for standard and optimized flow ---
-    final_docs: List[Document],
-    sources: List[str],
+    final_docs: List[Document], # Docs selected based on original or refined query
+    sources: List[str], # Sources from selected docs
     rag_type: str,
     llm_config: Optional[Dict],
     truncated_history: Optional[List[Dict[str, str]]],
     estimated_context_tokens: int,
-    # --- Parameters specific to standard flow ---
-    hybrid: bool = False, # Default to False, only relevant if optimize=False
-    # --- Parameters specific to optimized flow ---
-    optimize: bool = False,
-    original_query: Optional[str] = None,
-    draft_answer: Optional[str] = None, # Changed from concise_summary
-    formatted_relationships: Optional[List[str]] = None # Add relationships parameter
+    hybrid: bool = False, # Flag to allow general knowledge fallback
+    formatted_relationships: Optional[List[str]] = None # KAG relationships
 ) -> Dict[str, Union[str, List[str], int]]:
     """Dynamically builds the prompt using modular components and calls the LLM."""
     # --- Handle case where no documents are found ---
     if not final_docs:
-        # If optimize is True, we might still want to return the draft answer even if no docs were found
-        if optimize and draft_answer:
-             logger.warning(f"No documents found for context, returning draft answer for {rag_type} mode.")
-             # Return draft answer, indicating no sources were used for refinement
-             return {"text": draft_answer, "sources": [], "estimated_context_tokens": 0}
-        else:
-            logger.warning(f"No documents provided to _generate_response for {rag_type} mode.")
+        # No draft answer to return anymore.
+        # If KAG and relationships exist, still proceed to format them. Otherwise, return no info.
+        if not (rag_type == 'kag' and formatted_relationships):
+            logger.warning(f"No documents provided to _generate_response for {rag_type} mode and no KAG relationships.")
             no_info_msg = "No relevant information found in the knowledge graph." if rag_type == 'kag' else "No relevant information found in the database."
             return {"text": no_info_msg, "sources": [], "estimated_context_tokens": 0}
 
@@ -120,7 +112,7 @@ def _generate_response(
     assistant_persona = PERSONA_PRECISE_ACCURATE # Default
     persona_description = DESC_PRECISE_ACCURATE # Default
     instructions = ""
-    initial_answer_block_placeholder = EMPTY_STRING
+    initial_answer_block_placeholder = EMPTY_STRING # No longer used
     context_block_placeholder = EMPTY_STRING
     relationships_block_placeholder = EMPTY_STRING
     sources_block_placeholder = EMPTY_STRING
@@ -139,18 +131,8 @@ def _generate_response(
         relationship_qualifier_cite = KAG_RELATIONSHIP_QUALIFIER_CITE
 
     # Select Instructions and Persona based on flags
-    if optimize:
-        logger.debug(f"Assembling Optimized prompt for {rag_type}")
-        instructions_base = OPTIMIZED_INSTRUCTIONS
-        assistant_persona = PERSONA_PRECISE_ACCURATE # Optimized flow uses precise persona
-        persona_description = DESC_PRECISE_ACCURATE
-        if rag_type == 'kag': kag_specific_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_OPTIMIZED
-        # Ensure required data for optimized flow exists
-        if not original_query or not draft_answer:
-            raise ValueError("Original query and draft answer are required for optimized pipeline.")
-        initial_answer_block_placeholder = INITIAL_ANSWER_BLOCK.format(draft_answer=draft_answer)
-        question_block_placeholder = QUESTION_BLOCK.format(question=original_query).replace("Question:", "Original Query:") # Rename label
-    elif hybrid:
+    # The 'optimize' flag now only affects retrieval query, not response generation instructions.
+    if hybrid:
         logger.debug(f"Assembling Hybrid prompt for {rag_type}")
         instructions_base = HYBRID_INSTRUCTIONS
         if rag_type == 'kag':
@@ -164,7 +146,7 @@ def _generate_response(
              assistant_persona = PERSONA_COMPREHENSIVE
              persona_description = DESC_COMPREHENSIVE
         question_block_placeholder = QUESTION_BLOCK.format(question=query_text)
-    else: # Strict Context (Non-Hybrid, Non-Optimized)
+    else: # Strict Context (hybrid=False)
         logger.debug(f"Assembling Strict Context prompt for {rag_type}")
         instructions_base = STRICT_CONTEXT_INSTRUCTIONS
         if rag_type == 'kag':

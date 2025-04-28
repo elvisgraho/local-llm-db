@@ -6,8 +6,8 @@ from query.database_paths import DEFAULT_DB_NAME
 from query.data_service import data_service
 from query.templates import (
     DIRECT_TEMPLATE
-) 
-from query.llm_service import get_llm_response, generate_draft_answer
+)
+from query.llm_service import get_llm_response, generate_refined_search_query # Updated import
 from query.global_vars import (
     RAG_SIMILARITY_THRESHOLD, # Used for lightrag filtering
     RAG_MAX_DOCUMENTS, # Target for final context document count
@@ -61,24 +61,19 @@ def query_rag(
     conversation_history: Optional[List[Dict[str, str]]] = None,
     metadata_filter: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Union[str, List[str], int]]:
-    """Query using standard RAG or the optimized 'Draft & Refine' pipeline."""
+    """Query using standard RAG or the optimized retrieval query pipeline."""
     try:
         original_query = query_text # Store original query
-        draft_answer = None
         retrieval_query_text = original_query
 
         if optimize:
-            logger.info(f"Processing Optimized RAG query (Draft & Refine) for {db_name}")
-            # Step 1: Generate Draft Answer (uses history internally)
-            draft_answer = generate_draft_answer(original_query, conversation_history, llm_config)
-            retrieval_query_text = draft_answer # Use draft answer for retrieval
-            logger.info(f"Using draft answer for retrieval: {retrieval_query_text[:100]}...")
-
-            # Step 2: Calculate context space for the *refinement* step
-            # Pass original_query and draft_answer for accurate calculation
+            logger.info(f"Processing Optimized RAG query (Refined Search Query) for {db_name}")
+            # Step 1: Generate Refined Search Query (uses history internally)
+            retrieval_query_text = generate_refined_search_query(original_query, conversation_history, llm_config)
+            # Step 2: Calculate context space for the final response generation
             truncated_history, available_tokens = _calculate_available_context(
                 query_text=original_query, conversation_history=conversation_history, llm_config=llm_config,
-                optimize=True, draft_answer=draft_answer
+                optimize=True # draft_answer removed
             )
         else:
             logger.info(f"Processing Standard RAG query for {db_name} (Hybrid: {hybrid})")
@@ -109,13 +104,12 @@ def query_rag(
         reranked_docs_scores = _rerank_results(retrieval_query_text, initial_docs_scores, RAG_MAX_DOCUMENTS)
         final_docs, sources, estimated_tokens = _select_docs_for_context(reranked_docs_scores, available_tokens)
 
-        # Generate final response (Refine or Standard)
+        # Generate final response (Optimized Retrieval or Standard)
         return _generate_response(
             query_text=original_query, # Always pass original query to _generate_response
             final_docs=final_docs, sources=sources, rag_type='rag',
             llm_config=llm_config, truncated_history=truncated_history, estimated_context_tokens=estimated_tokens,
-            optimize=optimize, original_query=original_query, draft_answer=draft_answer,
-            hybrid=hybrid if not optimize else False # Pass hybrid only if not optimizing
+            hybrid=hybrid # Pass original hybrid flag regardless of optimize status
         )
     except Exception as e:
         logger.error(f"Error in RAG query: {str(e)}", exc_info=True)
@@ -131,23 +125,19 @@ def query_lightrag(
     conversation_history: Optional[List[Dict[str, str]]] = None,
     metadata_filter: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Union[str, List[str], int]]:
-    """Query using LightRAG or the optimized 'Draft & Refine' pipeline."""
+    """Query using LightRAG or the optimized retrieval query pipeline."""
     try: # Ensure try is at correct indentation
         original_query = query_text # Store original query
-        draft_answer = None
         retrieval_query_text = original_query
 
         if optimize:
-            logger.info(f"Processing Optimized LightRAG query (Draft & Refine) for {db_name}")
-            # Step 1: Generate Draft Answer
-            draft_answer = generate_draft_answer(original_query, conversation_history, llm_config)
-            retrieval_query_text = draft_answer # Use draft answer for retrieval
-            logger.info(f"Using draft answer for retrieval: {retrieval_query_text[:100]}...")
-
-            # Step 2: Calculate context space for the *refinement* step
+            logger.info(f"Processing Optimized LightRAG query (Refined Search Query) for {db_name}")
+            # Step 1: Generate Refined Search Query
+            retrieval_query_text = generate_refined_search_query(original_query, conversation_history, llm_config)
+            # Step 2: Calculate context space for the final response generation
             truncated_history, available_tokens = _calculate_available_context(
                 query_text=original_query, conversation_history=conversation_history, llm_config=llm_config,
-                optimize=True, draft_answer=draft_answer
+                optimize=True # draft_answer removed
             )
         else:
             logger.info(f"Processing Standard LightRAG query for {db_name} (Hybrid: {hybrid})")
@@ -173,8 +163,8 @@ def query_lightrag(
 
         if not threshold_filtered_docs:
               logger.warning("No documents met the similarity threshold for LightRAG.")
-              # If optimizing, return draft answer if no docs found
-              if optimize and draft_answer: return {"text": draft_answer, "sources": [], "estimated_context_tokens": 0}
+              # If optimizing, still proceed to generate response with empty context
+              # (No draft answer to return anymore)
               return {"text": "No relevant information found matching the similarity criteria.", "sources": [], "estimated_context_tokens": 0}
 
         reranked_docs_scores = _rerank_results(retrieval_query_text, threshold_filtered_docs, RAG_MAX_DOCUMENTS)
@@ -185,8 +175,7 @@ def query_lightrag(
             query_text=original_query, # Always pass original query to _generate_response
             final_docs=final_docs, sources=sources, rag_type='lightrag',
             llm_config=llm_config, truncated_history=truncated_history, estimated_context_tokens=estimated_tokens,
-            optimize=optimize, original_query=original_query, draft_answer=draft_answer,
-            hybrid=hybrid if not optimize else False # Pass hybrid only if not optimizing
+            hybrid=hybrid # Pass original hybrid flag
         )
     except Exception as e: # Ensure except block is correctly aligned with try
         logger.error(f"Error in LightRAG query: {str(e)}", exc_info=True)
@@ -202,23 +191,20 @@ def query_kag( # Ensure def is at correct indentation
     conversation_history: Optional[List[Dict[str, str]]] = None,
     metadata_filter: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Union[str, List[str], int]]:
-    """Query using KAG or the optimized 'Draft & Refine' pipeline."""
+    """Query using KAG or the optimized retrieval query pipeline."""
     try:
         original_query = query_text # Store original query
-        draft_answer = None
         retrieval_query_text = original_query
 
         if optimize:
-            logger.info(f"Processing Optimized KAG query (Draft & Refine) for {db_name}")
-            # Step 1: Generate Draft Answer
-            draft_answer = generate_draft_answer(original_query, conversation_history, llm_config)
-            retrieval_query_text = draft_answer # Use draft answer for retrieval
-            logger.info(f"Using draft answer for retrieval: {retrieval_query_text[:100]}...")
+            logger.info(f"Processing Optimized KAG query (Refined Search Query) for {db_name}")
+            # Step 1: Generate Refined Search Query
+            retrieval_query_text = generate_refined_search_query(original_query, conversation_history, llm_config)
 
-            # Step 2: Calculate context space for the *refinement* step
+            # Step 2: Calculate context space for the final response generation
             truncated_history, available_tokens = _calculate_available_context(
                 query_text=original_query, conversation_history=conversation_history, llm_config=llm_config,
-                optimize=True, draft_answer=draft_answer
+                optimize=True # draft_answer removed
             )
         else:
             logger.info(f"Processing Standard KAG query for {db_name} (Hybrid: {hybrid})")
@@ -243,8 +229,8 @@ def query_kag( # Ensure def is at correct indentation
 
         if not initial_docs_scores:
               logger.warning("Graph retrieval yielded no documents for KAG.")
-              # If optimizing, return draft answer if no docs found
-              if optimize and draft_answer: return {"text": draft_answer, "sources": [], "estimated_context_tokens": 0}
+              # If optimizing, still proceed to generate response with empty context/relationships
+              # (No draft answer to return anymore)
               # Standard KAG: Pass empty lists and relationships to generate response
               return _generate_response(query_text=original_query, final_docs=[], sources=[], rag_type='kag', hybrid=hybrid, llm_config=llm_config, truncated_history=truncated_history, estimated_context_tokens=0, formatted_relationships=[])
 
@@ -256,8 +242,7 @@ def query_kag( # Ensure def is at correct indentation
             query_text=original_query, # Always pass original query to _generate_response
             final_docs=final_docs, sources=sources, rag_type='kag',
             llm_config=llm_config, truncated_history=truncated_history, estimated_context_tokens=estimated_tokens,
-            optimize=optimize, original_query=original_query, draft_answer=draft_answer,
-            hybrid=hybrid if not optimize else False, # Pass hybrid only if not optimizing
+            hybrid=hybrid, # Pass original hybrid flag
             formatted_relationships=formatted_relationships
         )
     except Exception as e:

@@ -9,7 +9,7 @@ BASE_RESPONSE_STRUCTURE = """
 You are a {assistant_persona}.
 {persona_description}
 
-{initial_answer_block_placeholder}
+{initial_answer_block_placeholder} # This placeholder will be empty string in the new optimize flow
 {context_block_placeholder}
 {relationships_block_placeholder}
 {sources_block_placeholder}
@@ -57,15 +57,7 @@ HYBRID_INSTRUCTIONS = """
 """
 
 # Placeholders: {kag_specific_instruction_placeholder}
-OPTIMIZED_INSTRUCTIONS = """
-1.  **CRITICAL:** Focus on answering the **Original Query**.
-2.  **CRITICAL:** Base your final response **primarily** on the information explicitly provided in the 'Retrieved Context'. Integrate relevant details from the context into your answer.
-3.  Use the 'Initial Answer' only as a secondary reference. If the 'Retrieved Context' contradicts the 'Initial Answer', prioritize the 'Retrieved Context'.
-4.  **ABSOLUTELY DO NOT** use any external knowledge or prior training data beyond what's in the 'Retrieved Context' unless the context is insufficient AND you explicitly state that the context lacks the necessary information first. If context is insufficient, you may refer more to the 'Initial Answer' or general knowledge, but clearly state this.
-5.  If the 'Retrieved Context' **does not contain** the information needed to answer the **Original Query**, you **MUST** respond *only* with the exact phrase: "The provided context does not contain enough information to answer the original query."
-6.  When referencing information directly extracted from the 'Retrieved Context', cite the corresponding source file path from the 'Sources' list using the format `[Source: file_path]`. Only cite sources when directly quoting or paraphrasing from the retrieved context.
-{kag_specific_instruction_placeholder}7.  Ensure the final answer is well-structured, coherent, and directly addresses all parts of the **Original Query**, based primarily on the retrieved context.
-"""
+# OPTIMIZED_INSTRUCTIONS removed as the optimize flow now focuses only on query refinement before standard generation.
 
 # --- Optional Blocks ---
 CONTEXT_BLOCK = """
@@ -82,11 +74,7 @@ RELATIONSHIPS_BLOCK = """
 Relationships:
 {relationships}
 """
-
-INITIAL_ANSWER_BLOCK = """
-Initial Answer (Generated without Retrieved Context):
-{draft_answer}
-"""
+# INITIAL_ANSWER_BLOCK removed as draft answers are no longer generated in the optimize flow.
 
 QUESTION_BLOCK = """
 Question: {question}
@@ -99,7 +87,7 @@ KAG_RELATIONSHIP_QUALIFIER = ", 'Relationships',"
 KAG_RELATIONSHIP_QUALIFIER_CITE = " or 'Relationships'"
 KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT = "6. When discussing examples or concepts from the Knowledge Context, **incorporate the specific details and descriptions provided for those examples directly into your explanation.** Do not just refer to them abstractly.\n7. Explain how the relationships help understand the answer, but only if the answer can be derived from the provided knowledge.\n8. " # Note the renumbering
 KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID = "7. When discussing examples or concepts from the Knowledge Context, **incorporate the specific details and descriptions provided for those examples directly into your explanation.**\n8. Explain how the relationships help understand the answer, incorporating context details.\n9. " # Note the renumbering
-KAG_SPECIFIC_DETAIL_INSTRUCTION_OPTIMIZED = "7. If discussing relationships (if provided in a 'Relationships' section), explain how they help answer the **Original Query**, citing sources appropriately.\n8. " # Note the renumbering
+# KAG_SPECIFIC_DETAIL_INSTRUCTION_OPTIMIZED removed as OPTIMIZED_INSTRUCTIONS is removed
 EMPTY_STRING = ""
 
 
@@ -125,24 +113,27 @@ Answer:
 """
 
 # ---------------------------------------
-# OPTIMIZE_INITIAL_ANSWER_TEMPLATE
+# REFINE_SEARCH_QUERY_TEMPLATE
 # ---------------------------------------
-OPTIMIZE_INITIAL_ANSWER_TEMPLATE = """
-You are an AI assistant. Your task is to provide a concise, direct answer (2-3 paragraphs) to the user's query based on the conversation history and the query itself, using your general knowledge.
+REFINE_SEARCH_QUERY_TEMPLATE = """You are an AI assistant specialized in query analysis and refinement for document retrieval.
+Your task is to generate the **best possible search query** to retrieve relevant documents for answering the 'Current Query', considering the 'Conversation History' (if provided).
 
 Strict Instructions:
-1. Analyze the 'Original Query' and the 'Conversation History' (if provided).
-2. Generate a direct answer to the 'Original Query' in 2-3 paragraphs.
-3. Base the answer on your general knowledge and the provided history.
-4. **DO NOT** ask clarifying questions. Provide the best possible answer based on the input.
-5. **DO NOT** state that you lack specific context or documents. Answer using only your general knowledge and the history.
-6. Output *only* the answer text.
+1. Analyze the 'Current Query' and the 'Conversation History' (if provided).
+2. Identify the core information need and key concepts in the 'Current Query'.
+3. Consider the context from the 'Conversation History' to understand nuances or implicit requirements.
+4. Generate a refined search query that is concise, specific, and uses keywords likely to appear in relevant documents. Think about synonyms, related terms, or potential answer structures that might guide the search.
+5. **DO NOT** attempt to answer the 'Current Query'. Your sole purpose is to create the best possible search terms to *find* relevant information, not to provide the information itself.
+6. Output *only* the refined search query text. No explanations, no greetings, no extra formatting.
+7. DO NOT ANSWER THE QUERY, RATHER, FOCUS ON CREATING A SEARCH QUERY.
 
-Conversation History (Newest to Oldest):
+Conversation History (oldest to newest):
+---- CONVERSTATION HISTORY START ----
 {history_placeholder}
+---- CONVERSATION HISTORY END ----
 
-Original Query:
+Current Query:
 {query}
 
-Concise Answer (2-3 paragraphs):
+Refined Search Query for Document Retrieval:
 """

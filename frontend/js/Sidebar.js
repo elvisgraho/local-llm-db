@@ -327,7 +327,7 @@ function Sidebar({
           onChange: handleOptimizeChange, // Calls prop function
           size: "small",
         }),
-        label: e(Typography, { variant: "body2" }, "Optimize Response"),
+        label: e(Typography, { variant: "body2" }, "Optimize Retrieval"),
         sx: { mb: 1, display: "flex", justifyContent: "space-between", ml: 0 },
       }),
       e(FormControlLabel, {

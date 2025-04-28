@@ -12,7 +12,6 @@ from typing import Optional
 @dataclass
 class LLMConfig:
     """Configuration for LLM-related settings."""
-    # Removed default values - these should be set via environment or frontend config
     model_name: Optional[str] = None
     api_url: Optional[str] = None
     temperature: float = 0.7 # Keep other defaults for now
@@ -32,8 +31,8 @@ class RAGConfig:
 class GraphConfig:
     """Configuration for graph-related settings."""
     max_depth: int = 2
-    max_nodes: int = 15
-    min_similarity: float = 0.7
+    max_nodes: int = 25
+    min_similarity: float = 0.5
 
 @dataclass
 class SystemConfig:
