@@ -1,3 +1,4 @@
+import re
 import requests
 from langchain.prompts import ChatPromptTemplate
 from query.global_vars import LOCAL_LLM_API_URL, LOCAL_MAIN_MODEL
@@ -251,7 +252,11 @@ def generate_refined_search_query( # Renamed function
         if not refined_query:
             logger.warning("LLM returned an empty refined search query. Falling back to original query.")
             refined_query = query_text # Fallback to original query
-
+            
+        tag_pattern = r'<(?P<tag>thinking|thought|reasoning|think)\b[^>]*>.*?</(?P=tag)>|\s*\[/?(?:thinking|thought|reasoning|think)\b[^\]]*\]\s*|\s*\((?:thinking|thought|reasoning|think)\b[^)]*\)\s*' 
+        refined_query = re.sub(tag_pattern, '', refined_query, flags=re.DOTALL).strip()
+        # Clean up any remaining whitespace and newlines
+        refined_query = refined_query.strip()
         logger.debug(f"Generated Refined Search Query: {refined_query}")
         return refined_query
 

@@ -180,8 +180,14 @@ window.sendQuery = async function (
       throw new Error(errorMessage);
     }
 
-    const assistantResponse =
+    let assistantResponse =
       responseData.data?.text || "No response text found.";
+
+    const tagRemovalPattern =
+      /<(thinking|thought|reasoning|think)\b[^>]*>[\s\S]*?<\/\1>|\s*\[\/?(?:thinking|thought|reasoning)\b[^\]]*]\s*|\s*\((?:thinking|thought|reasoning|think)\b[^)]*\)\s*/g;
+    assistantResponse = assistantResponse.replace(tagRemovalPattern, "");
+    assistantResponse = assistantResponse.trim();
+
     const assistantMessage = {
       content: assistantResponse,
       isUser: false,

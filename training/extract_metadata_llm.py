@@ -91,23 +91,8 @@ def _get_llm_response(prompt: str) -> str:
             return ""
             
         # Remove common LLM reasoning tags and their content
-        tags_to_remove = [
-            r'<think>.*?</think>',
-            r'<reasoning>.*?</reasoning>',
-            r'<step>.*?</step>',
-            r'<analysis>.*?</analysis>',
-            r'<explanation>.*?</explanation>',
-            r'<solution>.*?</solution>',
-            r'<approach>.*?</approach>',
-            r'<conclusion>.*?</conclusion>',
-            r'<summary>.*?</summary>',
-            r'<evaluation>.*?</evaluation>',
-            r'<consideration>.*?</consideration>',
-            r'<implementation>.*?</implementation>'
-        ]
-        
-        for tag_pattern in tags_to_remove:
-            content = re.sub(tag_pattern, '', content, flags=re.DOTALL)
+        tag_pattern = r'<(?P<tag>thinking|thought|reasoning|think)\b[^>]*>.*?</(?P=tag)>|\s*\[/?(?:thinking|thought|reasoning)\b[^\]]*\]\s*|\s*\((?:thinking|thought|reasoning|think)\b[^)]*\)\s*'
+        response = re.sub(tag_pattern, '', response).strip()    
         
         # Clean up the response text
         content = content.strip()

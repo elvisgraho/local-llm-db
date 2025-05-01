@@ -142,23 +142,9 @@ def process_pdf_content(text: str, search_type: str) -> Dict[str, Any]:
         # If that failed, try cleaning the response
         try:
             # Remove any thinking process or explanations
-            tags_to_remove = [
-                r'<think>.*?</think>',
-                r'<reasoning>.*?</reasoning>',
-                r'<step>.*?</step>',
-                r'<analysis>.*?</analysis>',
-                r'<explanation>.*?</explanation>',
-                r'<solution>.*?</solution>',
-                r'<approach>.*?</approach>',
-                r'<conclusion>.*?</conclusion>',
-                r'<summary>.*?</summary>',
-                r'<evaluation>.*?</evaluation>',
-                r'<consideration>.*?</consideration>',
-                r'<implementation>.*?</implementation>'
-            ]
-            
-            for tag_pattern in tags_to_remove:
-                response = re.sub(tag_pattern, '', response, flags=re.DOTALL)
+
+            tag_pattern = r'<(?P<tag>thinking|thought|reasoning|think)\b[^>]*>.*?</(?P=tag)>|\s*\[/?(?:thinking|thought|reasoning|think)\b[^\]]*\]\s*|\s*\((?:thinking|thought|reasoning|think)\b[^)]*\)\s*'
+            response = re.sub(tag_pattern, '', response, flags=re.DOTALL).strip()
             
             # Clean up any remaining whitespace and newlines
             response = response.strip()
