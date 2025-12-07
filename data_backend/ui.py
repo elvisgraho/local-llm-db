@@ -181,7 +181,7 @@ with tab_preview:
     st.header("Chunking Visualizer")
     c_prev1, c_prev2 = st.columns([1, 2])
     with c_prev1:
-        chunk_size = st.slider("Chunk Size", 100, 4000, 1500)
+        chunk_size = st.slider("Chunk Size", 100, 4000, 512)
         chunk_overlap = st.slider("Overlap", 0, 500, 200)
         
         all_files = [f for f in RAW_FILES_DIR.rglob('*') if f.is_file() and not f.name.startswith('.')]

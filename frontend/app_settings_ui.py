@@ -279,7 +279,7 @@ def render_settings_sidebar():
                 disabled=is_direct, 
                 label_visibility="collapsed",
                 key="db_selector",
-                on_change=_update_selected_db # <--- Critical Callback
+                on_change=_update_selected_db
             )
         
         with col_db_refresh:
@@ -292,8 +292,8 @@ def render_settings_sidebar():
     # 4. PARAMETERS
     # ==========================================
     with st.expander("🎛️ Parameters & Context", expanded=False):
-        top_k = st.slider("Retrieval Depth (Docs)", 1, 25, 4, disabled=is_direct)
-        history_limit = st.slider("Chat Memory (Msgs)", 0, 35, 12)
+        top_k = st.slider("Retrieval Depth (Docs)", 1, 25, 10, disabled=is_direct)
+        history_limit = st.slider("Chat Memory (Msgs)", 0, 35, 5)
         temp = st.slider("Temperature", 0.0, 1.0, 0.7)
 
     # Return clean configuration

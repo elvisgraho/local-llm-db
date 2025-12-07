@@ -52,7 +52,7 @@ def validate_metadata(metadata: Dict[str, Any]) -> bool:
 def split_document(
     doc: Document, 
     add_tags_llm: bool, 
-    max_chunk_size: int = 1500, 
+    max_chunk_size: int = 512, 
     max_total_chunks: int = 1000
 ) -> List[Document]:
     """
@@ -78,7 +78,7 @@ def split_document(
     # --- 2. Configure Splitter ---
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=max_chunk_size,
-        chunk_overlap=200,
+        chunk_overlap=100,
         length_function=len,
         is_separator_regex=False,
         separators=[

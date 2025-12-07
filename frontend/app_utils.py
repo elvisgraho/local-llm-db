@@ -14,7 +14,7 @@ from query.data_service import data_service
 
 # --- Constants ---
 AVG_CHARS_PER_TOKEN = 4
-AVG_CHUNK_SIZE = 1500  # Approx chars per RAG chunk
+AVG_CHUNK_SIZE = 512  # Approx chars per RAG chunk
 AVG_MSG_SIZE = 500     # Approx chars per chat message
 SYSTEM_PROMPT_OVERHEAD = 500 # Tokens reserved for system instructions
 

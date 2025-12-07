@@ -12,22 +12,11 @@ from langchain_core.documents import Document
 # Local Imports
 from query.llm_service import get_model_context_length, truncate_history
 from query.templates import (
-    RAG_SYSTEM_CONSTRUCTION, RAG_USER_TEMPLATE,
-    STRICT_CONTEXT_INSTRUCTIONS, HYBRID_INSTRUCTIONS,
-    QUESTION_BLOCK, CONTEXT_BLOCK, SOURCES_BLOCK,
-    STRICT_CONTEXT_INSTRUCTIONS, 
-    HYBRID_INSTRUCTIONS,
-    CONTEXT_BLOCK, 
-    SOURCES_BLOCK, 
-    RELATIONSHIPS_BLOCK, 
+    RAG_USER_TEMPLATE,
+    STRICT_CONTEXT_INSTRUCTIONS,
     QUESTION_BLOCK,
-    KAG_CONTEXT_TYPE, 
-    STANDARD_CONTEXT_TYPE,
-    KAG_RELATIONSHIP_QUALIFIER, 
-    KAG_RELATIONSHIP_QUALIFIER_CITE,
-    KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT, 
-    KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID,
-    EMPTY_STRING
+    STRICT_CONTEXT_INSTRUCTIONS, 
+    QUESTION_BLOCK,
 )
 
 # Configure Logger
@@ -95,7 +84,6 @@ def _apply_metadata_filter(
             
     logger.debug(f"Metadata filter: {len(docs_with_scores)} -> {len(filtered)} docs.")
     return filtered
-
 
 def _calculate_available_context(
     query_text: str,

@@ -24,8 +24,8 @@ class RAGConfig:
     """Configuration for RAG-related settings."""
     similarity_threshold: float = 0.5
     max_documents: int = 15
-    chunk_size: int = 1500
-    chunk_overlap: int = 200
+    chunk_size: int = 512
+    chunk_overlap: int = 100
 
 @dataclass
 class GraphConfig:
