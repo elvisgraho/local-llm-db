@@ -4,23 +4,86 @@ from query.global_vars import LOCAL_LLM_API_URL
 from query.database_paths import list_available_dbs, DEFAULT_DB_NAME
 import app_utils
 
+# --- Callbacks for Immediate Persistence ---
+def _update_llm_url():
+    st.session_state.llm_url = st.session_state.llm_url_input
+
+def _update_emb_url():
+    st.session_state.emb_url = st.session_state.emb_url_input
+
+def _update_emb_model():
+    st.session_state.emb_model = st.session_state.emb_selector
+
+def _update_rag_type():
+    """Persist strategy selection immediately."""
+    st.session_state.rag_strategy = st.session_state.rag_type_selector
+
+def _update_selected_db():
+    """Persist DB selection immediately."""
+    st.session_state.persisted_db = st.session_state.db_selector
+
 def render_settings_sidebar():
     """
-    Renders the Settings Sidebar (LLM, Embeddings, Knowledge Base) 
-    and returns a dictionary of configuration variables.
+    Renders the Settings Sidebar and returns the configuration dict.
+    Uses callbacks to ensure UI state survives reruns.
     """
-    config = {}
+    
+    # ==========================================
+    # 1. INITIALIZE PERSISTENT STATE
+    # ==========================================
+    if "llm_url" not in st.session_state: 
+        st.session_state.llm_url = LOCAL_LLM_API_URL
+    
+    if "emb_url" not in st.session_state: 
+        st.session_state.emb_url = LOCAL_LLM_API_URL
+    if "emb_model" not in st.session_state: 
+        st.session_state.emb_model = "text-embedding-nomic-embed-text-v1.5"
+    
+    # Knowledge Base Persistence
+    if "rag_strategy" not in st.session_state:
+        st.session_state.rag_strategy = "rag" # Default
+    if "persisted_db" not in st.session_state:
+        st.session_state.persisted_db = DEFAULT_DB_NAME
 
     # ==========================================
-    # 1. LLM & EMBEDDING SETTINGS
+    # 2. AUTO-SELECT SINGLE KNOWLEDGE BASE
     # ==========================================
+    # If the user has exactly ONE db across all types, auto-select it.
+    # This runs before widgets are rendered to set the correct defaults.
+    
+    strategies = ["rag", "lightrag", "kag"]
+    # Check what exists
+    found_map = {}
+    total_dbs = 0
+    
+    for s in strategies:
+        dbs = list_available_dbs(s)
+        if dbs:
+            found_map[s] = dbs
+            total_dbs += len(dbs)
+            
+    # Logic: If exactly 1 type has DBs, and that type has exactly 1 DB
+    if len(found_map) == 1 and total_dbs == 1:
+        target_strat = list(found_map.keys())[0]
+        target_db = found_map[target_strat][0]
+        
+        # Only override if we aren't currently on "Direct" or already selected
+        if st.session_state.rag_strategy != "direct":
+            if st.session_state.rag_strategy != target_strat or st.session_state.persisted_db != target_db:
+                st.session_state.rag_strategy = target_strat
+                st.session_state.persisted_db = target_db
+
+    config = {}
+
     with st.expander("🔌 LLM & Embedding Settings", expanded=True):
         
-        # --- Chat Model Settings ---
+        # ------------------------------------------
+        # A. CHAT MODEL SETTINGS
+        # ------------------------------------------
         st.caption("🗣️ Chat Model")
         provider = st.radio("Provider", ["local", "gemini"], horizontal=True, label_visibility="collapsed")
         
-        # Initialize variables to avoid UnboundLocalError
+        # Init outputs
         api_key = None 
         selected_model = ""
         local_url = LOCAL_LLM_API_URL
@@ -31,15 +94,17 @@ def render_settings_sidebar():
             selected_model = st.text_input("Gemini Model", value="gemini-1.5-flash")
             ctx_window = 32000
         else:
-            # URL Input (Persisted)
-            if "llm_url" not in st.session_state: st.session_state.llm_url = LOCAL_LLM_API_URL
-            local_url = st.text_input("LLM API URL", value=st.session_state.llm_url, key="llm_url_input")
-            st.session_state.llm_url = local_url
+            # URL Input with persistence callback
+            local_url = st.text_input(
+                "LLM API URL", 
+                value=st.session_state.llm_url, 
+                key="llm_url_input",
+                on_change=_update_llm_url
+            )
 
-            # Refresh & Select
             col_mod, col_ref = st.columns([0.85, 0.15])
             with col_ref:
-                if st.button("🔄", key="refresh_chat", help="Fetch Models"):
+                if st.button("🔄", key="refresh_chat", help="Fetch Chat Models"):
                     st.cache_data.clear()
                     st.rerun()
             
@@ -54,17 +119,18 @@ def render_settings_sidebar():
 
         st.divider()
 
-        # --- Embedding Settings (RAG) ---
+        # ------------------------------------------
+        # B. EMBEDDING SETTINGS
+        # ------------------------------------------
         st.caption("🧠 Embedding Model")
 
-        # Initialize Session State for Embeddings
-        if "emb_url" not in st.session_state: st.session_state.emb_url = LOCAL_LLM_API_URL
-        if "emb_model" not in st.session_state: st.session_state.emb_model = "text-embedding-nomic-embed-text-v1.5"
+        new_emb_url = st.text_input(
+            "Embedding API URL", 
+            value=st.session_state.emb_url, 
+            key="emb_url_input",
+            on_change=_update_emb_url
+        )
 
-        # URL Input
-        new_emb_url = st.text_input("Embedding API URL", value=st.session_state.emb_url, key="emb_url_input")
-
-        # Refresh & Select
         col_emb_sel, col_emb_ref = st.columns([0.85, 0.15])
         
         with col_emb_ref:
@@ -73,33 +139,33 @@ def render_settings_sidebar():
                 st.rerun()
 
         with col_emb_sel:
-            # Fetch models from the Embedding URL
             emb_models = app_utils.fetch_available_models(new_emb_url)
             if not emb_models:
-                emb_models = [st.session_state.emb_model, "text-embedding-nomic-embed-text-v1.5"]
+                emb_models = [st.session_state.emb_model]
             
-            # Keep previous selection if valid
-            current_idx = 0
-            if st.session_state.emb_model in emb_models:
+            try:
                 current_idx = emb_models.index(st.session_state.emb_model)
+            except ValueError:
+                current_idx = 0
 
             selected_emb_model = st.selectbox(
                 "Select Embedding", 
                 emb_models, 
                 index=current_idx,
                 key="emb_selector",
+                on_change=_update_emb_model,
                 label_visibility="collapsed"
             )
 
-        # Apply Button (Critical for Embeddings)
         if st.button("💾 Apply & Load Embeddings", type="primary", width="stretch"):
             from query.data_service import data_service
             with st.spinner("Initializing Embeddings..."):
-                success = data_service.update_embedding_config(new_emb_url, selected_emb_model)
+                success = data_service.update_embedding_config(
+                    st.session_state.emb_url, 
+                    st.session_state.emb_model
+                )
                 if success:
-                    st.session_state.emb_url = new_emb_url
-                    st.session_state.emb_model = selected_emb_model
-                    st.success(f"Loaded: {selected_emb_model}")
+                    st.success(f"Loaded: {st.session_state.emb_model}")
                     time.sleep(0.5)
                     st.rerun()
                 else:
@@ -142,30 +208,50 @@ def render_settings_sidebar():
                     st.rerun()
 
     # ==========================================
-    # 3. KNOWLEDGE BASE
+    # 3. KNOWLEDGE BASE (Updated for Persistence)
     # ==========================================
     with st.expander("📚 Knowledge Base", expanded=True):
+        
+        # 1. Strategy Selector (Persisted)
+        rag_options = ["rag", "lightrag", "kag", "direct"]
+        try:
+            strat_idx = rag_options.index(st.session_state.rag_strategy)
+        except ValueError:
+            strat_idx = 0
+            
         rag_type = st.selectbox(
-            "Strategy", ["rag", "lightrag", "kag", "direct"],
+            "Strategy", 
+            rag_options,
+            index=strat_idx,
+            key="rag_type_selector",
+            on_change=_update_rag_type,
             format_func=lambda x: {"rag": "Standard RAG", "lightrag": "LightRAG", "kag": "KAG", "direct": "LLM Only"}.get(x, x)
         )
         is_direct = (rag_type == "direct")
         
         col_db_select, col_db_refresh = st.columns([0.85, 0.15])
         
-        # PERSISTENCE LOGIC for Database
-        if "persisted_db" not in st.session_state:
-            st.session_state.persisted_db = DEFAULT_DB_NAME
-        
+        # 2. Get Available DBs based on selected strategy
         dbs = list_available_dbs(rag_type) if not is_direct else [DEFAULT_DB_NAME]
         
-        # Validate persistence
-        if st.session_state.persisted_db not in dbs and dbs:
-            st.session_state.persisted_db = dbs[0]
+        # 3. Ensure Persisted DB is valid for current strategy
+        # If the persisted DB (e.g., 'default') isn't in the new strategy (e.g., KAG has different DBs),
+        # we default to the first one available, but we don't overwrite session state immediately
+        # unless the user makes a selection.
+        current_selection_valid = st.session_state.persisted_db in dbs
         
-        # Determine index
+        if not current_selection_valid and dbs:
+            # Auto-select first if invalid
+            current_db_value = dbs[0]
+            # Update persistence implicitly so logic downstream works
+            st.session_state.persisted_db = current_db_value
+        elif not dbs:
+            current_db_value = "No DB"
+        else:
+            current_db_value = st.session_state.persisted_db
+
         try:
-            db_index = dbs.index(st.session_state.persisted_db)
+            db_index = dbs.index(current_db_value)
         except ValueError:
             db_index = 0
 
@@ -176,9 +262,9 @@ def render_settings_sidebar():
                 index=db_index,
                 disabled=is_direct, 
                 label_visibility="collapsed",
-                key="db_selector"
+                key="db_selector",
+                on_change=_update_selected_db # <--- Critical Callback
             )
-            st.session_state.persisted_db = selected_db
         
         with col_db_refresh:
             if st.button("🔄", key="refresh_db", help="Refresh Database List", width='stretch'):
@@ -194,10 +280,10 @@ def render_settings_sidebar():
         history_limit = st.slider("Chat Memory (Msgs)", 0, 20, 6)
         temp = st.slider("Temperature", 0.0, 1.0, 0.7)
 
-    # Pack config to return to main
-    config = {
+    # Return clean configuration
+    return {
         "provider": provider,
-        "api_key": api_key, # Guaranteed to be defined now
+        "api_key": api_key,
         "selected_model": selected_model,
         "local_url": local_url,
         "ctx_window": ctx_window,
@@ -210,4 +296,3 @@ def render_settings_sidebar():
         "temp": temp,
         "is_direct": is_direct
     }
-    return config
