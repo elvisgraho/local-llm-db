@@ -202,8 +202,11 @@ with tab_preview:
                     length_function=len,
                     is_separator_regex=False,
                     separators=[
-                        "\n\n## ", "\n\n### ", "\n\n#### ", "\n\n", 
-                        "\n```", "\n", ". ", " ", ""
+                        "\n\n",       # Paragraph (Highest semantic break)
+                        "\n",         # Line Break
+                        ". ",         # Sentence End (Crucial fallback to avoid mid-sentence cuts)
+                        " ",          # Word Boundary (Last resort before character splitting)
+                        ""            # Character Fallback (Final necessary failsafe)
                     ],
                     keep_separator=True
                 )
