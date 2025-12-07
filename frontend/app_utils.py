@@ -30,8 +30,6 @@ DIRECTIVES:
 
 PROMPTS_FILE = "prompts.json"
 
-
-
 def apply_custom_css():
     """Injects custom CSS for the chat interface."""
     st.markdown("""
@@ -39,13 +37,59 @@ def apply_custom_css():
         .main .block-container { max_width: 95%; padding-top: 2rem; padding-bottom: 2rem; }
         .stChatMessage { background-color: transparent; border-bottom: 1px solid rgba(128, 128, 128, 0.1); }
         code { font-family: 'Fira Code', monospace; font-size: 0.9em; }
-        .source-tag { font-size: 0.75em; background-color: #1E1E1E; padding: 2px 8px; border-radius: 12px; margin-right: 5px; color: #00ADB5; }
+        
+        .source-citation {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background-color: rgba(0, 173, 181, 0.2); /* Slightly darker teal background */
+            border: 1px solid rgba(0, 173, 181, 0.5);
+            border-radius: 6px;
+            padding: 2px 8px;
+            margin: 0 4px;
+            font-size: 0.8em;
+            font-weight: 500;
+            color: #E0E0E0;
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            vertical-align: baseline; /* Fixes bullet point alignment */
+            white-space: nowrap;      /* Prevents badge breaking mid-line */
+            cursor: default;
+        }
+        
+        .source-citation:before {
+            content: "📄";
+            margin-right: 4px;
+            font-size: 0.9em;
+            opacity: 0.8;
+        }
+
         .stButton button { text-align: left; padding-left: 10px; }
-        /* Progress bar styling for token meter */
         .stProgress > div > div > div > div { background-color: #00ADB5; }
     </style>
     """, unsafe_allow_html=True)
-
+    
+def format_citations(text: str) -> str:
+    """
+    Finds [Source: filename] patterns, strips surrounding Markdown code backticks,
+    and wraps them in a styled HTML span.
+    """
+    if not text: return ""
+    
+    # Regex Explanation:
+    # `?           -> Matches an optional opening backtick
+    # \[Source:    -> Matches literal "[Source:"
+    # \s*          -> Matches optional whitespace
+    # (.*?)        -> Capture Group 1: The filename content
+    # \]           -> Matches literal "]"
+    # `?           -> Matches an optional closing backtick
+    
+    return re.sub(
+        r'`?\[Source:\s*(.*?)\]`?', 
+        r'<span class="source-citation">\1</span>', 
+        text
+    )
+    
+    
 @st.cache_resource
 def warm_up_resources():
     """Initialize heavy resources (Embeddings, Reranker) once."""
@@ -229,3 +273,4 @@ def save_system_prompt(name, content):
         return True
     except Exception as e:
         return False
+    

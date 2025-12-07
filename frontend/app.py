@@ -205,13 +205,18 @@ def main():
     for msg in current_session["messages"]:
         with st.chat_message(msg["role"]):
             if msg.get("reasoning"):
-                with st.expander("💭 Reasoning", expanded=False): st.markdown(msg["reasoning"])
-            st.markdown(msg["content"])
+                with st.expander("💭 Reasoning", expanded=False): 
+                    st.markdown(msg["reasoning"]) # Reasoning usually doesn't have sources
+
+            # 1. Apply formatting
+            formatted_content = app_utils.format_citations(msg["content"])
+            st.markdown(formatted_content, unsafe_allow_html=True) 
+
             if msg.get("sources"):
                 with st.expander(f"📚 Sources ({len(msg['sources'])})"):
                     for src in msg["sources"]:
                         st.markdown(f"📄 **{os.path.basename(src)}**\n`{src}`")
-
+                        
     # ==========================================
     # INPUT LOOP & LOGIC
     # ==========================================
@@ -297,7 +302,8 @@ def main():
                 with st.expander("💭 Internal Thought Process", expanded=False):
                     st.markdown(reasoning)
 
-            response_container.markdown(clean_text)
+            formatted_response = app_utils.format_citations(clean_text)
+            response_container.markdown(formatted_response, unsafe_allow_html=True)
 
             # Source Display
             if sources:

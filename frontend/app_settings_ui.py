@@ -119,9 +119,9 @@ def render_settings_sidebar():
                 selected_model = st.selectbox("Select Model", available_models, label_visibility="collapsed")
             
             ctx_window = st.selectbox(
-                "Context Limit (Max Tokens)", 
-                [8192, 16384, 32768, 128000], 
-                index=3, # Defaults to 128000
+                "Context Limit (Max Tokens)",
+                [4096, 8192, 16384, 56000, 120000],
+                index=1,
                 help="Set this to match your loaded model's limit (e.g. Llama3 is 8192)"
             )
                 
@@ -292,8 +292,8 @@ def render_settings_sidebar():
     # 4. PARAMETERS
     # ==========================================
     with st.expander("🎛️ Parameters & Context", expanded=False):
-        top_k = st.slider("Retrieval Depth (Docs)", 1, 40, 5, disabled=is_direct)
-        history_limit = st.slider("Chat Memory (Msgs)", 0, 30, 6)
+        top_k = st.slider("Retrieval Depth (Docs)", 1, 25, 4, disabled=is_direct)
+        history_limit = st.slider("Chat Memory (Msgs)", 0, 35, 12)
         temp = st.slider("Temperature", 0.0, 1.0, 0.7)
 
     # Return clean configuration

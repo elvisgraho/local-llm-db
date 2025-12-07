@@ -95,7 +95,7 @@ def query_direct(
 
 def query_rag(
     query_text: str,
-    top_k: int = 5,
+    top_k: int = 4,
     hybrid: bool = False,
     db_name: str = DEFAULT_DB_NAME,
     llm_config: Optional[Dict] = None,
@@ -155,7 +155,7 @@ def query_rag(
 
 def query_lightrag(
     query_text: str,
-    top_k: int = 5,
+    top_k: int = 4,
     hybrid: bool = False,
     db_name: str = DEFAULT_DB_NAME,
     llm_config: Optional[Dict] = None,
@@ -217,7 +217,7 @@ def query_lightrag(
 
 def query_kag(
     query_text: str,
-    top_k: int = 5,
+    top_k: int = 4,
     hybrid: bool = False,
     db_name: str = DEFAULT_DB_NAME,
     llm_config: Optional[Dict] = None,
