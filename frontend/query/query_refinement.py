@@ -7,19 +7,26 @@ from query.data_service import data_service
 
 logger = logging.getLogger(__name__)
 
-# Constants based on typical Embedding Model limits (e.g. BERT/Nomic)
-# We do not guess; we respect the engineering limit of the vector space.
-VECTOR_CAPACITY_CHARS = 1000  # Approx 250-300 tokens. Beyond this, dense vectors lose precision.
+# Constants
+VECTOR_CAPACITY_CHARS = 1000 
 
 class KeyBERTAdapter:
-    """Adapts LangChain Embeddings to be compatible with KeyBERT's .encode() expectation."""
+    """Adapts LangChain Embeddings to be compatible with KeyBERT."""
     def __init__(self, embedding_model):
         self.embedding_model = embedding_model
 
     def encode(self, docs: List[str]) -> Any:
+        # Optimistic check: If docs is a single string, wrap it
         if isinstance(docs, str):
-            return [self.embedding_model.embed_query(docs)]
-        return self.embedding_model.embed_documents(docs)
+            docs = [docs]
+            
+        try:
+            # This calls the Embedding API, NOT the Chat API
+            return self.embedding_model.embed_documents(docs)
+        except Exception as e:
+            logger.error(f"Embedding encoding failed: {e}")
+            # Fallback to prevent crash, returns zero-vector-ish empty list logic downstream
+            return []
 
 class QueryProcessor:
     def __init__(self):
@@ -27,18 +34,23 @@ class QueryProcessor:
 
     @property
     def kw_model(self):
-        """Lazy load KeyBERT using the existing embedding function."""
+        """Lazy load KeyBERT."""
         if self._kw_model is None:
-            logger.info("Initializing KeyBERT for Semantic Distillation...")
+            # Ensure we are grabbing the currently loaded embedding function
+            # If the user switched it in UI, data_service should have the new one
+            if not data_service.embedding_function:
+                 logger.warning("Embedding function not ready for KeyBERT.")
+                 return None
+                 
+            logger.info("Initializing KeyBERT...")
             adapter = KeyBERTAdapter(data_service.embedding_function)
             self._kw_model = KeyBERT(model=adapter)
         return self._kw_model
 
     def _distill_text(self, text: str, top_n: int = 10) -> str:
-        """
-        Mathematically reduces text to its most semantically significant components.
-        Used to compress history or massive logs into a search-optimized string.
-        """
+        if not self.kw_model:
+            return text[:VECTOR_CAPACITY_CHARS]
+
         try:
             keywords = self.kw_model.extract_keywords(
                 text, 
@@ -46,11 +58,11 @@ class QueryProcessor:
                 stop_words='english', 
                 top_n=top_n
             )
-            # Join top keywords to form a dense search query
             return " ".join([kw[0] for kw in keywords])
         except Exception as e:
-            logger.error(f"Distillation failed: {e}")
-            return text[:VECTOR_CAPACITY_CHARS] # Fallback: Truncate
+            logger.warning(f"KeyBERT Distillation failed (likely model mismatch): {e}")
+            # Fallback to raw text truncation
+            return text[:VECTOR_CAPACITY_CHARS]
 
     def process_query(self, query_text: str, conversation_history: Optional[List[Dict]] = None) -> str:
         """

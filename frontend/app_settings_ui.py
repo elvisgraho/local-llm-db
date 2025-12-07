@@ -93,8 +93,7 @@ def render_settings_sidebar():
             api_key = st.text_input("Gemini API Key", type="password")
             selected_model = st.text_input("Gemini Model", value="gemini-1.5-flash")
             ctx_window = 32000
-        else:
-            # URL Input with persistence callback
+        elif provider == "local":
             local_url = st.text_input(
                 "LLM API URL", 
                 value=st.session_state.llm_url, 
@@ -109,14 +108,23 @@ def render_settings_sidebar():
                     st.rerun()
             
             with col_mod:
-                available_models = app_utils.fetch_available_models(local_url)
+                # FILTER FOR CHAT MODELS
+                available_models = app_utils.fetch_available_models(local_url, filter_type='chat')
+                if st.session_state.get("selected_model") and st.session_state.selected_model not in available_models:
+                     available_models.insert(0, st.session_state.selected_model)
+                
                 if not available_models:
                     available_models = ["local-model"]
-                
+
                 selected_model = st.selectbox("Select Model", available_models, label_visibility="collapsed")
             
-            ctx_window = st.selectbox("Context Limit", [4096, 8192, 16384, 32768, 128000], index=1)
-
+            ctx_window = st.selectbox(
+                "Context Limit (Max Tokens)", 
+                [8192, 16384, 32768, 128000], 
+                index=3, # Defaults to 128000
+                help="Set this to match your loaded model's limit (e.g. Llama3 is 8192)"
+            )
+                
         st.divider()
 
         # ------------------------------------------
@@ -139,12 +147,20 @@ def render_settings_sidebar():
                 st.rerun()
 
         with col_emb_sel:
-            emb_models = app_utils.fetch_available_models(new_emb_url)
-            if not emb_models:
-                emb_models = [st.session_state.emb_model]
+            # FILTER FOR EMBEDDING MODELS
+            emb_models = app_utils.fetch_available_models(new_emb_url, filter_type='embed')
             
+            # PRESERVE SELECTION: Ensure current model is in list so it doesn't vanish
+            current_emb = st.session_state.emb_model
+            if current_emb and current_emb not in emb_models:
+                emb_models.insert(0, current_emb)
+            
+            if not emb_models:
+                emb_models = [current_emb] if current_emb else ["text-embedding-nomic-embed-text-v1.5"]
+            
+            # Find index safely
             try:
-                current_idx = emb_models.index(st.session_state.emb_model)
+                current_idx = emb_models.index(current_emb)
             except ValueError:
                 current_idx = 0
 
@@ -276,8 +292,8 @@ def render_settings_sidebar():
     # 4. PARAMETERS
     # ==========================================
     with st.expander("🎛️ Parameters & Context", expanded=False):
-        top_k = st.slider("Retrieval Depth (Docs)", 1, 20, 5, disabled=is_direct)
-        history_limit = st.slider("Chat Memory (Msgs)", 0, 20, 6)
+        top_k = st.slider("Retrieval Depth (Docs)", 1, 40, 5, disabled=is_direct)
+        history_limit = st.slider("Chat Memory (Msgs)", 0, 30, 6)
         temp = st.slider("Temperature", 0.0, 1.0, 0.7)
 
     # Return clean configuration

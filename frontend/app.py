@@ -270,7 +270,6 @@ def main():
                     response = strategies[cfg["rag_type"]](
                         **common_args, 
                         top_k=cfg["top_k"], 
-                        rag_type=cfg["rag_type"], 
                         db_name=cfg["selected_db"], 
                         hybrid=cfg["hybrid"]
                     )

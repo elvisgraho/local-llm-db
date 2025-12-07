@@ -12,7 +12,9 @@ from langchain_core.documents import Document
 # Local Imports
 from query.llm_service import get_model_context_length, truncate_history
 from query.templates import (
-    BASE_RESPONSE_STRUCTURE,
+    RAG_SYSTEM_CONSTRUCTION, RAG_USER_TEMPLATE,
+    STRICT_CONTEXT_INSTRUCTIONS, HYBRID_INSTRUCTIONS,
+    QUESTION_BLOCK, CONTEXT_BLOCK, SOURCES_BLOCK,
     STRICT_CONTEXT_INSTRUCTIONS, 
     HYBRID_INSTRUCTIONS,
     CONTEXT_BLOCK, 
@@ -94,113 +96,50 @@ def _apply_metadata_filter(
     logger.debug(f"Metadata filter: {len(docs_with_scores)} -> {len(filtered)} docs.")
     return filtered
 
+
 def _calculate_available_context(
     query_text: str,
     conversation_history: Optional[List[Dict[str, str]]],
     llm_config: Optional[Dict[str, Any]],
-    hybrid: bool = False,
-    rag_type: str = 'rag',
-    reserved_for_response: int = DEFAULT_RESPONSE_RESERVE
+    reserved_for_response: int = 1500
 ) -> Tuple[List[Dict[str, str]], int]:
-    """
-    Calculates the token budget available for retrieved context.
     
-    Logic:
-    Total_Context_Window
-    - Fixed_Prompt_Overhead (Instructions + Query Wrapper)
-    - Reserved_For_Output (The Answer)
-    - Safety_Margin
-    - History (Truncated to fit remaining space)
-    = Available_For_Documents
-
-    Returns:
-        Tuple[List[Dict], int]: (truncated_history, available_tokens_for_context)
-    """
     # 1. Get Model Limits
     total_context_length = get_model_context_length(llm_config)
     fixed_tokens = 0
 
-    # 2. Estimate Fixed Template Components
-    # We estimate the overhead of the structural blocks by stripping placeholders
-    base_structure_overhead = BASE_RESPONSE_STRUCTURE \
-        .replace("{assistant_persona}", "") \
-        .replace("{persona_description}", "") \
-        .replace("{initial_answer_block_placeholder}", "") \
-        .replace("{context_block_placeholder}", "") \
-        .replace("{relationships_block_placeholder}", "") \
-        .replace("{sources_block_placeholder}", "") \
-        .replace("{instructions}", "") \
-        .replace("{question_block_placeholder}", "") \
-        .replace("Answer:", "")
-    
-    fixed_tokens += _estimate_tokens(base_structure_overhead)
+    # 2. Get User's System Prompt Size
+    user_system_prompt = llm_config.get('system_prompt', "")
+    fixed_tokens += _estimate_tokens(user_system_prompt)
 
-    # 3. Handle KAG Specifics
-    is_kag = (rag_type == 'kag')
-    kag_specific_instruction = EMPTY_STRING
-    relationship_qualifier = EMPTY_STRING
-    relationship_qualifier_cite = EMPTY_STRING
-    
-    if is_kag:
-        relationship_qualifier = KAG_RELATIONSHIP_QUALIFIER
-        relationship_qualifier_cite = KAG_RELATIONSHIP_QUALIFIER_CITE
-        # Add overhead for the Relationships block
-        fixed_tokens += _estimate_tokens(RELATIONSHIPS_BLOCK.replace("{relationships}", ""))
+    # 3. Add Overhead for RAG Instructions (Estimate)
+    # We use the larger of the two instruction sets to be safe
+    instruction_overhead = _estimate_tokens(STRICT_CONTEXT_INSTRUCTIONS) + 50 
+    fixed_tokens += instruction_overhead
 
-    # 4. Construct Instruction Block
-    context_type_label = KAG_CONTEXT_TYPE if is_kag else STANDARD_CONTEXT_TYPE
-    
-    # but the prompt structure relies on the 'hybrid' flag.
-    if hybrid:
-        if is_kag:
-            kag_specific_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID
-        instruction_text = HYBRID_INSTRUCTIONS.format(
-            context_type=context_type_label, 
-            relationship_qualifier=relationship_qualifier, 
-            relationship_qualifier_cite=relationship_qualifier_cite, 
-            kag_specific_instruction_placeholder=kag_specific_instruction
-        )
-    else:
-        if is_kag:
-            kag_specific_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT
-        instruction_text = STRICT_CONTEXT_INSTRUCTIONS.format(
-            context_type=context_type_label, 
-            context_type_lower=context_type_label.lower(), 
-            relationship_qualifier=relationship_qualifier, 
-            relationship_qualifier_cite=relationship_qualifier_cite, 
-            kag_specific_instruction_placeholder=kag_specific_instruction
-        )
-    
-    fixed_tokens += _estimate_tokens(instruction_text)
+    # 4. Add Overhead for User Template Wrapper
+    # (Context placeholders, sources placeholders, etc)
+    user_wrapper_overhead = _estimate_tokens(RAG_USER_TEMPLATE)
+    fixed_tokens += user_wrapper_overhead
 
     # 5. Add Query and Block Overheads
     fixed_tokens += _estimate_tokens(query_text)
-    fixed_tokens += _estimate_tokens(QUESTION_BLOCK.replace("{question}", ""))
-    fixed_tokens += _estimate_tokens(CONTEXT_BLOCK.replace("{context_type}", "").replace("{context}", ""))
-    fixed_tokens += _estimate_tokens(SOURCES_BLOCK.replace("{sources}", ""))
+    fixed_tokens += _estimate_tokens(QUESTION_BLOCK)
+    # Add a buffer for the context headers ("Context:", "Sources:")
+    fixed_tokens += 50 
 
-    # 6. Calculate Remaining Budget for History
-    # Budget = Total - Fixed - Output_Reserve - Safety
-    remaining_tokens = total_context_length - fixed_tokens - reserved_for_response - CONTEXT_SAFETY_MARGIN
+    # 6. Calculate Remaining Budget
+    remaining_tokens = total_context_length - fixed_tokens - reserved_for_response - 200 # Safety margin
     
-    # FIX: Prevent negative calculation
     if remaining_tokens < 100:
-        logger.warning(f"Extreme low context warning. Remaining: {remaining_tokens}. Forcing minimum buffer.")
         remaining_tokens = 100 
     
-    # We allow history to take up to 40% of the remaining space
+    # 7. Allocate History
     max_history_tokens = max(0, int(remaining_tokens * 0.4)) 
-    
     truncated_history, history_tokens_used = truncate_history(conversation_history, max_history_tokens)
 
-    # 7. Final Calculation for Context Documents
+    # 8. Result
     available_tokens_for_context = remaining_tokens - history_tokens_used
     available_tokens_for_context = max(1000, available_tokens_for_context)
-
-    logger.info(
-        f"Context Budget [{rag_type.upper()}|Hybrid:{hybrid}]: "
-        f"Total={total_context_length} | Fixed={fixed_tokens} | ResponseReserve={reserved_for_response} | "
-        f"History={history_tokens_used} | AvailableForDocs={available_tokens_for_context}"
-    )
     
     return truncated_history, available_tokens_for_context

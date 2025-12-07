@@ -1,30 +1,16 @@
 import logging
-from typing import Any, Optional, List, Dict, Union, Tuple, Set
-
-# Modern LangChain Core Imports
+from typing import Any, Optional, List, Dict, Tuple, Union
 from langchain_core.documents import Document
-from langchain_core.prompts import ChatPromptTemplate
-
-# Local Imports
 from query.data_service import data_service
 from query.llm_service import get_llm_response
 from query.query_helpers import _estimate_tokens, _reorder_documents_for_context
 
-# --- Modular Template Imports ---
+# Updated Imports
 from query.templates import (
-    BASE_RESPONSE_STRUCTURE,
-    # Personas
-    PERSONA_PRECISE_ACCURATE, PERSONA_KNOWLEDGE_AWARE, 
-    PERSONA_COMPREHENSIVE, PERSONA_LIGHTWEIGHT,
-    DESC_PRECISE_ACCURATE, DESC_KNOWLEDGE_AWARE, 
-    DESC_COMPREHENSIVE, DESC_LIGHTWEIGHT,
-    # Instruction Sets
+    RAG_SYSTEM_CONSTRUCTION, RAG_USER_TEMPLATE,
     STRICT_CONTEXT_INSTRUCTIONS, HYBRID_INSTRUCTIONS,
-    # Optional Blocks
     CONTEXT_BLOCK, SOURCES_BLOCK, RELATIONSHIPS_BLOCK, QUESTION_BLOCK,
-    # Helper Strings
     KAG_CONTEXT_TYPE, STANDARD_CONTEXT_TYPE,
-    KAG_RELATIONSHIP_QUALIFIER, KAG_RELATIONSHIP_QUALIFIER_CITE,
     KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT, KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID,
     EMPTY_STRING
 )
@@ -130,79 +116,50 @@ def _generate_response(
     hybrid: bool = False,
     formatted_relationships: Optional[List[str]] = None
 ) -> Dict[str, Union[str, List[str], int]]:
-    """
-    Dynamically builds the prompt using modular components and calls the LLM.
-    """
-    # 1. Validation: If no docs and no graph data, return early (unless hybrid might allow generic answer, 
-    #    but typically RAG expects *some* context or a "no info" response).
+    
+    # 1. Validation
     if not final_docs and not (rag_type == 'kag' and formatted_relationships):
-        logger.warning(f"No documents/graph data for {rag_type}. Returning 'No Info'.")
-        no_info_msg = (
-            "No relevant information found in the knowledge graph." 
-            if rag_type == 'kag' else 
-            "No relevant information found in the database."
-        )
-        return {
-            "text": no_info_msg, 
-            "sources": [], 
-            "estimated_context_tokens": 0
-        }
+        no_info_msg = "No relevant information found in the database."
+        return {"text": no_info_msg, "sources": [], "estimated_context_tokens": 0}
 
     # 2. Prepare Context Text
     reordered_docs = _reorder_documents_for_context(final_docs)
     context_parts = []
     for doc in reordered_docs:
-        # Extract filename for better context awareness
         src = doc.metadata.get("source", "unknown")
-        # Clean path to be relative if possible
-        if "/" in src or "\\" in src:
-            src = src.split("/")[-1].split("\\")[-1]
-            
-        # XML wrapping allows the LLM to understand file boundaries
+        if "/" in src or "\\" in src: src = src.split("/")[-1].split("\\")[-1]
         context_parts.append(f"<document source='{src}'>\n{doc.page_content}\n</document>")
     
     context_text = "\n\n".join(context_parts)
 
-    # 3. Determine Context Labels & KAG Specifics
+    # 3. Determine Context Labels
     is_kag = (rag_type == 'kag')
     context_type_label = KAG_CONTEXT_TYPE if is_kag else STANDARD_CONTEXT_TYPE
     
-    relationship_qualifier = KAG_RELATIONSHIP_QUALIFIER if is_kag else EMPTY_STRING
-    relationship_qualifier_cite = KAG_RELATIONSHIP_QUALIFIER_CITE if is_kag else EMPTY_STRING
-
-    # 4. Select Persona and Description
-    # Logic: KAG > LightRAG > Default, modified by Hybrid flag
-    if is_kag:
-        assistant_persona = PERSONA_KNOWLEDGE_AWARE
-        persona_description = DESC_KNOWLEDGE_AWARE
-    elif rag_type == 'lightrag' and hybrid:
-        assistant_persona = PERSONA_LIGHTWEIGHT
-        persona_description = DESC_LIGHTWEIGHT
-    elif hybrid:
-        assistant_persona = PERSONA_COMPREHENSIVE
-        persona_description = DESC_COMPREHENSIVE
-    else:
-        # Standard Strict RAG
-        assistant_persona = PERSONA_PRECISE_ACCURATE
-        persona_description = DESC_PRECISE_ACCURATE
-
-    # 5. Select Instructions and Question Block
+    # 4. Select Instructions based on Mode
+    # We no longer select a 'Persona'. We only select 'Rules'.
     if hybrid:
         instructions_base = HYBRID_INSTRUCTIONS
-        kag_specific_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID if is_kag else EMPTY_STRING
+        kag_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID if is_kag else EMPTY_STRING
     else:
         instructions_base = STRICT_CONTEXT_INSTRUCTIONS
-        kag_specific_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT if is_kag else EMPTY_STRING
+        kag_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT if is_kag else EMPTY_STRING
     
-    instructions = instructions_base.format(
+    rag_rules = instructions_base.format(
         context_type=context_type_label,
-        context_type_lower=context_type_label.lower(),
-        relationship_qualifier=relationship_qualifier,
-        relationship_qualifier_cite=relationship_qualifier_cite,
-        kag_specific_instruction_placeholder=kag_specific_instruction
+        kag_specific_instruction_placeholder=kag_instruction
     )
 
-    # 6. Assemble Prompt Blocks
+    # 5. CONSTRUCT SYSTEM PROMPT (User Persona + RAG Rules)
+    # Extract the user's custom prompt from the config
+    user_persona = llm_config.get('system_prompt', "You are a helpful AI assistant.")
+    
+    final_system_prompt = RAG_SYSTEM_CONSTRUCTION.format(
+        user_defined_persona=user_persona,
+        rag_instructions=rag_rules
+    )
+
+    # 6. CONSTRUCT USER PROMPT (Data + Question)
     question_block = QUESTION_BLOCK.format(question=query_text)
     context_block = CONTEXT_BLOCK.format(context_type=context_type_label, context=context_text)
     sources_block = SOURCES_BLOCK.format(sources=sources)
@@ -212,23 +169,21 @@ def _generate_response(
         rel_text = "\n\n".join(formatted_relationships)
         relationships_block = RELATIONSHIPS_BLOCK.format(relationships=rel_text)
 
-    # 7. Final Prompt Assembly
-    # Note: initial_answer_block_placeholder is explicitly empty as per modern design
-    final_prompt_str = BASE_RESPONSE_STRUCTURE.format(
-        assistant_persona=assistant_persona,
-        persona_description=persona_description,
-        initial_answer_block_placeholder=EMPTY_STRING, 
+    final_user_prompt = RAG_USER_TEMPLATE.format(
         context_block_placeholder=context_block,
         relationships_block_placeholder=relationships_block,
         sources_block_placeholder=sources_block,
-        instructions=instructions,
         question_block_placeholder=question_block
     )
 
-    # 8. Execute LLM Call
+    # 7. Execute
+    # We update the config with the COMBINED system prompt
+    run_config = llm_config.copy() if llm_config else {}
+    run_config['system_prompt'] = final_system_prompt
+
     response_text = get_llm_response(
-        final_prompt_str, 
-        llm_config=llm_config, 
+        prompt=final_user_prompt, 
+        llm_config=run_config, 
         conversation_history=truncated_history
     )
 

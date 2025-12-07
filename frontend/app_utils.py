@@ -19,7 +19,7 @@ AVG_MSG_SIZE = 500     # Approx chars per chat message
 SYSTEM_PROMPT_OVERHEAD = 500 # Tokens reserved for system instructions
 
 # --- System Prompts / Personas ---
-DEFAULT_RED_TEAM_PROMPT = """You are a concise, precise, and skeptical AI agent specialized in Red Teaming and Bug Bounties. Your role is to be a 'sharp shooter' – direct, factual, and providing detail only when requested.
+DEFAULT_RED_TEAM_PROMPT = """You are a concise, precise, and skeptical AI agent specialized in Red Teaming and Bug Bounties. Your role is to be a 'sharp shooter' – direct, factual, and also provide precise instructions when possible.
 
 DIRECTIVES:
 1. RESPONSE STYLE: Concise, precise, no unnecessary sections/headings. No filler. No emojis.
@@ -57,8 +57,11 @@ def warm_up_resources():
         st.error(f"🔥 Critical AI Resource Error: {e}")
         return False
 
-def fetch_available_models(base_url: str):
-    """Dynamically fetch models from the local API."""
+def fetch_available_models(base_url: str, filter_type: str = None):
+    """
+    Dynamically fetch models from the local API with filtering.
+    filter_type: 'chat' (excludes embeddings) or 'embedding' (only embeddings)
+    """
     try:
         clean_url = base_url.rstrip('/')
         if not clean_url.endswith('/v1'):
@@ -66,11 +69,24 @@ def fetch_available_models(base_url: str):
         
         target_url = f"{clean_url}/models"
         resp = requests.get(target_url, timeout=2)
+        
         if resp.status_code == 200:
             data = resp.json()
+            model_list = []
             if 'data' in data:
-                return [m['id'] for m in data['data']]
-            return [str(m) for m in data]
+                model_list = [m['id'] for m in data['data']]
+            else:
+                model_list = [str(m) for m in data]
+            
+            # Smart Filtering logic
+            if filter_type == 'embedding':
+                # Only keep models that look like embeddings
+                return [m for m in model_list if any(x in m.lower() for x in ['embed', 'bert', 'nomic', 'gte'])]
+            elif filter_type == 'chat':
+                # Exclude obvious embedding models
+                return [m for m in model_list if not any(x in m.lower() for x in ['embed', 'bert', 'nomic', 'gte'])]
+            
+            return model_list
     except Exception:
         pass
     return []
@@ -139,43 +155,52 @@ def smart_prune_history(messages, max_tokens):
 
 def render_token_estimator(top_k, history_limit, current_messages, context_window=8192, sys_tokens=0):
     """
-    Renders visual token budget with color coding using HTML/CSS.
+    Renders visual token budget.
     """
-    # Calculate history tokens
+    if context_window <= 0: context_window = 8192 # Safety fallback
+
+    # 1. Calculate History Tokens
     history_subset = current_messages[-history_limit:] if history_limit > 0 else []
     history_content = "".join([str(m.get("content", "")) for m in history_subset])
     history_tokens = count_tokens(history_content)
     
-    # Estimate Retrieval Context (Approximate)
+    # 2. Estimate Retrieval Context (Approx 250 tokens per doc chunk)
     RETRIEVAL_OVERHEAD = 250
     retrieval_tokens = top_k * RETRIEVAL_OVERHEAD
 
-    # Buffer for output generation
+    # 3. Reserve Buffer for the AI's Reply
     OUTPUT_BUFFER = 500
     
+    # 4. Total Calculation
     total_estimated = sys_tokens + history_tokens + retrieval_tokens + OUTPUT_BUFFER
     
-    # Logic for Color and Ratio
+    # 5. Visual Logic
     ratio = min(total_estimated / context_window, 1.0)
     percentage = ratio * 100
     
-    bar_color = "#00ADB5" # Teal (Safe)
-    if ratio > 0.75: bar_color = "#FFA500" # Orange (Warning)
-    if ratio > 0.90: bar_color = "#FF4B4B" # Red (Critical)
+    # Color Coding
+    if ratio < 0.75:
+        bar_color = "#00ADB5" # Teal (Safe)
+    elif ratio < 0.90:
+        bar_color = "#FFA500" # Orange (Warning)
+    else:
+        bar_color = "#FF4B4B" # Red (Critical)
 
+    # UI Render
     st.caption(f"📊 **Context Budget** ({total_estimated} / {context_window} tokens)")
     
-    # Custom HTML Progress Bar to support colors
     st.markdown(f"""
-        <div style="background-color: rgba(128,128,128,0.2); border-radius: 5px; height: 10px; width: 100%;">
-            <div style="background-color: {bar_color}; width: {percentage}%; height: 100%; border-radius: 5px; transition: width 0.5s;"></div>
+        <div style="background-color: rgba(128,128,128,0.2); border-radius: 5px; height: 8px; width: 100%; margin-bottom: 5px;">
+            <div style="background-color: {bar_color}; width: {percentage}%; height: 100%; border-radius: 5px; transition: width 0.3s;"></div>
         </div>
     """, unsafe_allow_html=True)
     
-    col_sys, col_hist, col_ret = st.columns(3)
-    col_sys.caption(f"**Sys**: {sys_tokens}")
-    col_hist.caption(f"**Chat**: {history_tokens}")
-    col_ret.caption(f"**RAG**: {retrieval_tokens}")
+    # Detailed breakdown
+    c1, c2, c3, c4 = st.columns(4)
+    c1.caption(f"**Sys**: {sys_tokens}")
+    c2.caption(f"**Chat**: {history_tokens}")
+    c3.caption(f"**Docs**: ~{retrieval_tokens}")
+    c4.caption(f"**Free**: {max(0, context_window - total_estimated)}")
     
     
 def load_system_prompts():
