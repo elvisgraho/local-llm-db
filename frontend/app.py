@@ -266,7 +266,7 @@ def main():
                 # Execution
                 if cfg["rag_type"] == 'direct':
                     status.write("Direct LLM query (no retrieval)...")
-                    response = query_direct(**common_args)
+                    response = query_direct(**common_args, verify=cfg["verify"])
                     
                 elif cfg["selected_db"]:
                     status.write(f"🔍 Retrieving from **{cfg['selected_db']}** ({cfg['rag_type']})...")
@@ -276,7 +276,8 @@ def main():
                         **common_args, 
                         top_k=cfg["top_k"], 
                         db_name=cfg["selected_db"], 
-                        hybrid=cfg["hybrid"]
+                        hybrid=cfg["hybrid"],
+                        verify=cfg["verify"]
                     )
                     src_count = len(response.get("sources", []))
                     status.write(f"✅ Found {src_count} relevant documents.")

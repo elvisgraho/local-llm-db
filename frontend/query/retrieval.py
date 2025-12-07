@@ -13,8 +13,7 @@ from langchain_core.vectorstores import VectorStore
 from query.data_service import data_service
 from query.global_vars import (
     GRAPH_MAX_DEPTH,
-    GRAPH_MAX_NODES,
-    GRAPH_MIN_SIMILARITY
+    GRAPH_MAX_NODES
 )
 from query.query_helpers import _apply_metadata_filter
 
@@ -31,18 +30,29 @@ def _retrieve_semantic(
     metadata_filter: Optional[Dict[str, Any]]
 ) -> List[Tuple[Document, float]]:
     """
-    Performs semantic search using ChromaDB.
+    Performs semantic search using ChromaDB with dimension mismatch safeguard.
     """
     try:
         logger.info(f"Performing semantic search (k={k}) with filter: {metadata_filter}")
-        # Chroma uses 'filter' which maps to 'where' clause
+        
         results = db.similarity_search_with_score(
             query_text, 
             k=k, 
             filter=metadata_filter 
         )
         return results
+
     except Exception as e:
+        error_msg = str(e)
+        if "dimension" in error_msg and ("expecting" in error_msg or "got" in error_msg):
+            logger.error(
+                f"CONFIGURATION ERROR: Embedding Dimension Mismatch.\n"
+                f"The Database expects a different model than the one currently active.\n"
+                f"Details: {error_msg}\n"
+                f"Fix: Update 'global_vars.py' to use the embedding model that matches your DB."
+            )
+            return []
+            
         logger.error(f"Error during semantic search: {e}", exc_info=True)
         return []
 

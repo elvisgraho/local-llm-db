@@ -5,6 +5,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 import google.generativeai as genai
 
 # Local Imports
+from query.templates import VERIFY_TEMPLATE
 from query.global_vars import LOCAL_LLM_API_URL, LOCAL_MAIN_MODEL
 
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +37,8 @@ def truncate_history(history: List[Dict], max_tokens: int) -> tuple:
 def get_llm_response(
     prompt: str,
     llm_config: Optional[Dict[str, Any]] = None,
-    conversation_history: Optional[List[Dict[str, str]]] = None
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+    verify: Optional[bool] = False
 ) -> str:
     config = llm_config or {}
     
@@ -63,7 +65,7 @@ def get_llm_response(
         # 1. System Prompt
         system_prompt = config.get("system_prompt")
         if system_prompt:
-             messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "system", "content": system_prompt})
              
         # 2. History
         for entry in history:
@@ -88,7 +90,32 @@ def get_llm_response(
             response.raise_for_status()
             
             data = response.json()
-            return data["choices"][0]["message"]["content"]
+            initial_content = data["choices"][0]["message"]["content"]
+            
+            # 2. Verification Step
+            if verify:
+                logger.info("Performing LLM Verification...")
+                verify_content = VERIFY_TEMPLATE.format(
+                    original_prompt=prompt,
+                    initial_answer=initial_content
+                )
+                
+                # Reset messages for verification: System + Verify Prompt only
+                # We do not pass the full chat history again to keep context distinct
+                verify_messages = []
+                if system_prompt:
+                    verify_messages.append({"role": "system", "content": system_prompt})
+                verify_messages.append({"role": "user", "content": verify_content})
+                
+                payload["messages"] = verify_messages
+                payload["temperature"] = 0.1 # Lower temp for critical analysis
+                
+                v_response = requests.post(api_url, json=payload, headers=headers, timeout=120)
+                v_response.raise_for_status()
+                v_data = v_response.json()
+                return v_data["choices"][0]["message"]["content"]
+
+            return initial_content
             
         except Exception as e:
             logger.error(f"Local LLM Error: {e}")
@@ -105,8 +132,24 @@ def get_llm_response(
                 hist_text = "\n".join([f"{m['role']}: {m['content']}" for m in history])
                 full_prompt = f"{hist_text}\nUser: {prompt}"
 
+
+            # 1. Initial Request
             resp = model.generate_content(full_prompt)
-            return resp.text
+            initial_content = resp.text
+
+            # 2. Verification Step
+            if verify:
+                logger.info("Performing Gemini Verification...")
+                verify_content = VERIFY_TEMPLATE.format(
+                    original_prompt=full_prompt,
+                    initial_answer=initial_content
+                )
+                # Generate verified response
+                v_resp = model.generate_content(verify_content)
+                return v_resp.text
+
+            return initial_content
+        
         except Exception as e:
             logger.error(f"Gemini Error: {e}")
             raise

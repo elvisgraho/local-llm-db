@@ -33,6 +33,7 @@ HYBRID_INSTRUCTIONS = """
 2. **CITATIONS:** When referencing the provided documents, cite the source like `[Source: filename]`.
 3. **GAPS:** If context is insufficient, explicit state this, then supplement with general knowledge.
 4. **DISTINCTION:** Clearly distinguish between what is in the documents and what is general knowledge.
+5. **FRESH IDEAS:** Optionaly mix in relevant, up-to-date information from your training data.
 {kag_specific_instruction_placeholder}
 """
 
@@ -66,3 +67,25 @@ KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT = "5. Incorporate specific details from t
 KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID = "5. Incorporate specific details from the Knowledge Context directly.\n"
 EMPTY_STRING = ""
 DIRECT_TEMPLATE = "Instruction: Answer based on general knowledge.\nQuestion: {question}"
+VERIFY_TEMPLATE = """
+**INSTRUCTION: RED TEAM TECHNICAL AUDIT & REFINEMENT**
+
+You are a Senior Offensive Security Engineer. Your goal is strictly technical accuracy and operational feasibility.
+
+1. **Audit:** Review the `## INITIAL ANSWER` against the `## CONTEXT`. Look for:
+   - **Syntax Errors:** Invalid flags, typos in payloads, or broken code.
+   - **Context Drift:** Did the answer ignore specific versions/configs mentioned in the Context?
+   - **Feasibility:** Is the attack path logically sound and actionable?
+   - **Creativity:** Is the part of the answer, that is not found in the CONTEXT, innovative and relevant to the question?
+
+2. **Refine:** Rewrite the answer to be **precise and actionable**
+   - Prioritize specific CVEs, PoCs, or configurations found in the documents.
+   - **Do not** mention the verification process.
+
+---
+## CONTEXT & QUESTION
+{original_prompt}
+
+## INITIAL ANSWER
+{initial_answer}
+"""

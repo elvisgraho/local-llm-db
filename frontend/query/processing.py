@@ -114,6 +114,7 @@ def _generate_response(
     truncated_history: Optional[List[Dict[str, str]]],
     estimated_context_tokens: int,
     hybrid: bool = False,
+    verify: Optional[bool] = False,
     formatted_relationships: Optional[List[str]] = None
 ) -> Dict[str, Union[str, List[str], int]]:
     
@@ -184,7 +185,8 @@ def _generate_response(
     response_text = get_llm_response(
         prompt=final_user_prompt, 
         llm_config=run_config, 
-        conversation_history=truncated_history
+        conversation_history=truncated_history,
+        verify=verify
     )
 
     return {

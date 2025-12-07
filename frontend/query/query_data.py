@@ -68,7 +68,8 @@ def _prepare_retrieval_context(
 
 def query_direct(
     query_text: str, 
-    llm_config: Optional[Dict] = None, 
+    llm_config: Optional[Dict] = None,
+    verify: Optional[bool] = False,
     conversation_history: Optional[List[Dict[str, str]]] = None
 ) -> Dict[str, Union[str, List[str]]]:
     """
@@ -86,8 +87,10 @@ def query_direct(
         response_text = get_llm_response(
             prompt_str, 
             llm_config=llm_config, 
-            conversation_history=conversation_history
+            conversation_history=conversation_history,
+            verify=verify
         )
+        
         return {"text": response_text, "sources": []}
     except Exception as e:
         logger.error(f"Error in direct query: {str(e)}", exc_info=True)
@@ -97,6 +100,7 @@ def query_rag(
     query_text: str,
     top_k: int = 4,
     hybrid: bool = False,
+    verify: Optional[bool] = False,
     db_name: str = DEFAULT_DB_NAME,
     llm_config: Optional[Dict] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
@@ -147,7 +151,8 @@ def query_rag(
             llm_config=llm_config,
             truncated_history=history,
             estimated_context_tokens=estimated_tokens,
-            hybrid=hybrid
+            hybrid=hybrid,
+            verify=verify
         )
     except Exception as e:
         logger.error(f"Error in RAG query: {str(e)}", exc_info=True)
@@ -157,6 +162,7 @@ def query_lightrag(
     query_text: str,
     top_k: int = 4,
     hybrid: bool = False,
+    verify: Optional[bool] = False,
     db_name: str = DEFAULT_DB_NAME,
     llm_config: Optional[Dict] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
@@ -209,7 +215,8 @@ def query_lightrag(
             llm_config=llm_config,
             truncated_history=history,
             estimated_context_tokens=estimated_tokens,
-            hybrid=hybrid
+            hybrid=hybrid,
+            verify=verify
         )
     except Exception as e:
         logger.error(f"Error in LightRAG query: {str(e)}", exc_info=True)
@@ -219,6 +226,7 @@ def query_kag(
     query_text: str,
     top_k: int = 4,
     hybrid: bool = False,
+    verify: Optional[bool] = False,
     db_name: str = DEFAULT_DB_NAME,
     llm_config: Optional[Dict] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
@@ -259,6 +267,7 @@ def query_kag(
                 truncated_history=history,
                 estimated_context_tokens=0,
                 hybrid=hybrid,
+                verify=verify,
                 formatted_relationships=[]
             )
 

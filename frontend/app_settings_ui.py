@@ -286,7 +286,9 @@ def render_settings_sidebar():
             if st.button("🔄", key="refresh_db", help="Refresh Database List", width='stretch'):
                 st.rerun()
         
-        hybrid = st.checkbox("Hybrid", value=True, disabled=is_direct)
+        col_opt, col_hyb = st.columns(2)
+        hybrid = col_hyb.checkbox("Hybrid", value=True, disabled=is_direct)
+        verify = col_opt.checkbox("Verify Query", value=False, disabled=is_direct)
 
     # ==========================================
     # 4. PARAMETERS
@@ -310,5 +312,6 @@ def render_settings_sidebar():
         "top_k": top_k,
         "history_limit": history_limit,
         "temp": temp,
+        "verify": verify,
         "is_direct": is_direct
     }
