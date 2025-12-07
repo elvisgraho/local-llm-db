@@ -70,7 +70,7 @@ def scan_databases(db_root=DATABASE_DIR):
                     reg_path = db_instance / "processed_files.json"
                     if reg_path.exists():
                         try:
-                            with open(reg_path, 'r') as f:
+                            with open(reg_path, 'r', encoding='utf-8') as f:
                                 file_count = len(json.load(f))
                         except: pass
                     
@@ -144,10 +144,9 @@ def run_script_generator(script_name, args, env_vars):
     process_env = os.environ.copy()
     process_env.update(env_vars)
     process_env["ANONYMIZED_TELEMETRY"] = "False"
-    
-    # Ensure the subprocess can find 'frontend' and 'query' packages
+    process_env["PYTHONIOENCODING"] = "utf-8"
     process_env["PYTHONPATH"] = f"{str(PROJECT_ROOT)}{os.pathsep}{process_env.get('PYTHONPATH', '')}"
-
+    
     proc = None
     try:
         proc = subprocess.Popen(
@@ -156,8 +155,10 @@ def run_script_generator(script_name, args, env_vars):
             stderr=subprocess.STDOUT, 
             text=True, 
             env=process_env, 
-            bufsize=1, 
-            cwd=str(PROJECT_ROOT) # Execute from Root, not Frontend
+            bufsize=1,
+            encoding='utf-8',
+            errors='replace',
+            cwd=str(PROJECT_ROOT)
         )
         yield f"PID:{proc.pid}"
         for line in proc.stdout:

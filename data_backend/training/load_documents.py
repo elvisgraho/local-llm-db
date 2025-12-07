@@ -89,7 +89,7 @@ class RegistryManager:
         """Load registry from disk."""
         if self.registry_path.exists():
             try:
-                with open(self.registry_path, 'r') as f:
+                with open(self.registry_path, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except Exception as e:
                 logger.warning(f"Failed to load registry: {e}")
@@ -99,8 +99,8 @@ class RegistryManager:
     def save(self):
         """Save registry to disk."""
         try:
-            with open(self.registry_path, 'w') as f:
-                json.dump(self.registry, f, indent=2)
+            with open(self.registry_path, 'w', encoding='utf-8') as f:
+                json.dump(self.registry, f, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.warning(f"Failed to save registry: {e}")
 

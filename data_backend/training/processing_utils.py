@@ -65,14 +65,15 @@ def split_document(
             # Generate tags based on the first 5000 chars of the document
             doc = add_metadata_to_document(doc, add_tags_llm=True, max_chars=5000)
         except Exception as e:
-            # --- FIX: Handle Unicode errors in logging (Windows Console Issue) ---
+            # Safe logging of the filename
             source = doc.metadata.get('source', 'unknown')
             try:
-                logger.warning(f"Failed to generate global tags for {source}: {e}")
-            except UnicodeEncodeError:
-                # Fallback: Replace non-encodable characters just for the log message
-                safe_source = source.encode('ascii', 'replace').decode('ascii')
-                logger.warning(f"Failed to generate global tags for {safe_source}: {e}")
+                safe_source = source.encode('utf-8', 'replace').decode('utf-8')
+            except:
+                safe_source = "unknown_file"
+            
+            logger.error(f"❌ CRITICAL: Tagging failed for '{safe_source}'. Error: {e}")
+            return [] 
 
     # --- 2. Configure Splitter ---
     text_splitter = RecursiveCharacterTextSplitter(

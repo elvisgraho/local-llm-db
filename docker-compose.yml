@@ -12,7 +12,8 @@ services:
       - ./volumes/databases:/project/databases
     environment:
       - LOCAL_LLM_API_URL=http://host.docker.internal:1234/v1
-      - RAG_DATABASE_DIR=/app/databases
+      - RAG_DATABASE_DIR=/project/databases
+      - RAW_FILES_DIR=/project/raw_files
       - PYTHONUNBUFFERED=1
       - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
       - ANONYMIZED_TELEMETRY=False

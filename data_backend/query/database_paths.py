@@ -38,7 +38,6 @@ else:
 
 # 3. Databases Directory
 # Default: [ROOT]/volumes/databases
-# Env Override: env("RAG_DATABASE_DIR")
 _env_db = os.getenv("RAG_DATABASE_DIR")
 if _env_db:
     DATABASE_DIR = Path(_env_db)

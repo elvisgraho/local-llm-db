@@ -14,6 +14,14 @@ from langchain_core.prompts import ChatPromptTemplate
 # --- Pydantic V2 Imports ---
 from pydantic import BaseModel, Field
 
+
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except AttributeError:
+    # Fallback for older Python versions if needed
+    pass
+
 # Add parent directory to Python path
 current_dir = Path(__file__).parent.absolute()
 if str(current_dir.parent) not in sys.path:
