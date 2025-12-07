@@ -3,6 +3,7 @@ import os
 import time
 import shutil
 import ui_logic as logic
+import ui_tab_build
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from query.database_paths import DATABASE_DIR, PROJECT_ROOT
 
@@ -220,62 +221,5 @@ with tab_preview:
 # Tab 3: Build
 with tab_build:
     st.header("Population Engine")
-    
-    c_b1, c_b2 = st.columns([1, 2])
-    with c_b1:
-        rag_flavor = st.radio("Architecture", ["Standard RAG", "LightRAG", "KAG (Graph)"])
-    with c_b2:
-        # The value is tied to session state to allow Sidebar updates
-        db_name = st.text_input("Database Name", key="target_db_name")
-        
-        c_opt1, c_opt2, c_opt3 = st.columns(3)
-        do_reset = c_opt1.checkbox("Full Reset (Wipe DB)", help="Delete existing DB before running.")
-        do_resume = c_opt2.checkbox("Resume Run", value=True, help="Skip files that are already indexed.")
-        do_tags = c_opt3.checkbox("AI Auto-Tagging", help="Use LLM to generate metadata (Slower).")
-
-    if st.button("🚀 Launch Population", type="primary"):
-        # Map to script
-        script_map = {
-            "Standard RAG": "populate_rag.py",
-            "LightRAG": "populate_lightrag.py",
-            "KAG (Graph)": "populate_kag.py"
-        }
-        script = script_map[rag_flavor]
-        
-        # Build Args
-        args = ["--db_name", db_name]
-        if do_reset: args.append("--reset")
-        if do_resume and not do_reset: args.append("--resume")
-        if do_tags: args.append("--add-tags")
-        
-        st.session_state.process_logs = []
-        
-        st.info("ℹ️ To STOP the process, click the 'Stop' button in the top-right corner of the browser.")
-        
-        # Live Logs
-        log_container = st.empty()
-        
-        try:
-            for line in logic.run_script_generator(script, args, env_vars):
-                if line.startswith("PID:"):
-                    continue
-                    
-                clean = line.strip()
-                if clean:
-                    st.session_state.process_logs.append(clean)
-                    with log_container.container(height=400):
-                        st.code("\n".join(st.session_state.process_logs), language="bash")
-            
-            st.success("Process Finished.")
-            
-        except Exception as e:
-            st.error(f"Error: {e}")
-
-    st.divider()
-    st.subheader("Process Logs (Persistent)")
-    # Persistent Log View
-    with st.container(height=300):
-        if st.session_state.process_logs:
-            st.code("\n".join(st.session_state.process_logs), language="bash")
-        else:
-            st.text("No logs available.")
+    ui_tab_build.render_build_tab(env_vars)
+   

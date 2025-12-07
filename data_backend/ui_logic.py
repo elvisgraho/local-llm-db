@@ -178,3 +178,43 @@ def kill_child_processes(parent_pid):
         parent.terminate()
     except psutil.NoSuchProcess:
         pass
+     
+def start_script_background(script_name, args, env_vars, log_file):
+    """Starts the script in background and redirects output to a file."""
+    script_path = TRAINING_DIR / script_name
+    cmd = [sys.executable, str(script_path)] + args
+    
+    process_env = os.environ.copy()
+    process_env.update(env_vars)
+    process_env["ANONYMIZED_TELEMETRY"] = "False"
+    process_env["PYTHONIOENCODING"] = "utf-8" # Force UTF-8
+    process_env["PYTHONPATH"] = f"{str(PROJECT_ROOT)}{os.pathsep}{process_env.get('PYTHONPATH', '')}"
+
+    # Open log file to write output
+    with open(log_file, "w", encoding="utf-8") as f:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=f,
+            stderr=subprocess.STDOUT, # Merge errors into stdout
+            env=process_env,
+            cwd=str(PROJECT_ROOT)
+        )
+    return proc.pid
+
+def read_log_file(log_file):
+    """Reads the log file safely."""
+    if log_file.exists():
+        try:
+            with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                return f.read()
+        except Exception:
+            return "Reading logs..."
+    return ""
+
+def is_process_alive(pid):
+    """Checks if a PID is still running."""
+    try:
+        p = psutil.Process(pid)
+        return p.is_running() and p.status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
