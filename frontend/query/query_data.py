@@ -47,30 +47,21 @@ def _get_db_or_raise(rag_type: str, db_name: str) -> Any:
 def _prepare_retrieval_context(
     query_text: str,
     rag_type: str,
-    optimize: bool,
     hybrid: bool,
     llm_config: Optional[Dict],
     conversation_history: Optional[List[Dict[str, str]]]
 ) -> Tuple[str, List[Dict[str, str]], int]:
     
-    retrieval_query_text = query_text
-    
-    # 1. INTELLIGENT REFINEMENT
-    # If optimize is ON, or if we simply have history that needs resolving
-    if optimize or (conversation_history and len(conversation_history) > 0):
-        logger.info(f"Refining query with QueryProcessor...")
-        retrieval_query_text = query_processor.process_query(
-            query_text, 
-            conversation_history, 
-            llm_config
-        )
+    retrieval_query_text = query_processor.process_query(
+        query_text, 
+        conversation_history
+    )
     
     # 2. Context Calculation
     truncated_history, available_tokens = _calculate_available_context(
         query_text=query_text,
         conversation_history=conversation_history,
         llm_config=llm_config,
-        optimize=optimize, 
         hybrid=hybrid,
         rag_type=rag_type
     )
@@ -110,7 +101,6 @@ def query_rag(
     query_text: str,
     top_k: int = 5,
     hybrid: bool = False,
-    optimize: bool = False,
     rag_type: str = 'rag',
     db_name: str = DEFAULT_DB_NAME,
     llm_config: Optional[Dict] = None,
@@ -123,7 +113,7 @@ def query_rag(
     try:
         # 1. Prepare
         retrieval_query, history, tokens = _prepare_retrieval_context(
-            query_text, rag_type, optimize, hybrid, llm_config, conversation_history
+            query_text, rag_type, hybrid, llm_config, conversation_history
         )
 
         # 2. Get Resources
@@ -172,7 +162,6 @@ def query_lightrag(
     query_text: str,
     top_k: int = 5,
     hybrid: bool = False,
-    optimize: bool = False,
     rag_type: str = 'lightrag',
     db_name: str = DEFAULT_DB_NAME,
     llm_config: Optional[Dict] = None,
@@ -185,7 +174,7 @@ def query_lightrag(
     try:
         # 1. Prepare
         retrieval_query, history, tokens = _prepare_retrieval_context(
-            query_text, rag_type, optimize, hybrid, llm_config, conversation_history
+            query_text, rag_type, hybrid, llm_config, conversation_history
         )
 
         # 2. Get Resources
@@ -236,7 +225,6 @@ def query_kag(
     query_text: str,
     top_k: int = 5,
     hybrid: bool = False,
-    optimize: bool = False,
     rag_type: str = 'kag',
     db_name: str = DEFAULT_DB_NAME,
     llm_config: Optional[Dict] = None,
@@ -249,7 +237,7 @@ def query_kag(
     try:
         # 1. Prepare
         retrieval_query, history, tokens = _prepare_retrieval_context(
-            query_text, rag_type, optimize, hybrid, llm_config, conversation_history
+            query_text, rag_type, hybrid, llm_config, conversation_history
         )
 
         # 2. Get Resources

@@ -35,7 +35,7 @@ from langchain_community.vectorstores import FAISS
 # --- Local Imports ---
 from query.database_paths import get_db_paths, DEFAULT_DB_NAME
 from query.llm_service import get_llm_response
-from query.embeddings import get_embedding_function, LMStudioEmbeddings
+from query.embeddings import get_embedding_function, GenericOpenAIEmbeddings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -81,7 +81,7 @@ class DataService:
         logger.info("Initializing DataService singleton...")
         
         # Core Resources
-        self._embedding_function: Optional[LMStudioEmbeddings] = None
+        self._embedding_function: Optional[GenericOpenAIEmbeddings] = None
         self._reranker: Optional[CrossEncoder] = None
         
         # Caches
@@ -98,17 +98,13 @@ class DataService:
         logger.info("DataService initialized.")
 
     @property
-    def embedding_function(self) -> LMStudioEmbeddings:
+    def embedding_function(self) -> GenericOpenAIEmbeddings: # Type hint changed
         """Get or initialize the embedding function."""
         if self._embedding_function is None:
-            logger.info("Loading embedding function...")
-            try:
-                self._embedding_function = get_embedding_function()
-            except Exception as e:
-                logger.error(f"Failed to load embedding function: {e}")
-                raise
+            # Initialize with defaults (will rely on env vars or hardcodes in embeddings.py)
+            self._embedding_function = get_embedding_function()
         return self._embedding_function
-
+    
     @property
     def reranker(self) -> Optional[CrossEncoder]:
         """Get or initialize the reranking model (lazy load)."""
@@ -337,6 +333,24 @@ Question: {input}"""
         self._vectorstore = None
         self._qa_chain = None
         logger.info("Cache cleared.")
+        
+    def update_embedding_config(self, base_url: str, model_name: str):
+        """Hot-reload the embedding function and clear dependent caches."""
+        logger.info(f"Reloading Embeddings: URL={base_url}, Model={model_name}")
+        try:
+            # Re-initialize the function
+            self._embedding_function = get_embedding_function(base_url, model_name)
+            
+            # Clear caches that rely on specific embeddings
+            self._chroma_cache.clear()
+            self._vectorstore = None
+            self._qa_chain = None
+            
+            logger.info("Embedding configuration updated successfully.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update embeddings: {e}")
+            return False
 
 def initialize_data_service() -> None:
     """Pre-load shared models."""

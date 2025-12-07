@@ -98,7 +98,6 @@ def _calculate_available_context(
     query_text: str,
     conversation_history: Optional[List[Dict[str, str]]],
     llm_config: Optional[Dict[str, Any]],
-    optimize: bool = False,
     hybrid: bool = False,
     rag_type: str = 'rag',
     reserved_for_response: int = DEFAULT_RESPONSE_RESERVE
@@ -151,7 +150,6 @@ def _calculate_available_context(
     # 4. Construct Instruction Block
     context_type_label = KAG_CONTEXT_TYPE if is_kag else STANDARD_CONTEXT_TYPE
     
-    # Note: 'optimize' flag affects the retrieval query (in query_data.py), 
     # but the prompt structure relies on the 'hybrid' flag.
     if hybrid:
         if is_kag:
