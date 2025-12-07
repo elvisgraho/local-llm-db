@@ -33,7 +33,7 @@ from training.processing_utils import (
     initialize_chroma_vectorstore, 
     validate_metadata
 )
-from training.config import EMBEDDING_CONTEXT_LENGTH
+from query.global_vars import EMBEDDING_CONTEXT_LENGTH
 
 # Configure logging
 logging.basicConfig(

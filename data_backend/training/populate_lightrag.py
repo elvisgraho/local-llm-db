@@ -32,7 +32,7 @@ from langchain_core.documents import Document
 from query.database_paths import get_db_paths
 from training.load_documents import load_documents
 from training.processing_utils import split_document, initialize_chroma_vectorstore
-from training.config import EMBEDDING_CONTEXT_LENGTH
+from query.global_vars import EMBEDDING_CONTEXT_LENGTH
 
 # Configure logging
 logging.basicConfig(

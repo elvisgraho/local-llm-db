@@ -1,16 +1,18 @@
 import streamlit as st
 import os
 import time
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from pathlib import Path
+import shutil
 import ui_logic as logic
-
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from query.database_paths import DATABASE_DIR, PROJECT_ROOT
 
 # --- Configuration & Setup ---
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-DB_DIR = BASE_DIR / "databases"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+# Use Project Root to locate Data (siblings to frontend)
+RAW_FILES_DIR = PROJECT_ROOT /  "volumes" / "raw_files"
+# Use the centralized DATABASE_DIR (handles Docker/Local paths automatically)
+DB_DIR = DATABASE_DIR
+
+RAW_FILES_DIR.mkdir(parents=True, exist_ok=True)
 DB_DIR.mkdir(parents=True, exist_ok=True)
 
 st.set_page_config(
@@ -86,7 +88,7 @@ with st.sidebar:
             db_inventory, 
             column_order=["Type", "Name", "Size", "Files"],
             hide_index=True,
-            use_container_width=True,
+            width='stretch',
             height=150
         )
         
@@ -148,7 +150,7 @@ with tab_import:
         if uploaded_files and st.button(f"Save {len(uploaded_files)} Files"):
             progress = st.progress(0, text="Saving...")
             for i, uf in enumerate(uploaded_files):
-                with open(DATA_DIR / uf.name, "wb") as f:
+                with open(RAW_FILES_DIR / uf.name, "wb") as f:
                     f.write(uf.getbuffer())
                 progress.progress((i + 1) / len(uploaded_files))
             progress.empty()
@@ -161,10 +163,14 @@ with tab_import:
         file_rows, total_files = logic.get_file_inventory(limit=50)
         if total_files > 0:
             st.info(f"Total Staged Files: {total_files}")
-            st.dataframe(file_rows, height=300, use_container_width=True)
+            st.dataframe(file_rows, height=300, width='stretch')
             if st.button("Clear Staging Area"):
-                for f in DATA_DIR.iterdir():
-                    if f.is_file(): os.remove(f)
+                for item in RAW_FILES_DIR.iterdir():
+                    if item.is_file():
+                        os.remove(item)
+                    elif item.is_dir():
+                        # Recursively delete the directory and its contents
+                        shutil.rmtree(item)
                 st.rerun()
         else:
             st.info("No files in staging.")
@@ -177,12 +183,17 @@ with tab_preview:
         chunk_size = st.slider("Chunk Size", 100, 4000, 1500)
         chunk_overlap = st.slider("Overlap", 0, 500, 200)
         
-        all_files = [f.name for f in DATA_DIR.iterdir() if f.is_file() and not f.name.startswith('.')]
-        test_file = st.selectbox("Select File to Test", all_files) if all_files else None
+        all_files = [f for f in RAW_FILES_DIR.rglob('*') if f.is_file() and not f.name.startswith('.')]
+        test_file = st.selectbox(
+            "Select File to Test", 
+            all_files,
+            # Use a lambda function to display the relative path string in the selectbox UI
+            format_func=lambda f: str(f.relative_to(RAW_FILES_DIR))
+        ) if all_files else None
         
     with c_prev2:
         if test_file:
-            content = logic.extract_text_for_preview(DATA_DIR / test_file)
+            content = logic.extract_text_for_preview(RAW_FILES_DIR / test_file)
             if "Error" not in content:
                 splitter = RecursiveCharacterTextSplitter(
                     chunk_size=chunk_size, 

@@ -8,12 +8,14 @@ services:
     ports:
       - "8502:8501"
     volumes:
-      - ./volumes/raw_data:/project/data
+      - ./volumes/raw_files:/project/raw_files
       - ./volumes/databases:/project/databases
     environment:
       - LOCAL_LLM_API_URL=http://host.docker.internal:1234/v1
       - RAG_DATABASE_DIR=/app/databases
       - PYTHONUNBUFFERED=1
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+      - ANONYMIZED_TELEMETRY=False
     extra_hosts:
       - "host.docker.internal:host-gateway"
     tty: true
@@ -33,6 +35,8 @@ services:
       - LOCAL_LLM_API_URL=http://host.docker.internal:1234/v1
       - RAG_DATABASE_DIR=/app/databases
       - PYTHONUNBUFFERED=1
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+      - ANONYMIZED_TELEMETRY=False
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

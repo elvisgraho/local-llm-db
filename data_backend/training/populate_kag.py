@@ -18,7 +18,7 @@ import argparse
 import networkx as nx
 from pathlib import Path
 from tqdm import tqdm
-from typing import List, Tuple, Dict, Any
+from typing import Dict, Any
 
 # --- Add project root to path ---
 project_root = Path(__file__).resolve().parent.parent
@@ -30,7 +30,7 @@ from query.database_paths import get_db_paths
 from training.load_documents import load_documents
 from training.processing_utils import split_document, validate_metadata
 from training.get_embedding_function import get_embedding_function
-from training.config import EMBEDDING_CONTEXT_LENGTH
+from query.global_vars import EMBEDDING_CONTEXT_LENGTH
 
 # Configure logging
 logging.basicConfig(

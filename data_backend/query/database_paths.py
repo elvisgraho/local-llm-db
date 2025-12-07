@@ -4,37 +4,63 @@ from typing import Dict, List, Tuple
 
 # --- Constants ---
 
-# Valid RAG types used across the system
 VALID_RAG_TYPES: Tuple[str, ...] = ("rag", "kag", "lightrag")
-
-# Default database name if none is provided
 DEFAULT_DB_NAME = "default"
 
-# From your existing database_paths.py
-# 1. Determine the Project Root (relative to this specific file)
-# File location: frontend/query/database_paths.py
-# .parent = query, .parent = frontend, .parent = Project Root
+# --- Root Path Determination ---
+
+# This assumes the file structure: [ROOT]/data_backend/query/database_paths.py
+# .parent = query
+# .parent.parent = data_backend
+# .parent.parent.parent = PROJECT_ROOT
+# Note: Adjust .parent chain length if your file is nested differently.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# 2. Check for Docker Environment Variable first
-_env_db_path = os.getenv("RAG_DATABASE_DIR")
+# --- Directory Configuration ---
 
-if _env_db_path:
-    # We are in Docker
-    DATABASE_DIR = Path(_env_db_path)
+# 1. Volumes Base Directory
+# Default: [ROOT]/volumes
+# Docker/Env Override: env("VOLUMES_DIR")
+_env_volumes = os.getenv("VOLUMES_DIR")
+if _env_volumes:
+    VOLUMES_DIR = Path(_env_volumes)
 else:
-    # We are running locally
-    # Fallback to: ../../volumes/databases
-    DATABASE_DIR = PROJECT_ROOT / "volumes" / "databases"
+    VOLUMES_DIR = PROJECT_ROOT / "volumes"
 
-# Create it if running locally and it doesn't exist
-if not DATABASE_DIR.exists():
-    try:
-        DATABASE_DIR.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass # Handle permission errors gracefully
+# 2. Raw Files Directory
+# Default: [ROOT]/volumes/raw_files
+# Env Override: env("RAW_FILES_DIR")
+_env_raw = os.getenv("RAW_FILES_DIR")
+if _env_raw:
+    RAW_FILES_DIR = Path(_env_raw)
+else:
+    RAW_FILES_DIR = VOLUMES_DIR / "raw_files"
+
+# 3. Databases Directory
+# Default: [ROOT]/volumes/databases
+# Env Override: env("RAG_DATABASE_DIR")
+_env_db = os.getenv("RAG_DATABASE_DIR")
+if _env_db:
+    DATABASE_DIR = Path(_env_db)
+else:
+    DATABASE_DIR = VOLUMES_DIR / "databases"
+
+# --- Initialization ---
+
+def initialize_directories():
+    """Ensures that the necessary directories exist."""
+    for path in [DATABASE_DIR, RAW_FILES_DIR]:
+        if not path.exists():
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                print(f"Warning: Could not create directory {path}: {e}")
+
+# Run initialization immediately on import
+initialize_directories()
 
 # --- Helper Functions ---
+
 def _get_type_root_dir(rag_type: str) -> Path:
     """Internal helper to get the root directory for a specific RAG type."""
     if rag_type not in VALID_RAG_TYPES:
@@ -44,49 +70,20 @@ def _get_type_root_dir(rag_type: str) -> Path:
 def get_db_paths(rag_type: str, db_name: str) -> Dict[str, Path]:
     """
     Generates standard file paths for a specific RAG type and database instance.
-
-    Args:
-        rag_type (str): The type of RAG ('rag', 'kag', 'lightrag').
-        db_name (str): The specific name of the database instance.
-
-    Returns:
-        Dict[str, Path]: Dictionary containing absolute paths.
-        - 'db_dir': Root folder for this instance.
-        - 'chroma_path': Path for ChromaDB persistence.
-        - 'graph_path': Path for NetworkX JSON graph (KAG).
-        - 'vectorstore_path': Legacy path (FAISS).
     """
-    # 1. Get Base Directory
     base_dir = _get_type_root_dir(rag_type)
     db_instance_dir = base_dir / db_name
 
-    # 2. Define Standard Paths
-    # Note: We now prioritize 'chroma_path' for all types as the system converges on ChromaDB.
     paths = {
         "db_dir": db_instance_dir,
-        
-        # Standard ChromaDB path (used by RAG, LightRAG, and KAG's vector component)
         "chroma_path": db_instance_dir / "chroma",
-        
-        # Knowledge Graph file (Specific to KAG)
         "graph_path": db_instance_dir / "graph.json",
-        
-        # Legacy FAISS support (Older LightRAG implementations)
         "vectorstore_path": db_instance_dir / "vectorstore"
     }
-
     return paths
 
 def list_available_dbs(rag_type: str) -> List[str]:
-    """
-    Lists available database names for a given RAG type.
-
-    Args:
-        rag_type (str): The type of RAG ('rag', 'kag', 'lightrag').
-
-    Returns:
-        List[str]: A sorted list of database names found on disk.
-    """
+    """Lists available database names for a given RAG type."""
     try:
         base_dir = _get_type_root_dir(rag_type)
     except ValueError:
@@ -95,25 +92,14 @@ def list_available_dbs(rag_type: str) -> List[str]:
     if not base_dir.exists() or not base_dir.is_dir():
         return []
 
-    # List subdirectories that are not hidden
     db_names = [
         d.name for d in base_dir.iterdir() 
         if d.is_dir() and not d.name.startswith('.')
     ]
-    
     return sorted(db_names)
 
 def db_exists(rag_type: str, db_name: str) -> bool:
-    """
-    Checks if a specific database instance exists and contains data.
-    
-    Args:
-        rag_type (str): The type of RAG.
-        db_name (str): The database name.
-        
-    Returns:
-        bool: True if key files/directories exist.
-    """
+    """Checks if a specific database instance exists and contains data."""
     try:
         paths = get_db_paths(rag_type, db_name)
         db_dir = paths["db_dir"]
@@ -121,14 +107,12 @@ def db_exists(rag_type: str, db_name: str) -> bool:
         if not db_dir.exists():
             return False
 
-        # Check specific indicators based on type
         if rag_type == "kag":
             return paths["graph_path"].exists()
         
-        # For RAG/LightRAG, check if Chroma exists
-        # Chroma usually creates a 'chroma.sqlite3' file inside the directory
-        chroma_db_file = paths["chroma_path"] / "chroma.sqlite3"
-        return chroma_db_file.exists() or paths["vectorstore_path"].exists()
+        # Check for ChromaDB file or legacy vectorstore
+        chroma_file = paths["chroma_path"] / "chroma.sqlite3"
+        return chroma_file.exists() or paths["vectorstore_path"].exists()
 
     except Exception:
         return False

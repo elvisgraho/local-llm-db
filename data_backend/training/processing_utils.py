@@ -20,9 +20,8 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 # --- Local Imports ---
-# Assumes these modules exist in the training directory
 from training.get_embedding_function import get_embedding_function
-from training.extract_metadata_llm import add_metadata_to_document, format_source_filename
+from training.extract_metadata_llm import add_metadata_to_document
 from training.load_documents import extract_metadata
 
 logger = logging.getLogger(__name__)
@@ -61,13 +60,19 @@ def split_document(
     OPTIMIZED: Generates metadata ONCE per document, then splits.
     """
     # --- 1. Generate Metadata (ONCE per file) ---
-    # This moves the heavy LLM operation outside the chunk loop
     if add_tags_llm:
         try:
             # Generate tags based on the first 5000 chars of the document
             doc = add_metadata_to_document(doc, add_tags_llm=True, max_chars=5000)
         except Exception as e:
-            logger.warning(f"Failed to generate global tags for {doc.metadata.get('source')}: {e}")
+            # --- FIX: Handle Unicode errors in logging (Windows Console Issue) ---
+            source = doc.metadata.get('source', 'unknown')
+            try:
+                logger.warning(f"Failed to generate global tags for {source}: {e}")
+            except UnicodeEncodeError:
+                # Fallback: Replace non-encodable characters just for the log message
+                safe_source = source.encode('ascii', 'replace').decode('ascii')
+                logger.warning(f"Failed to generate global tags for {safe_source}: {e}")
 
     # --- 2. Configure Splitter ---
     text_splitter = RecursiveCharacterTextSplitter(
@@ -95,16 +100,18 @@ def split_document(
 
         # Limit Chunks
         if len(doc_chunks) > max_total_chunks:
-            logger.warning(f"Limiting {doc.metadata.get('source')} to {max_total_chunks} chunks.")
+            source_name = doc.metadata.get('source', 'unknown')
+            try:
+                logger.warning(f"Limiting {source_name} to {max_total_chunks} chunks.")
+            except UnicodeEncodeError:
+                logger.warning(f"Limiting document to {max_total_chunks} chunks (name hidden due to encoding).")
             doc_chunks = doc_chunks[:max_total_chunks]
 
         # --- 5. Finalize Metadata ---
-        # We only need to add structural metadata (indices) here
         processed_chunks = []
         total_chunks = len(doc_chunks)
         source = doc.metadata.get("source", "unknown")
         
-        # We can now just iterate quickly without LLM calls
         for i, chunk in enumerate(doc_chunks):
             # Extract base file metadata
             file_metadata = extract_metadata(source)
@@ -123,7 +130,12 @@ def split_document(
         return processed_chunks
 
     except Exception as e:
-        logger.error(f"Failed to split document {doc.metadata.get('source', 'unknown')}: {e}")
+        # Safe logging for top-level error
+        try:
+            source = doc.metadata.get('source', 'unknown')
+            logger.error(f"Failed to split document {source}: {e}")
+        except UnicodeEncodeError:
+            logger.error(f"Failed to split document (unknown source): {e}")
         return []
     
     
@@ -178,14 +190,10 @@ def initialize_chroma_vectorstore(chroma_path: Path, reset: bool = False) -> Opt
             logger.info(f"Resetting ChromaDB at {path_str}...")
             if chroma_path.exists():
                 shutil.rmtree(chroma_path)
-            # We don't necessarily need to recreate the folder immediately; 
-            # Chroma handles that. But ensuring parent exists is good practice.
             chroma_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Initializing ChromaDB at {path_str}")
         
-        # In langchain-chroma 0.1+, initializing the class connects to the DB.
-        # If it doesn't exist, it creates it.
         vectorstore = Chroma(
             persist_directory=path_str, 
             embedding_function=embedding_function

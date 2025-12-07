@@ -47,7 +47,7 @@ def main():
         st.title("🗂️ Chats")
         
         # --- Session Management ---
-        if st.button("➕ New Chat", type="primary", use_container_width=True):
+        if st.button("➕ New Chat", type="primary", width='stretch'):
             new_sess = session_manager.create_session()
             st.session_state.active_session_id = new_sess["id"]
             st.rerun()
@@ -67,7 +67,7 @@ def main():
             if s["id"] == active_id:
                 label = f"📂 {label}"
             
-            if col_name.button(label, key=f"btn_{s['id']}", use_container_width=True):
+            if col_name.button(label, key=f"btn_{s['id']}", width='stretch'):
                 st.session_state.active_session_id = s["id"]
                 st.rerun()
             
@@ -139,7 +139,7 @@ def main():
             # Save functionality
             with st.popover("💾 Save New Persona"):
                 new_persona_name = st.text_input("Name", placeholder="e.g., Python Auditor")
-                if st.button("Save Preset", use_container_width=True):
+                if st.button("Save Preset", width='stretch'):
                     if new_persona_name and custom_system_prompt:
                         app_utils.save_system_prompt(new_persona_name, custom_system_prompt)
                         st.success(f"Saved '{new_persona_name}'")
@@ -165,7 +165,7 @@ def main():
             # 3. Render Refresh Button
             with col_db_refresh:
                 # Clicking this triggers a script rerun, which re-executes step #1 above
-                if st.button("🔄", help="Refresh Database List", use_container_width=True):
+                if st.button("🔄", help="Refresh Database List", width='stretch'):
                     st.rerun()
             
             col_opt, col_hyb = st.columns(2)

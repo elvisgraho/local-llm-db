@@ -4,7 +4,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/project \
     RAG_DATABASE_DIR=/project/databases \
-    RAW_DATA_DIR=/project/data
+    RAW_FILES_DIR=/project/raw_files \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    ANONYMIZED_TELEMETRY=False
 
 WORKDIR /project
 

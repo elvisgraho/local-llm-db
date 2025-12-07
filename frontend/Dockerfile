@@ -4,7 +4,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     RAG_DATABASE_DIR=/app/databases \
-    CHAT_HISTORY_DIR=/app/chat_history
+    CHAT_HISTORY_DIR=/app/chat_history \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    ANONYMIZED_TELEMETRY=False
 
 WORKDIR /app
 

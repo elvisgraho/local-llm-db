@@ -9,13 +9,7 @@ from tqdm import tqdm
 # --- Modern LangChain Imports ---
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_core.documents import Document
-
-# --- Local Imports ---
-try:
-    from config import DATA_DIR
-except ImportError:
-    # Fallback if config is not set up in this context
-    DATA_DIR = Path(__file__).parent.parent / "data"
+from query.database_paths import RAW_FILES_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -192,11 +186,11 @@ def load_documents(directory: Optional[Path] = None, db_dir: Optional[Path] = No
     Load documents from the data directory.
     
     Args:
-        directory: Source directory for files (defaults to global DATA_DIR).
+        directory: Source directory for files (defaults to global RAW_FILES_DIR).
         db_dir: Database directory to store/read the processing registry.
         ignore_processed: If True, re-process all files regardless of registry.
     """
-    target_dir = directory or DATA_DIR
+    target_dir = directory or RAW_FILES_DIR
     
     if not target_dir.exists():
         logger.error(f"Data directory does not exist: {target_dir}")

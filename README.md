@@ -6,7 +6,7 @@ A Dockerized system for building Knowledge Bases and Chatting with them locally.
 
 This setup uses Docker Volumes (created automatically in the `volumes/` folder) to persist data:
 
-- **`volumes/raw_data`**: Place your PDFs here. The **Builder** sees them.
+- **`volumes/raw_files`**: Place your PDFs here. The **Builder** sees them.
 - **`volumes/databases`**: Generated indexes live here. Shared between Builder and Frontend.
 - **`volumes/chat_history`**: Chat logs live here.
 
@@ -33,7 +33,7 @@ docker-compose up --build -d
 
 1.  Open **[http://localhost:8502](http://localhost:8502)** (The Builder).
 2.  Go to the **Import Files** tab.
-3.  Upload your PDFs (or manually drop them into `local-llm-db/volumes/raw_data`).
+3.  Upload your PDFs (or manually drop them into `local-llm-db/volumes/raw_files`).
 4.  Go to **Build Database**, choose a name (e.g., "manuals"), and click **Launch**.
 
 #### Step B: Chat

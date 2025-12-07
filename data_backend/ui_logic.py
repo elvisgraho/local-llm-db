@@ -10,9 +10,19 @@ from datetime import datetime
 from langchain_community.document_loaders import PyPDFLoader
 
 # --- Path Configuration ---
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-TRAINING_DIR = BASE_DIR / "training"
+# 1. Add current directory to path to ensure we can import 'query' module
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+# 2. Import Single Source of Truth for Paths
+from query.database_paths import PROJECT_ROOT, DATABASE_DIR
+
+# 3. Define Local Paths based on Project Root
+# Note: Backend scripts expect files in "data", so we map RAW_FILES_DIR there.
+RAW_FILES_DIR = PROJECT_ROOT /  "volumes" / "raw_files"
+
+# Get the absolute path of the current script's directory
+CURRENT_DIR = Path(__file__).resolve().parent
+TRAINING_DIR = CURRENT_DIR / "training"
 
 def get_system_metrics():
     return psutil.cpu_percent(interval=None), psutil.virtual_memory().percent
@@ -40,8 +50,11 @@ def get_dir_stats(path):
                 file_count += 1
     return total_size / (1024 * 1024), file_count
 
-def scan_databases(db_root):
-    """Scans the database directory for all instances."""
+def scan_databases(db_root=DATABASE_DIR):
+    """
+    Scans the database directory for all instances.
+    Defaults to the configuration DATABASE_DIR if not provided.
+    """
     inventory = []
     if not db_root.exists(): return inventory
     
@@ -71,17 +84,6 @@ def scan_databases(db_root):
     return inventory
 
 def delete_database_instance(path_str):
-    """Safely deletes a specific database directory."""
-    try:
-        path = Path(path_str)
-        if path.exists() and path.is_dir():
-            shutil.rmtree(path)
-            return True
-    except Exception:
-        return False
-
-
-def delete_database_instance(path_str):
     """Robustly deletes a database directory."""
     try:
         path = Path(path_str)
@@ -93,17 +95,24 @@ def delete_database_instance(path_str):
         return False
 
 # --- File & Script Utilities ---
-
 def get_file_inventory(limit=50):
     try:
-        if not DATA_DIR.exists(): return [], 0
-        all_files = sorted([f for f in DATA_DIR.iterdir() if f.is_file() and not f.name.startswith('.')], 
-                           key=os.path.getmtime, reverse=True)
+        if not RAW_FILES_DIR.exists(): return [], 0
+        
+        # Use rglob('*') for recursive search of all files and directories
+        # Filter for only files and exclude dotfiles
+        all_files = sorted(
+            [f for f in RAW_FILES_DIR.rglob('*') if f.is_file() and not f.name.startswith('.')], 
+            key=os.path.getmtime, 
+            reverse=True
+        )
+        
         files = [{
-            "Filename": f.name, 
+            "Filename": str(f.relative_to(RAW_FILES_DIR)), # Use relative path for clarity
             "Size (KB)": f"{f.stat().st_size/1024:.1f}",
             "Modified": datetime.fromtimestamp(f.stat().st_mtime).strftime('%H:%M:%S')
         } for f in all_files[:limit]]
+        
         return files, len(all_files)
     except Exception:
         return [], 0
@@ -125,19 +134,30 @@ def extract_text_for_preview(file_path, char_limit=10000):
         return f"Error reading file: {str(e)}"
 
 def run_script_generator(script_name, args, env_vars):
+    """
+    Runs a backend script as a subprocess.
+    IMPORTANT: Sets cwd to PROJECT_ROOT so scripts can import modules correctly.
+    """
     script_path = TRAINING_DIR / script_name
     cmd = [sys.executable, str(script_path)] + args
     
     process_env = os.environ.copy()
     process_env.update(env_vars)
     process_env["ANONYMIZED_TELEMETRY"] = "False"
-    process_env["PYTHONPATH"] = f"{str(BASE_DIR)}{os.pathsep}{process_env.get('PYTHONPATH', '')}"
+    
+    # Ensure the subprocess can find 'frontend' and 'query' packages
+    process_env["PYTHONPATH"] = f"{str(PROJECT_ROOT)}{os.pathsep}{process_env.get('PYTHONPATH', '')}"
 
     proc = None
     try:
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
-            text=True, env=process_env, bufsize=1, cwd=str(BASE_DIR)
+            cmd, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.STDOUT, 
+            text=True, 
+            env=process_env, 
+            bufsize=1, 
+            cwd=str(PROJECT_ROOT) # Execute from Root, not Frontend
         )
         yield f"PID:{proc.pid}"
         for line in proc.stdout:

@@ -4,9 +4,7 @@ import sys
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
-
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 # --- Modern LangChain Core Imports ---
 from langchain_core.documents import Document
@@ -14,7 +12,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 # --- Pydantic V2 Imports ---
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 # Add parent directory to Python path
 current_dir = Path(__file__).parent.absolute()
