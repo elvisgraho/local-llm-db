@@ -6,19 +6,33 @@ from typing import Dict, List, Tuple
 
 # Valid RAG types used across the system
 VALID_RAG_TYPES: Tuple[str, ...] = ("rag", "kag", "lightrag")
+
+# Default database name if none is provided
 DEFAULT_DB_NAME = "default"
 
-# --- Path Configuration ---
+# From your existing database_paths.py
+# 1. Determine the Project Root (relative to this specific file)
+# File location: frontend/query/database_paths.py
+# .parent = query, .parent = frontend, .parent = Project Root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# 2. Check for Docker Environment Variable first
 _env_db_path = os.getenv("RAG_DATABASE_DIR")
+
 if _env_db_path:
+    # We are in Docker
     DATABASE_DIR = Path(_env_db_path)
 else:
-    # Assuming this file is in <project_root>/query/database_paths.py
-    DATABASE_DIR = Path(__file__).resolve().parent.parent / "databases"
+    # We are running locally
+    # Fallback to: ../../volumes/databases
+    DATABASE_DIR = PROJECT_ROOT / "volumes" / "databases"
 
-# Ensure the directory exists
-DATABASE_DIR.mkdir(parents=True, exist_ok=True)
-
+# Create it if running locally and it doesn't exist
+if not DATABASE_DIR.exists():
+    try:
+        DATABASE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass # Handle permission errors gracefully
 
 # --- Helper Functions ---
 def _get_type_root_dir(rag_type: str) -> Path:

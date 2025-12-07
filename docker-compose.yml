@@ -12,6 +12,7 @@ services:
       - ./volumes/databases:/project/databases
     environment:
       - LOCAL_LLM_API_URL=http://host.docker.internal:1234/v1
+      - RAG_DATABASE_DIR=/app/databases
       - PYTHONUNBUFFERED=1
     extra_hosts:
       - "host.docker.internal:host-gateway"

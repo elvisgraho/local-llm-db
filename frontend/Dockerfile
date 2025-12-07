@@ -1,4 +1,3 @@
-# File: frontend/Dockerfile
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -17,13 +16,13 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download the small reranker model to speed up startup
+# Pre-download model
 RUN python3 -c "from sentence_transformers import CrossEncoder; CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
 
-# Copy the entire 'frontend' directory contents
+# Copy app code
 COPY . .
 
-# Ensure volume mount points exist
+# Explicitly create mount points (good practice)
 RUN mkdir -p /app/databases && \
     mkdir -p /app/chat_history
 

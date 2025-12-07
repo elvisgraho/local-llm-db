@@ -1,27 +1,25 @@
-# File: training/Dockerfile
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/project
+    PYTHONPATH=/project \
+    RAG_DATABASE_DIR=/project/databases \
+    RAW_DATA_DIR=/project/data
 
 WORKDIR /project
 
-# Install system tools
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create necessary folders for volumes
+# Create mount points
 RUN mkdir -p /project/data && \
     mkdir -p /project/databases
 
-# Copy the entire 'training' directory contents into the container
 COPY . .
 
 EXPOSE 8501

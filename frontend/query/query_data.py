@@ -11,16 +11,13 @@ from query.data_service import data_service
 from query.templates import DIRECT_TEMPLATE
 from query.llm_service import get_llm_response
 from query.global_vars import (
-    RAG_SIMILARITY_THRESHOLD,
-    RAG_MAX_DOCUMENTS,
-    GRAPH_MAX_NODES,
+    RAG_SIMILARITY_THRESHOLD
 )
 from query.query_helpers import _calculate_available_context
 from query.retrieval import (
     _retrieve_semantic,
     _retrieve_keyword,
     _retrieve_graph,
-    INITIAL_RETRIEVAL_MULTIPLIER,
     MAX_INITIAL_RETRIEVAL_LIMIT
 )
 from query.processing import (
