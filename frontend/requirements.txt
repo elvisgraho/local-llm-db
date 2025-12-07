@@ -1,5 +1,4 @@
 chromadb
-fastapi
 google-generativeai
 keybert
 langchain
@@ -7,9 +6,6 @@ langchain-chroma
 langchain-community
 langchain-core
 networkx
-pandas
-psutil
-pydantic
 pypdf
 rank-bm25
 requests
@@ -19,4 +15,3 @@ streamlit
 tenacity
 tiktoken
 tqdm
-uvicorn

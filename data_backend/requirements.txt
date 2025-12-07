@@ -1,7 +1,5 @@
 chromadb
 fastapi
-google-generativeai
-keybert
 langchain
 langchain-chroma
 langchain-community
@@ -11,12 +9,8 @@ pandas
 psutil
 pydantic
 pypdf
-rank-bm25
 requests
-scikit-learn
-sentence-transformers
 streamlit
 tenacity
-tiktoken
 tqdm
 uvicorn

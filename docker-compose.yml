@@ -1,0 +1,40 @@
+version: "3.8"
+services:
+  builder:
+    build:
+      context: ./data_backend
+      dockerfile: Dockerfile
+    container_name: rag-builder
+    ports:
+      - "8502:8501"
+    volumes:
+      - ./volumes/raw_data:/project/data
+      - ./volumes/databases:/project/databases
+    environment:
+      - LOCAL_LLM_API_URL=http://host.docker.internal:1234/v1
+      - PYTHONUNBUFFERED=1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    tty: true
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rag-frontend
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./volumes/databases:/app/databases
+      - ./volumes/chat_history:/app/chat_history
+    environment:
+      - LOCAL_LLM_API_URL=http://host.docker.internal:1234/v1
+      - RAG_DATABASE_DIR=/app/databases
+      - PYTHONUNBUFFERED=1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - builder
+    tty: true
+    restart: unless-stopped
