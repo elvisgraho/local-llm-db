@@ -66,10 +66,10 @@ Example output:
     "content_type": "technical-doc",
     "main_topic": "async-python",
     "key_concepts": "coroutines, await",
+    "section_type": "explanation",
     "has_code": true,
     "has_instructions": false,
-    "is_tutorial": true,
-    "section_type": "explanation"
+    "is_tutorial": true
 }}"""
     return ChatPromptTemplate.from_template(template_str)
 
@@ -147,6 +147,25 @@ def validate_metadata_field(field_name: str, value: Any) -> Any:
     except Exception:
         # Safe defaults
         return "unknown" if "type" in field_name or "topic" in field_name else False
+    
+def extract_text_parts(text: str, part_size: int = 3700, part_count: int = 17) -> str:
+    """
+    Picks n uniformly spaced parts of size part_size from the text.
+    If the text is too short, returns the whole text.
+    """
+    L = len(text)
+    num_parts = part_count
+    if L <= part_size * num_parts:
+        return text
+
+    max_start = L - part_size
+    parts = []
+
+    for i in range(num_parts):
+        start = int(i * max_start / (num_parts - 1))
+        parts.append(text[start : start + part_size])
+
+    return "".join(parts)
 
 def extract_metadata_llm(text: str) -> Dict[str, Any]:
     parser = PydanticOutputParser(pydantic_object=DocumentMetadata)
@@ -155,7 +174,7 @@ def extract_metadata_llm(text: str) -> Dict[str, Any]:
         format_instructions = parser.get_format_instructions()
         
         prompt_value = prompt_template.invoke({
-            "text": text[:3000], 
+            "text": extract_text_parts(text), 
             "format_instructions": format_instructions
         })
         final_prompt_str = prompt_value.to_string()

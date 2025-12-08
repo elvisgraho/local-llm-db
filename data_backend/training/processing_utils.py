@@ -81,13 +81,7 @@ def split_document(
         chunk_overlap=100,
         length_function=len,
         is_separator_regex=False,
-        separators=[
-            "\n\n",       # Paragraph (Highest semantic break)
-            "\n",         # Line Break
-            ". ",         # Sentence End (Crucial fallback to avoid mid-sentence cuts)
-            " ",          # Word Boundary (Last resort before character splitting)
-            ""            # Character Fallback (Final necessary failsafe)
-        ],
+        separators=["\n\n", "##", "###", "\n", ". ", " ", ""],
         keep_separator=True
     )
 
