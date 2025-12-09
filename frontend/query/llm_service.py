@@ -1,3 +1,4 @@
+import re
 import requests
 import logging
 from typing import List, Optional, Dict, Any
@@ -13,6 +14,14 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DEFAULT_CONTEXT_LENGTH = 8192
+
+# Matches <thinking> tags and common variations
+THINKING_PATTERN = re.compile(
+    r'<(?P<tag>thinking|thought|reasoning|think)\b[^>]*>.*?</(?P=tag)>|'
+    r'\s*\[/?(?:thinking|thought|reasoning|think)\b[^\]]*\]\s*|'
+    r'\s*\((?:thinking|thought|reasoning|think)\b[^)]*\)\s*',
+    flags=re.DOTALL | re.IGNORECASE
+)
 
 def get_model_context_length(llm_config: Optional[Dict[str, Any]] = None) -> int:
     if llm_config:
@@ -90,11 +99,17 @@ def get_llm_response(
             response.raise_for_status()
             
             data = response.json()
-            initial_content = data["choices"][0]["message"]["content"]
+            # Some backends return reasoning separately
+            initial_content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             
             # 2. Verification Step
             if verify:
                 logger.info("Performing LLM Verification...")
+
+                # 1. Remove Thinking Tags
+                # Some backends return reasoning separately
+                initial_content = THINKING_PATTERN.sub('', initial_content).strip()
+
                 verify_content = VERIFY_TEMPLATE.format(
                     original_prompt=prompt,
                     initial_answer=initial_content

@@ -268,7 +268,7 @@ with tab_preview:
                     chunk_overlap=chunk_overlap,
                     length_function=len,
                     is_separator_regex=False,
-                    separators=["\n\n", "##", "###", "\n", ". ", " ", ""],
+                    separators=["\n\n", "\n##", "\n###", "\n", ". ", " ", ""],
                     keep_separator=True
                 )
                 chunks = splitter.split_text(content)

@@ -3,7 +3,7 @@ import re
 import sys
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 import requests
 
 # --- Modern LangChain Core Imports ---
@@ -43,33 +43,37 @@ TAGS_LINE_PATTERN = re.compile(r"^\s*Tags:\s*(\{.*\})\s*$", re.IGNORECASE | re.M
 
 class DocumentMetadata(BaseModel):
     """Schema for document metadata extracted by LLM (Pydantic V2)."""
-    content_type: Optional[str] = Field(None, description="Type of content (e.g., 'technical-doc', 'code-example')")
-    main_topic: Optional[str] = Field(None, description="Main topic or subject (1-3 words)")
-    key_concepts: Optional[str] = Field(None, description="Comma-separated list of concepts")
-    has_code: bool = Field(False, description="Contains code examples")
-    has_instructions: bool = Field(False, description="Contains steps/commands")
-    is_tutorial: bool = Field(False, description="Is tutorial-like")
-    section_type: Optional[str] = Field(None, description="Graph section type (scenario/mitigation/impact)")
+    main_topic: Optional[str] = Field(None, description="Precise technical subject (e.g., 'DOM XSS', 'OAuth Flow')")
+    key_concepts: List[str] = Field(default_factory=list, description="Specific technical keywords (e.g., ['sink', 'source', 'iframe'])")
+    code_language: Optional[str] = Field(None, description="Programming language if code is present (e.g., 'python', 'bash')")
+    has_instructions: bool = Field(False, description="True if text contains reproduction steps or commands")
+    section_type: Optional[str] = Field(None, description="Strict category: 'poc', 'mitigation', 'impact', 'recon', or 'theory'")
 def get_metadata_extraction_prompt() -> ChatPromptTemplate:
-    template_str = """You are a metadata extraction specialist. Analyze the text and return a JSON object.
+    template_str = """You are a metadata extraction and document tagging specialist. Analyze the text and return a JSON object.
 
 Text:
 {text}
 
 Instructions:
 1. Return ONLY valid JSON.
-2. No explanations or markdown formatting outside the JSON block.
+2. 'key_concepts' must be atomic technical terms suitable for database filtering and mixed with major themes.
 3. Use the following schema:
 {format_instructions}
-Example output:
+
+### Example Output
+Input: 
+"To exploit the IDOR, change the user_id parameter in the POST /api/v1/user request.
+```bash
+curl -X POST https://example.com/api/v1/user -d 'user_id=1337'
+```"
+
+Output:
 {{
-    "content_type": "technical-doc",
-    "main_topic": "async-python",
-    "key_concepts": "coroutines, await",
-    "section_type": "explanation",
-    "has_code": true,
-    "has_instructions": false,
-    "is_tutorial": true
+    "main_topic": "IDOR",
+    "key_concepts": ["broken access control", "parameter tampering", "api"],
+    "code_language": "bash",
+    "has_instructions": true,
+    "section_type": "poc"
 }}"""
     return ChatPromptTemplate.from_template(template_str)
 
@@ -122,6 +126,7 @@ def _clean_and_parse_json(text: str) -> Dict[str, Any]:
             return json.loads(fixed_text)
         except Exception:
             return {}
+        
 def validate_metadata_field(field_name: str, value: Any) -> Any:
     """Validate a single metadata field against the Pydantic model type."""
     try:
@@ -211,7 +216,7 @@ def _extract_tags_from_content(content: str) -> Tuple[Optional[Dict[str, Any]], 
             pass
     return None, content
 
-def add_metadata_to_document(doc: Document, add_tags_llm: bool, max_chars: int = 5000) -> Document:
+def add_metadata_to_document(doc: Document, add_tags_llm: bool) -> Document:
     # 1. Manual Extraction
     extracted_meta, new_content = _extract_tags_from_content(doc.page_content)
     if new_content != doc.page_content:
@@ -224,8 +229,7 @@ def add_metadata_to_document(doc: Document, add_tags_llm: bool, max_chars: int =
     if add_tags_llm:
         print(f"DEBUG: Triggering LLM extraction for {doc.metadata.get('source')}...", flush=True)
         
-        preview_text = doc.page_content[:max_chars]
-        llm_meta = extract_metadata_llm(preview_text)
+        llm_meta = extract_metadata_llm(doc.page_content)
         
         if llm_meta:
             clean_meta = {k: v for k, v in llm_meta.items() if v not in [None, ""]}

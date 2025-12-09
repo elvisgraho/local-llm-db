@@ -6,8 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from tqdm import tqdm
-
 # --- Modern LangChain Imports ---
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
@@ -63,7 +61,7 @@ def split_document(
     if add_tags_llm:
         try:
             # Generate tags based on the first 5000 chars of the document
-            doc = add_metadata_to_document(doc, add_tags_llm=True, max_chars=5000)
+            doc = add_metadata_to_document(doc, add_tags_llm=True)
         except Exception as e:
             # Safe logging of the filename
             source = doc.metadata.get('source', 'unknown')
@@ -81,7 +79,7 @@ def split_document(
         chunk_overlap=100,
         length_function=len,
         is_separator_regex=False,
-        separators=["\n\n", "##", "###", "\n", ". ", " ", ""],
+        separators=["\n\n", "\n##", "\n###", "\n", ". ", " ", ""],
         keep_separator=True
     )
 

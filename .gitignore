@@ -6,6 +6,7 @@ chroma
 data/
 databases/
 pdfs/
+data_backend/training/processed
 volumes/*
 .vscode/
 *.7z

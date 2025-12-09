@@ -16,6 +16,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from tqdm import tqdm
 
 # Local Imports
+from llm_service import THINKING_PATTERN
 from global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
 
 # Configure logging
@@ -29,14 +30,7 @@ logger = logging.getLogger(__name__)
 processed_files: Set[str] = set()
 should_exit = False
 
-# --- Pre-compiled Regex ---
-# Matches <thinking> tags and common variations
-THINKING_PATTERN = re.compile(
-    r'<(?P<tag>thinking|thought|reasoning|think)\b[^>]*>.*?</(?P=tag)>|'
-    r'\s*\[/?(?:thinking|thought|reasoning|think)\b[^\]]*\]\s*|'
-    r'\s*\((?:thinking|thought|reasoning|think)\b[^)]*\)\s*',
-    flags=re.DOTALL | re.IGNORECASE
-)
+
 # Matches markdown code blocks often returned by LLMs
 JSON_BLOCK_PATTERN = re.compile(r'```(?:json)?\s*(\{.*?\})\s*```', re.DOTALL)
 
