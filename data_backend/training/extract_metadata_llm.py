@@ -153,7 +153,7 @@ def validate_metadata_field(field_name: str, value: Any) -> Any:
         # Safe defaults
         return "unknown" if "type" in field_name or "topic" in field_name else False
     
-def extract_text_parts(text: str, part_size: int = 3700, part_count: int = 17) -> str:
+def extract_text_parts(text: str, part_size: int = 1800, part_count: int = 17) -> str:
     """
     Picks n uniformly spaced parts of size part_size from the text.
     If the text is too short, returns the whole text.
