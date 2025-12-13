@@ -42,7 +42,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def process_document(doc: Document, add_tags_llm: bool) -> List[Document]:
+def process_document(doc: Document, add_tags_llm: bool, chunk_size: int, chunk_overlap: int) -> List[Document]:
     """
     Process a single document: validate, split, and ensure metadata.
     """
@@ -51,15 +51,21 @@ def process_document(doc: Document, add_tags_llm: bool) -> List[Document]:
          logger.warning(f"Skipping document with invalid metadata: {doc.metadata.get('source', 'unknown')}")
          return []
 
-    source = doc.metadata.get("source")
-
-    # 2. Split Document (using centralized logic)
+    # 2. Split Document (pass chunking params)
     try:
-        chunks = split_document(doc, add_tags_llm=add_tags_llm)
+        source = doc.metadata.get("source")
+
+        chunks = split_document(
+            doc, 
+            add_tags_llm=add_tags_llm,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
+
         if not chunks:
             logger.warning(f"Splitting document {source} resulted in no chunks.")
             return []
-
+        
         # 3. Ensure essential metadata in chunks
         for chunk in chunks:
             if "source" not in chunk.metadata:
@@ -78,6 +84,8 @@ def main():
     parser.add_argument("--reset", action="store_true", help="Delete existing DB and start fresh.")
     parser.add_argument("--add-tags", action="store_true", help="Use LLM to generate metadata tags.")
     parser.add_argument("--resume", action="store_true", help="Skip already processed files.")
+    parser.add_argument("--chunk_size", type=int, default=512, help="Chars per chunk.")
+    parser.add_argument("--chunk_overlap", type=int, default=200, help="Overlap chars.")
     
     args = parser.parse_args()
     rag_type = 'rag'
@@ -128,7 +136,12 @@ def main():
 
         with tqdm(total=total_docs, desc="Processing Docs", unit="doc") as pbar:
             for doc in all_documents:
-                chunks = process_document(doc, add_tags_llm=args.add_tags)
+                chunks = process_document(
+                    doc, 
+                    add_tags_llm=args.add_tags,
+                    chunk_size=args.chunk_size,
+                    chunk_overlap=args.chunk_overlap
+                )
                 if chunks:
                     all_processed_chunks.extend(chunks)
                     processed_docs += 1

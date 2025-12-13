@@ -89,10 +89,16 @@ with st.sidebar:
             
             with c_mod:
                 all_models = st.session_state.fetched_models
-                chat_candidates = filter_models(all_models, 'chat')
+                show_all = st.toggle("Show All Models", value=False)
+
+                if show_all:
+                    chat_candidates = all_models
+                else:
+                    chat_candidates = filter_models(all_models, 'chat')
+                    # Fallback if filter empties the list
+                    if not chat_candidates and all_models: 
+                        chat_candidates = all_models
                 
-                # Fallback logic
-                if not chat_candidates and all_models: chat_candidates = all_models
                 if not chat_candidates: chat_candidates = ["local-model"]
                 
                 curr = st.session_state.chat_model
@@ -249,8 +255,14 @@ with tab_preview:
     st.header("Chunking Visualizer")
     c_prev1, c_prev2 = st.columns([1, 2])
     with c_prev1:
-        chunk_size = st.slider("Chunk Size", 100, 1500, 512)
-        chunk_overlap = st.slider("Overlap", 0, 500, 200)
+        chunk_size = st.slider(
+            "Chunk Size", 100, 1500, 512, 
+            key="chunk_size_preview" # Referenced in ui_tab_build
+        )
+        chunk_overlap = st.slider(
+            "Overlap", 0, 500, 200, 
+            key="chunk_overlap_preview" # Referenced in ui_tab_build
+        )
         
         all_files = [f for f in RAW_FILES_DIR.rglob('*') if f.is_file() and not f.name.startswith('.')]
         test_file = st.selectbox(

@@ -20,6 +20,7 @@ from query.database_paths import PROJECT_ROOT, DATABASE_DIR
 # 3. Define Local Paths based on Project Root
 # Note: Backend scripts expect files in "data", so we map RAW_FILES_DIR there.
 RAW_FILES_DIR = PROJECT_ROOT /  "volumes" / "raw_files"
+STATE_FILE = PROJECT_ROOT / "volumes" / "active_job.json"
 
 # Get the absolute path of the current script's directory
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -201,16 +202,51 @@ def start_script_background(script_name, args, env_vars, log_file):
         )
     return proc.pid
 
-def read_log_file(log_file, num_lines=500):
-    """Reads the last N lines of the log file efficiently."""
-    if log_file.exists():
+def save_job_state(pid, start_time, db_name, flavor):
+    """Saves job details to disk to survive browser refreshes."""
+    data = {
+        "pid": pid,
+        "start_time": start_time,
+        "db_name": db_name,
+        "flavor": flavor
+    }
+    with open(STATE_FILE, "w") as f:
+        json.dump(data, f)
+
+def load_job_state():
+    """Loads active job from disk."""
+    if STATE_FILE.exists():
         try:
-            with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-                # deque with maxlen discards old lines automatically
-                return "".join(deque(f, maxlen=num_lines))
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
         except Exception:
-            return "Reading logs..."
-    return ""
+            return None
+    return None
+
+def clear_job_state():
+    """Clears job state from disk."""
+    if STATE_FILE.exists():
+        try:
+            STATE_FILE.unlink()
+        except Exception:
+            pass
+
+def read_log_file(log_file, num_lines=500):
+    """Optimized: Reads last N lines using seek (prevents memory crashes)."""
+    if not log_file.exists():
+        return ""
+    try:
+        file_size = log_file.stat().st_size
+        # Read last ~N lines (avg 150 bytes/line)
+        read_len = min(file_size, num_lines * 150)
+        
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            if file_size > read_len:
+                f.seek(file_size - read_len)
+            lines = f.readlines()
+            return "".join(lines[-num_lines:])
+    except Exception:
+        return "Reading logs..."
 
 def is_process_alive(pid):
     """Checks if a PID is still running."""

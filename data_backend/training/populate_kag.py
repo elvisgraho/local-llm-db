@@ -115,7 +115,9 @@ def main():
     parser.add_argument("--reset", action="store_true", help="Delete existing graph and start fresh.")
     parser.add_argument("--add-tags", action="store_true", help="Use LLM to generate metadata tags.")
     parser.add_argument("--resume", action="store_true", help="Skip already processed files.")
-    
+    parser.add_argument("--chunk_size", type=int, default=1000, help="Chars per chunk.")
+    parser.add_argument("--chunk_overlap", type=int, default=200, help="Overlap chars.")
+
     args = parser.parse_args()
     rag_type = 'kag'
     db_name = args.db_name
@@ -169,8 +171,13 @@ def main():
                     if not validate_metadata(doc.metadata):
                          failed_count += 1
                          continue
-
-                    chunks = split_document(doc, add_tags_llm=args.add_tags)
+                    # Pass new arguments
+                    chunks = split_document(
+                        doc, 
+                        add_tags_llm=args.add_tags,
+                        chunk_size=args.chunk_size,
+                        chunk_overlap=args.chunk_overlap
+                    )
                     if chunks:
                         all_chunks.extend(chunks)
                         processed_count += 1
@@ -219,7 +226,7 @@ def main():
         
         new_nodes = []
         new_edges = []
-        checkpoint_interval = 100  # Save every 100 chunks
+        checkpoint_interval = 500
 
         for i, (chunk, embedding) in enumerate(zip(all_chunks, all_embeddings)):
             source_file = chunk.metadata.get("source", "unknown")

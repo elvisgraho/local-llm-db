@@ -31,7 +31,7 @@ from langchain_core.documents import Document
 # --- Internal Imports ---
 from query.database_paths import get_db_paths
 from training.load_documents import load_documents
-from training.processing_utils import split_document, initialize_chroma_vectorstore
+from training.processing_utils import split_document, initialize_chroma_vectorstore, validate_metadata
 from query.global_vars import EMBEDDING_CONTEXT_LENGTH
 
 # Configure logging
@@ -41,41 +41,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def process_document(doc: Document, add_tags_llm: bool) -> List[Document]:
+def process_document(doc: Document, add_tags_llm: bool, chunk_size: int, chunk_overlap: int) -> List[Document]:
     """
-    Process a single document: validate metadata, split into chunks, and return.
-    
-    Args:
-        doc (Document): The document to process
-        add_tags_llm (bool): Whether to use LLM for metadata tagging
-        
-    Returns:
-        List[Document]: Processed chunks ready for indexing
+    Process a single document: validate, split, and ensure metadata.
     """
-    try:
-        # 1. Basic Metadata Validation
-        if not doc.metadata or not isinstance(doc.metadata, dict):
-            logger.warning("Skipping document with invalid metadata.")
-            return []
-            
-        source = doc.metadata.get("source", "unknown")
-            
-        # 2. Split Document (using centralized logic in processing_utils)
-        chunks = split_document(doc, add_tags_llm=add_tags_llm)
-        
-        if not chunks:
-             logger.warning(f"Splitting document {source} resulted in no chunks.")
-             return []
+    # 1. Validate Metadata
+    if not validate_metadata(doc.metadata):
+         logger.warning(f"Skipping document with invalid metadata: {doc.metadata.get('source', 'unknown')}")
+         return []
 
-        # 3. Ensure Metadata Integrity (LightRAG specific needs)
+    # 2. Split Document (pass chunking params)
+    try:
+        source = doc.metadata.get("source")
+
+        chunks = split_document(
+            doc, 
+            add_tags_llm=add_tags_llm,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap
+        )
+
+        if not chunks:
+            logger.warning(f"Splitting document {source} resulted in no chunks.")
+            return []
+        
+        # 3. Ensure essential metadata in chunks
         for chunk in chunks:
             if "source" not in chunk.metadata:
                  chunk.metadata["source"] = source
-                 
+
         return chunks
-            
+
     except Exception as e:
-        logger.error(f"Error processing document {doc.metadata.get('source', 'unknown')}: {e}", exc_info=True)
+        logger.error(f"Error splitting document {source}: {e}")
         return []
 
 def main():
@@ -85,6 +83,8 @@ def main():
     parser.add_argument("--reset", action="store_true", help="Delete existing DB and start fresh.")
     parser.add_argument("--add-tags", action="store_true", help="Use LLM to generate metadata tags.")
     parser.add_argument("--resume", action="store_true", help="Skip already processed files.")
+    parser.add_argument("--chunk_size", type=int, default=1000, help="Chars per chunk.")
+    parser.add_argument("--chunk_overlap", type=int, default=200, help="Overlap chars.")
 
     args = parser.parse_args()
     
@@ -138,17 +138,21 @@ def main():
         
         with tqdm(total=total_docs, desc="Processing Docs", unit="doc") as pbar:
             for doc in loaded_docs:
-                chunks = process_document(doc, add_tags_llm=args.add_tags)
+                chunks = process_document(
+                    doc, 
+                    add_tags_llm=args.add_tags,
+                    chunk_size=args.chunk_size,
+                    chunk_overlap=args.chunk_overlap
+                )
                 if chunks:
                     all_processed_chunks.extend(chunks)
+
                 pbar.update(1)
 
         # 4. Index Chunks (Batching)
         if all_processed_chunks:
             total_chunks = len(all_processed_chunks)
-            # Use constant from config, default to 100 if missing
-            batch_size = 100 
-            
+            batch_size = EMBEDDING_CONTEXT_LENGTH 
             logger.info(f"Indexing {total_chunks} chunks into ChromaDB (Batch Size: {batch_size})...")
 
             with tqdm(total=total_chunks, desc="Indexing", unit="chunk") as pbar:
