@@ -11,7 +11,6 @@ document retrieval. Key features:
 This is a simpler alternative to the graph-based approaches (GraphRAG and KAG) that focuses
 on speed and efficiency over complex relationship modeling.
 """
-
 import logging
 import sys
 import argparse
@@ -31,7 +30,7 @@ from langchain_core.documents import Document
 # --- Internal Imports ---
 from query.database_paths import get_db_paths
 from training.load_documents import load_documents
-from training.processing_utils import split_document, initialize_chroma_vectorstore, validate_metadata
+from training.processing_utils import manage_db_configuration, split_document, initialize_chroma_vectorstore, validate_metadata
 from query.global_vars import EMBEDDING_CONTEXT_LENGTH
 
 # Configure logging
@@ -104,6 +103,8 @@ def main():
     # Prioritize 'chroma_path', fallback for older configs if needed
     chroma_path = db_paths.get("chroma_path") or db_paths.get("vectorstore_path")
     db_dir = db_paths["db_dir"]
+    
+    manage_db_configuration(db_paths["db_dir"], "rag", args)
 
     if not chroma_path:
         logger.error(f"Could not determine Chroma path for {rag_type}/{db_name}")
@@ -118,7 +119,6 @@ def main():
         if not vectorstore:
              logger.error("Failed to initialize Chroma vectorstore.")
              sys.exit(1)
-
         # 2. Load Documents
         ignore_registry = (not args.resume) or args.reset
         loaded_docs = load_documents(

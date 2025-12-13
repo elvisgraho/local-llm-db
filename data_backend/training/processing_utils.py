@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import shutil
@@ -200,6 +201,53 @@ def initialize_chroma_vectorstore(chroma_path: Path, reset: bool = False) -> Opt
     except Exception as e:
         logger.error(f"Error managing ChromaDB at {chroma_path}: {e}")
         return None
+    
+def manage_db_configuration(db_dir: Path, rag_type: str, args) -> None:
+    """
+    Validates existing DB configuration against requested arguments.
+    Saves new configuration if resetting or creating new.
+    Exits the program if there is a mismatch.
+    """
+    config_path = db_dir / "db_config.json"
+    
+    # 1. Validation Logic
+    if config_path.exists() and not args.reset:
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+                
+            # Check Critical Parameters
+            old_chunk = existing.get("chunk_size")
+            old_overlap = existing.get("chunk_overlap")
+            
+            if old_chunk is not None:
+                if old_chunk != args.chunk_size or old_overlap != args.chunk_overlap:
+                    logger.error(f"⛔ CONFIGURATION MISMATCH for '{args.db_name}'")
+                    logger.error(f"   Stored:    Chunk={old_chunk}, Overlap={old_overlap}")
+                    logger.error(f"   Requested: Chunk={args.chunk_size}, Overlap={args.chunk_overlap}")
+                    logger.error("   Action: Use --reset to overwrite, or match the existing parameters.")
+                    sys.exit(1)
+            
+            logger.info("✅ Configuration match verified.")
+            
+        except Exception as e:
+            logger.warning(f"Could not read existing config: {e}")
+
+    # 2. Save/Update Logic (Only on Reset or New Creation)
+    if args.reset or not config_path.exists():
+        db_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "rag_type": rag_type,
+                    "chunk_size": args.chunk_size,
+                    "chunk_overlap": args.chunk_overlap,
+                    "created_at": str(datetime.now()),
+                    "db_name": args.db_name
+                }, f, indent=2)
+            logger.info(f"Saved database configuration to {config_path}")
+        except Exception as e:
+            logger.error(f"Failed to save DB config: {e}")
 
 def clear_db_directory(db_dir: Path) -> None:
     """

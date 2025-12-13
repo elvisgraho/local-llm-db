@@ -8,13 +8,11 @@ retrieval. Key features:
 3. Integration with LM Studio for local LLM inference
 4. Basic question-answering capabilities
 """
-
 import sys
 import logging
 import argparse
 from pathlib import Path
 from typing import List
-
 from tqdm import tqdm
 
 # --- Add project root to path ---
@@ -29,6 +27,7 @@ from langchain_core.documents import Document
 from query.database_paths import get_db_paths
 from training.load_documents import load_documents
 from training.processing_utils import (
+    manage_db_configuration,
     split_document, 
     initialize_chroma_vectorstore, 
     validate_metadata
@@ -91,7 +90,6 @@ def main():
     rag_type = 'rag'
     db_name = args.db_name
 
-    # --- Configuration & Paths ---
     try:
         db_paths = get_db_paths(rag_type, db_name)
     except ValueError as e:
@@ -100,6 +98,7 @@ def main():
 
     chroma_path = db_paths.get("chroma_path")
     db_dir = db_paths["db_dir"]
+    manage_db_configuration(db_paths["db_dir"], "rag", args)
 
     if not chroma_path:
         logger.error(f"Chroma path undefined for {rag_type}/{db_name}")

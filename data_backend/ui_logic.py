@@ -53,10 +53,7 @@ def get_dir_stats(path):
     return total_size / (1024 * 1024), file_count
 
 def scan_databases(db_root=DATABASE_DIR):
-    """
-    Scans the database directory for all instances.
-    Defaults to the configuration DATABASE_DIR if not provided.
-    """
+    """Scans DBs and reads optional db_config.json"""
     inventory = []
     if not db_root.exists(): return inventory
     
@@ -67,7 +64,7 @@ def scan_databases(db_root=DATABASE_DIR):
                 if db_instance.is_dir() and not db_instance.name.startswith('.'):
                     size_mb, _ = get_dir_stats(db_instance)
                     
-                    # Count processed files via registry if it exists
+                    # 1. Count processed files
                     file_count = 0
                     reg_path = db_instance / "processed_files.json"
                     if reg_path.exists():
@@ -76,12 +73,22 @@ def scan_databases(db_root=DATABASE_DIR):
                                 file_count = len(json.load(f))
                         except: pass
                     
+                    # 2. Read Configuration (NEW)
+                    config = {}
+                    config_path = db_instance / "db_config.json"
+                    if config_path.exists():
+                        try:
+                            with open(config_path, 'r', encoding='utf-8') as f:
+                                config = json.load(f)
+                        except: pass
+
                     inventory.append({
                         "Type": r_type,
                         "Name": db_instance.name,
                         "Size": f"{size_mb:.1f} MB",
                         "Files": file_count,
-                        "Path": str(db_instance)
+                        "Path": str(db_instance),
+                        "Config": config  # Store for UI usage
                     })
     return inventory
 

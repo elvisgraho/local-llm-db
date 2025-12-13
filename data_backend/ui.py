@@ -155,7 +155,6 @@ with st.sidebar:
 
     st.divider()
     
-    # 2. Database Manager
     with st.expander("💾 Database Manager", expanded=False):
         c_head, c_ref_db = st.columns([3, 1])
         c_head.caption("Manage Local DBs")
@@ -174,25 +173,53 @@ with st.sidebar:
                 height=150
             )
             
-            # Selection Controls
-            db_options = [f"{d['Type'].upper()} | {d['Name']}" for d in db_inventory]
-            selected_db_str = st.selectbox("Select DB", db_options, label_visibility="collapsed")
+            # Robust Selection (Key Map)
+            db_map = {f"{d['Type'].upper()} | {d['Name']}": d for d in db_inventory}
             
-            if selected_db_str:
-                selected_idx = db_options.index(selected_db_str)
-                target_db = db_inventory[selected_idx]
+            selected_key = st.selectbox(
+                "Select DB", 
+                options=list(db_map.keys()), 
+                label_visibility="collapsed"
+            )
+            
+            if selected_key:
+                target_db = db_map[selected_key]
+                
+                # Visual Confirmation
+                if st.session_state.target_db_name == target_db["Name"]:
+                     st.caption(f"✅ **Active:** {target_db['Name']} ({target_db['Type']})")
                 
                 c_use, c_del = st.columns(2)
                 
-                if c_use.button("Use Name", width='stretch'):
+                if c_use.button("Use Database", width='stretch'):
+                    # 1. Set Name
                     st.session_state.target_db_name = target_db["Name"]
-                    st.toast(f"Set target to: {target_db['Name']}")
+                    
+                    # 2. Set Architecture
+                    type_map = {
+                        "rag": "Standard RAG",
+                        "lightrag": "LightRAG",
+                        "kag": "KAG (Graph)"
+                    }
+                    st.session_state.rag_flavor_selector = type_map.get(target_db["Type"], "Standard RAG")
+                    
+                    # 3. Set Chunking Parameters (NEW)
+                    # We use specific keys that match ui_tab_build inputs
+                    if "Config" in target_db and target_db["Config"]:
+                        cfg = target_db["Config"]
+                        if "chunk_size" in cfg:
+                            st.session_state.build_chunk_size = int(cfg["chunk_size"])
+                        if "chunk_overlap" in cfg:
+                            st.session_state.build_chunk_overlap = int(cfg["chunk_overlap"])
+                            
+                    st.toast(f"Switched to: {target_db['Name']}")
                     time.sleep(0.5)
                     st.rerun()
 
                 if c_del.button("Delete", type="primary", width='stretch'):
-                    st.session_state.delete_target = target_db["Path"]
+                    st.session_state.delete_target = str(target_db["Path"])
                     st.session_state.delete_confirm = True
+                    st.rerun()
         else:
             st.info("No databases found.")
 

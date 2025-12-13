@@ -40,17 +40,33 @@ def render_build_tab(env_vars):
 
     c_b1, c_b2 = st.columns([1, 2])
     with c_b1:
+        if "rag_flavor_selector" not in st.session_state:
+            st.session_state.rag_flavor_selector = "Standard RAG"
+            
         rag_flavor = st.radio(
             "Architecture", 
             ["Standard RAG", "LightRAG", "KAG (Graph)"], 
+            key="rag_flavor_selector",
             disabled=is_running
         )
         
-        def_chunk = st.session_state.get("chunk_size_preview", 512)
-        def_over = st.session_state.get("chunk_overlap_preview", 200)
+        # Initialize keys if missing (fallback to preview or defaults)
+        if "build_chunk_size" not in st.session_state:
+            st.session_state.build_chunk_size = st.session_state.get("chunk_size_preview", 512)
+        if "build_chunk_overlap" not in st.session_state:
+            st.session_state.build_chunk_overlap = st.session_state.get("chunk_overlap_preview", 200)
         
-        chunk_size = st.number_input("Chunk Size", 100, 4000, def_chunk, disabled=is_running)
-        chunk_overlap = st.number_input("Overlap", 0, 1000, def_over, disabled=is_running)
+        # Bind to keys
+        chunk_size = st.number_input(
+            "Chunk Size", 100, 4000, 
+            key="build_chunk_size", 
+            disabled=is_running
+        )
+        chunk_overlap = st.number_input(
+            "Overlap", 0, 1000, 
+            key="build_chunk_overlap", 
+            disabled=is_running
+        )
 
     with c_b2:
         db_path_check = PROJECT_ROOT / "databases" / rag_flavor.lower().split()[0] / st.session_state.target_db_name

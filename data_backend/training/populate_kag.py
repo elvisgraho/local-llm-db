@@ -28,7 +28,7 @@ if str(project_root) not in sys.path:
 # --- Internal Imports ---
 from query.database_paths import get_db_paths
 from training.load_documents import load_documents
-from training.processing_utils import split_document, validate_metadata
+from training.processing_utils import manage_db_configuration, split_document, validate_metadata
 from training.get_embedding_function import get_embedding_function
 from query.global_vars import EMBEDDING_CONTEXT_LENGTH
 
@@ -131,21 +131,20 @@ def main():
 
     db_dir = db_paths["db_dir"]
     graph_path = db_paths.get("graph_path")
+
+    # 1. Handle Reset/Wipe FIRST
+    if args.reset:
+        clear_graph_dir(db_dir)
     
-    if not graph_path:
-        logger.error(f"Graph path undefined for {rag_type}/{db_name}")
-        sys.exit(1)
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    # 2. THEN Validate/Save Configuration
+    manage_db_configuration(db_dir, "kag", args)
 
     logger.info(f"Target: {rag_type.upper()} | DB Name: {db_name}")
 
     try:
-        # 1. Reset if requested
-        if args.reset:
-            clear_graph_dir(db_dir)
-            
-        db_dir.mkdir(parents=True, exist_ok=True)
-
-        # 2. Load Documents
+        graph = load_graph(graph_path)
         ignore_registry = (not args.resume) or args.reset
         
         documents = load_documents(
