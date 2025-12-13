@@ -30,7 +30,6 @@ from query.database_paths import get_db_paths
 from training.load_documents import load_documents
 from training.processing_utils import manage_db_configuration, split_document, validate_metadata
 from training.get_embedding_function import get_embedding_function
-from query.global_vars import EMBEDDING_CONTEXT_LENGTH
 
 # Configure logging
 logging.basicConfig(
@@ -199,13 +198,10 @@ def main():
         embedding_function = get_embedding_function()
         all_embeddings = []
         chunk_texts = [c.page_content for c in all_chunks]
-        
-        # Batch size for embedding API calls
-        batch_size = EMBEDDING_CONTEXT_LENGTH
 
         with tqdm(total=len(chunk_texts), desc="Embedding", unit="chunk") as pbar:
-            for i in range(0, len(chunk_texts), batch_size):
-                batch = chunk_texts[i : i + batch_size]
+            for i in range(0, len(chunk_texts), args.chunk_size):
+                batch = chunk_texts[i : i + args.chunk_size]
                 try:
                     # embed_documents returns list of list of floats
                     embeds = embedding_function.embed_documents(batch)

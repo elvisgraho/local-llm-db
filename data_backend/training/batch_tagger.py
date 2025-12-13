@@ -2,7 +2,6 @@ import os
 import re
 import sys
 import json
-import time
 import argparse
 import logging
 from pathlib import Path

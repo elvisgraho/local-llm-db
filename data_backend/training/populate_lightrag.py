@@ -16,7 +16,6 @@ import sys
 import argparse
 from pathlib import Path
 from typing import List
-
 from tqdm import tqdm
 
 # --- Add project root to path ---
@@ -31,7 +30,6 @@ from langchain_core.documents import Document
 from query.database_paths import get_db_paths
 from training.load_documents import load_documents
 from training.processing_utils import manage_db_configuration, split_document, initialize_chroma_vectorstore, validate_metadata
-from query.global_vars import EMBEDDING_CONTEXT_LENGTH
 
 # Configure logging
 logging.basicConfig(
@@ -152,12 +150,11 @@ def main():
         # 4. Index Chunks (Batching)
         if all_processed_chunks:
             total_chunks = len(all_processed_chunks)
-            batch_size = EMBEDDING_CONTEXT_LENGTH 
-            logger.info(f"Indexing {total_chunks} chunks into ChromaDB (Batch Size: {batch_size})...")
+            logger.info(f"Indexing {total_chunks} chunks into ChromaDB (Batch Size: {args.chunk_size})...")
 
             with tqdm(total=total_chunks, desc="Indexing", unit="chunk") as pbar:
-                for i in range(0, total_chunks, batch_size):
-                    batch = all_processed_chunks[i : i + batch_size]
+                for i in range(0, total_chunks, args.chunk_size):
+                    batch = all_processed_chunks[i : i + args.chunk_size]
                     try:
                         vectorstore.add_documents(batch)
                     except Exception as e:

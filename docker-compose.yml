@@ -31,11 +31,12 @@ services:
       - "8501:8501"
     volumes:
       - ./volumes/databases:/app/databases
-      - ./volumes/chat_history:/app/chat_history
+      - ./volumes/sessions:/app/chat_history
     environment:
       - LOCAL_LLM_API_URL=http://host.docker.internal:1234/v1
       - RAG_DATABASE_DIR=/app/databases
       - PYTHONUNBUFFERED=1
+      - CHAT_HISTORY_DIR=/app/chat_history
       - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
       - ANONYMIZED_TELEMETRY=False
     extra_hosts:

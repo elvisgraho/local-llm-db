@@ -2,7 +2,6 @@ import os
 import sys
 import argparse
 import logging
-import gc
 import re
 import signal
 from tqdm import tqdm
