@@ -25,25 +25,25 @@ from training.load_documents import extract_metadata
 
 logger = logging.getLogger(__name__)
 
+RE_BULLET = re.compile(r'^\s*[-•]\s*', flags=re.MULTILINE)
+RE_NUMBERED_LIST = re.compile(r'^\s*(\d+\.)(?! )', flags=re.MULTILINE)
+RE_CODE_BLOCK = re.compile(r'```(\w+)?\n')
+RE_FILENAME_SANITIZE = re.compile(r'[^a-z0-9_]')
+
 def validate_metadata(metadata: Dict[str, Any]) -> bool:
     """
-    Validate document metadata for required fields.
+    Validate document metadata for required fields efficiently (Single Pass).
     """
-    if not metadata or not isinstance(metadata, dict):
+    if not isinstance(metadata, dict):
         return False
 
     required_fields = ["source", "file_name", "file_type"]
     
-    # Check for missing keys
-    if not all(field in metadata for field in required_fields):
-        missing = [f for f in required_fields if f not in metadata]
-        logger.debug(f"Metadata missing fields: {missing}")
-        return False
-
-    # Check for empty values
     for field in required_fields:
-        if not metadata[field] or not isinstance(metadata[field], str):
-            logger.debug(f"Invalid value for metadata field '{field}': {metadata.get(field)}")
+        val = metadata.get(field)
+        # Check existence and non-empty string in one go
+        if not val or not isinstance(val, str):
+            logger.debug(f"Metadata invalid/missing field '{field}': {val}")
             return False
 
     return True
@@ -51,33 +51,27 @@ def validate_metadata(metadata: Dict[str, Any]) -> bool:
 def split_document(
     doc: Document, 
     add_tags_llm: bool, 
-    max_chunk_size: int = 512, 
-    max_total_chunks: int = 1000
+    max_total_chunks: int = 1500,
+    chunk_overlap: int = 100, 
+    chunk_size: Optional[int] = None
 ) -> List[Document]:
     """
     Split a document into semantic chunks.
-    OPTIMIZED: Generates metadata ONCE per document, then splits.
+    OPTIMIZED: Pre-compiled regex, parameter aliasing, and single metadata pass.
     """
-    # --- 1. Generate Metadata (ONCE per file) ---
+    # 2. Generate Metadata (ONCE per file)
     if add_tags_llm:
         try:
-            # Generate tags based on the first 5000 chars of the document
             doc = add_metadata_to_document(doc, add_tags_llm=True)
         except Exception as e:
-            # Safe logging of the filename
             source = doc.metadata.get('source', 'unknown')
-            try:
-                safe_source = source.encode('utf-8', 'replace').decode('utf-8')
-            except:
-                safe_source = "unknown_file"
-            
-            logger.error(f"❌ CRITICAL: Tagging failed for '{safe_source}'. Error: {e}")
+            logger.error(f"❌ CRITICAL: Tagging failed for '{source}'. Error: {e}")
             return [] 
 
-    # --- 2. Configure Splitter ---
+    # 3. Configure Splitter
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=max_chunk_size,
-        chunk_overlap=100,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
         length_function=len,
         is_separator_regex=False,
         separators=["\n\n", "\n##", "\n###", "\n", ". ", " ", ""],
@@ -85,40 +79,39 @@ def split_document(
     )
 
     try:
-        # --- 3. Pre-process Content ---
+        # 4. Pre-process Content (Fast Regex)
         content = doc.page_content or ""
-        content = re.sub(r'^\s*[-•]\s*', '• ', content, flags=re.MULTILINE)
-        content = re.sub(r'^\s*(\d+\.)(?! )', r'\1 ', content, flags=re.MULTILINE)
-        content = re.sub(r'```(\w+)?\n', r'```\n', content)
+        content = RE_BULLET.sub('• ', content)
+        content = RE_NUMBERED_LIST.sub(r'\1 ', content)
+        content = RE_CODE_BLOCK.sub(r'```\n', content)
         doc.page_content = content
 
-        # --- 4. Split (Metadata is automatically inherited) ---
+        # 5. Split
         doc_chunks = text_splitter.split_documents([doc])
 
         # Limit Chunks
         if len(doc_chunks) > max_total_chunks:
             source_name = doc.metadata.get('source', 'unknown')
-            try:
-                logger.warning(f"Limiting {source_name} to {max_total_chunks} chunks.")
-            except UnicodeEncodeError:
-                logger.warning(f"Limiting document to {max_total_chunks} chunks (name hidden due to encoding).")
+            logger.warning(f"Limiting {source_name} to {max_total_chunks} chunks.")
             doc_chunks = doc_chunks[:max_total_chunks]
 
-        # --- 5. Finalize Metadata ---
+        # 6. Finalize Metadata
         processed_chunks = []
         total_chunks = len(doc_chunks)
         source = doc.metadata.get("source", "unknown")
         
+        # Extract base file metadata once
+        file_metadata = extract_metadata(source)
+        base_timestamp = datetime.now().isoformat()
+
         for i, chunk in enumerate(doc_chunks):
-            # Extract base file metadata
-            file_metadata = extract_metadata(source)
-            
-            # Merge: File Meta + LLM Meta (Inherited) + Structural Meta
-            merged_metadata = {**file_metadata, **chunk.metadata}
+            # Fast dictionary merge
+            merged_metadata = file_metadata.copy()
+            merged_metadata.update(chunk.metadata)
             merged_metadata.update({
                 "chunk_index": i,
                 "total_chunks": total_chunks,
-                "processed_at": datetime.now().isoformat()
+                "processed_at": base_timestamp
             })
             
             chunk.metadata = merged_metadata
@@ -127,57 +120,13 @@ def split_document(
         return processed_chunks
 
     except Exception as e:
-        # Safe logging for top-level error
-        try:
-            source = doc.metadata.get('source', 'unknown')
-            logger.error(f"Failed to split document {source}: {e}")
-        except UnicodeEncodeError:
-            logger.error(f"Failed to split document (unknown source): {e}")
+        source = doc.metadata.get('source', 'unknown')
+        logger.error(f"Failed to split document {source}: {e}")
         return []
-    
-    
-def initialize_vectorstore(vectorstore_path: Path, reset: bool = False) -> Optional[FAISS]:
-    """
-    Initialize or load the LEGACY FAISS vectorstore.
-    """
-    try:
-        embedding_function = get_embedding_function()
-
-        if reset and vectorstore_path.exists():
-            logger.info(f"Resetting FAISS vectorstore at {vectorstore_path}...")
-            shutil.rmtree(vectorstore_path)
-        
-        vectorstore_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if not vectorstore_path.exists() or reset:
-            logger.info(f"Creating new FAISS index at {vectorstore_path}")
-            vectorstore = FAISS.from_texts(
-                ["Initial empty document"],
-                embedding=embedding_function,
-                metadatas=[{
-                    "source": "initial",
-                    "file_name": "initial.txt",
-                    "file_type": "text",
-                    "processed_at": datetime.now().isoformat()
-                }]
-            )
-            vectorstore.save_local(str(vectorstore_path))
-            return vectorstore
-        else:
-            logger.info(f"Loading FAISS index from {vectorstore_path}")
-            return FAISS.load_local(
-                str(vectorstore_path), 
-                embedding_function, 
-                allow_dangerous_deserialization=True
-            )
-
-    except Exception as e:
-        logger.error(f"Error managing FAISS vectorstore: {e}")
-        return None
 
 def initialize_chroma_vectorstore(chroma_path: Path, reset: bool = False) -> Optional[Chroma]:
     """
-    Initialize or load the Chroma vectorstore.
+    Initialize or load the Chroma vectorstore with robust reset logic.
     """
     try:
         embedding_function = get_embedding_function()
@@ -187,6 +136,7 @@ def initialize_chroma_vectorstore(chroma_path: Path, reset: bool = False) -> Opt
             logger.info(f"Resetting ChromaDB at {path_str}...")
             if chroma_path.exists():
                 shutil.rmtree(chroma_path)
+            # Re-create parent directory just in case
             chroma_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Initializing ChromaDB at {path_str}")
@@ -201,12 +151,12 @@ def initialize_chroma_vectorstore(chroma_path: Path, reset: bool = False) -> Opt
     except Exception as e:
         logger.error(f"Error managing ChromaDB at {chroma_path}: {e}")
         return None
-    
+
 def manage_db_configuration(db_dir: Path, rag_type: str, args) -> None:
     """
     Validates existing DB configuration against requested arguments.
     Saves new configuration if resetting or creating new.
-    Exits the program if there is a mismatch.
+    Exits the program if there is a mismatch to protect data integrity.
     """
     config_path = db_dir / "db_config.json"
     
@@ -220,6 +170,7 @@ def manage_db_configuration(db_dir: Path, rag_type: str, args) -> None:
             old_chunk = existing.get("chunk_size")
             old_overlap = existing.get("chunk_overlap")
             
+            # Only validate if the existing config actually has these fields
             if old_chunk is not None:
                 if old_chunk != args.chunk_size or old_overlap != args.chunk_overlap:
                     logger.error(f"⛔ CONFIGURATION MISMATCH for '{args.db_name}'")
@@ -233,8 +184,11 @@ def manage_db_configuration(db_dir: Path, rag_type: str, args) -> None:
         except Exception as e:
             logger.warning(f"Could not read existing config: {e}")
 
-    # 2. Save/Update Logic (Only on Reset or New Creation)
+    # 2. Save/Update Logic (On Reset, New Creation, or adopting Legacy DB)
     if args.reset or not config_path.exists():
+        if not args.reset and db_dir.exists() and any(db_dir.iterdir()):
+             logger.warning("Adopting existing legacy database: creating configuration file.")
+             
         db_dir.mkdir(parents=True, exist_ok=True)
         try:
             with open(config_path, "w", encoding="utf-8") as f:
@@ -272,8 +226,7 @@ def clear_db_directory(db_dir: Path) -> None:
 
 def get_unique_path(out_dir: Path, filename: str) -> Path:
     """Guarantees no overwrites by appending a counter."""
-    # Sanitize filename
-    safe_name = re.sub(r'[^a-z0-9_]', '', filename.lower())
+    safe_name = RE_FILENAME_SANITIZE.sub('', filename.lower())
     if not safe_name: 
         safe_name = "untitled_doc"
     
