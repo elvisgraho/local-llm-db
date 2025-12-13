@@ -1,317 +1,213 @@
 import streamlit as st
-import time
+import requests
 from query.global_vars import LOCAL_LLM_API_URL
-from query.database_paths import list_available_dbs, DEFAULT_DB_NAME
+from query.database_paths import DATABASE_DIR
 import app_utils
 
-# --- Callbacks for Immediate Persistence ---
-def _update_llm_url():
-    st.session_state.llm_url = st.session_state.llm_url_input
+# --- Constants ---
+STRATEGY_MAP = {
+    "Direct Chat": "direct",
+    "Standard RAG": "rag",
+    "LightRAG": "lightrag",
+    "KAG (Graph)": "kag"
+}
 
-def _update_emb_url():
-    st.session_state.emb_url = st.session_state.emb_url_input
+# --- Helpers ---
+def fetch_available_models(base_url):
+    """
+    Fetches models from the Local LLM API (LM Studio/Ollama compatible).
+    """
+    if not base_url: return []
+    try:
+        clean_url = base_url.rstrip('/')
+        if not clean_url.endswith("/v1"): clean_url += "/v1"
+        
+        response = requests.get(f"{clean_url}/models", timeout=2)
+        if response.status_code == 200:
+            data = response.json()
+            if 'data' in data:
+                return [m['id'] for m in data['data']]
+            return []
+    except Exception:
+        return []
+    return []
 
-def _update_emb_model():
-    st.session_state.emb_model = st.session_state.emb_selector
+def get_dbs_for_strategy(strategy_key: str) -> list:
+    """Scans the specific subdirectory for available databases."""
+    if not strategy_key or strategy_key == 'direct':
+        return []
+    
+    target_dir = DATABASE_DIR / strategy_key
+    if not target_dir.exists():
+        return []
+        
+    return [d.name for d in target_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
 
+# --- Callbacks ---
 def _update_rag_type():
-    """Persist strategy selection immediately."""
     st.session_state.rag_strategy = st.session_state.rag_type_selector
 
 def _update_selected_db():
-    """Persist DB selection immediately."""
     st.session_state.persisted_db = st.session_state.db_selector
 
 def render_settings_sidebar():
     """
     Renders the Settings Sidebar and returns the configuration dict.
-    Uses callbacks to ensure UI state survives reruns.
     """
-    
-    # ==========================================
-    # 1. INITIALIZE PERSISTENT STATE
-    # ==========================================
+    # 1. Initialize State
     if "llm_url" not in st.session_state: 
         st.session_state.llm_url = LOCAL_LLM_API_URL
-    
-    if "emb_url" not in st.session_state: 
+    if "emb_url" not in st.session_state:
         st.session_state.emb_url = LOCAL_LLM_API_URL
-    if "emb_model" not in st.session_state: 
-        st.session_state.emb_model = "text-embedding-nomic-embed-text-v1.5"
-    
-    # Knowledge Base Persistence
+    if "fetched_models" not in st.session_state:
+        st.session_state.fetched_models = ["local-model"]
     if "rag_strategy" not in st.session_state:
-        st.session_state.rag_strategy = "rag" # Default
+        st.session_state.rag_strategy = "Standard RAG"
     if "persisted_db" not in st.session_state:
-        st.session_state.persisted_db = DEFAULT_DB_NAME
+        st.session_state.persisted_db = None
 
-    # ==========================================
-    # 2. AUTO-SELECT SINGLE KNOWLEDGE BASE
-    # ==========================================
-    # If the user has exactly ONE db across all types, auto-select it.
-    # This runs before widgets are rendered to set the correct defaults.
-    
-    strategies = ["rag", "lightrag", "kag"]
-    # Check what exists
-    found_map = {}
-    total_dbs = 0
-    
-    for s in strategies:
-        dbs = list_available_dbs(s)
-        if dbs:
-            found_map[s] = dbs
-            total_dbs += len(dbs)
-            
-    # Logic: If exactly 1 type has DBs, and that type has exactly 1 DB
-    if len(found_map) == 1 and total_dbs == 1:
-        target_strat = list(found_map.keys())[0]
-        target_db = found_map[target_strat][0]
+    with st.sidebar:
+        st.header("⚙️ Configuration")
         
-        # Only override if we aren't currently on "Direct" or already selected
-        if st.session_state.rag_strategy != "direct":
-            if st.session_state.rag_strategy != target_strat or st.session_state.persisted_db != target_db:
-                st.session_state.rag_strategy = target_strat
-                st.session_state.persisted_db = target_db
-
-    config = {}
-
-    with st.expander("🔌 LLM & Embedding Settings", expanded=True):
-        
-        # ------------------------------------------
-        # A. CHAT MODEL SETTINGS
-        # ------------------------------------------
-        st.caption("🗣️ Chat Model")
-        provider = st.radio("Provider", ["local", "gemini"], horizontal=True, label_visibility="collapsed")
-        
-        # Init outputs
-        api_key = None 
-        selected_model = ""
-        local_url = LOCAL_LLM_API_URL
-        ctx_window = 8192
-
-        if provider == "gemini":
-            api_key = st.text_input("Gemini API Key", type="password")
-            selected_model = st.text_input("Gemini Model", value="gemini-1.5-flash")
-            ctx_window = 32000
-        elif provider == "local":
-            local_url = st.text_input(
-                "LLM API URL", 
-                value=st.session_state.llm_url, 
-                key="llm_url_input",
-                on_change=_update_llm_url
-            )
-
-            col_mod, col_ref = st.columns([0.85, 0.15])
-            with col_ref:
-                if st.button("🔄", key="refresh_chat", help="Fetch Chat Models"):
-                    st.cache_data.clear()
-                    st.rerun()
+        # ==========================================
+        # 2. MODEL SETTINGS (Restored Functionality)
+        # ==========================================
+        with st.expander("🤖 Model Settings", expanded=True):
+            # Provider Selection (NO OpenAI)
+            provider = st.selectbox("Provider", ["local", "gemini"], index=0)
             
-            with col_mod:
-                # FILTER FOR CHAT MODELS
-                available_models = app_utils.fetch_available_models(local_url, filter_type='chat')
-                if st.session_state.get("selected_model") and st.session_state.selected_model not in available_models:
-                     available_models.insert(0, st.session_state.selected_model)
-                
-                if not available_models:
-                    available_models = ["local-model"]
+            api_key = None
+            local_url = None
+            selected_model = "local-model"
 
-                selected_model = st.selectbox("Select Model", available_models, label_visibility="collapsed")
-            
-            ctx_window = st.selectbox(
-                "Context Limit (Max Tokens)",
-                [4096, 8192, 16384, 56000, 120000],
-                index=1,
-                help="Set this to match your loaded model's limit (e.g. Llama3 is 8192)"
-            )
-                
-        st.divider()
-
-        # ------------------------------------------
-        # B. EMBEDDING SETTINGS
-        # ------------------------------------------
-        st.caption("🧠 Embedding Model")
-
-        new_emb_url = st.text_input(
-            "Embedding API URL", 
-            value=st.session_state.emb_url, 
-            key="emb_url_input",
-            on_change=_update_emb_url
-        )
-
-        col_emb_sel, col_emb_ref = st.columns([0.85, 0.15])
-        
-        with col_emb_ref:
-            if st.button("🔄", key="refresh_emb", help="Fetch Embedding Models"):
-                st.cache_data.clear()
-                st.rerun()
-
-        with col_emb_sel:
-            # FILTER FOR EMBEDDING MODELS
-            emb_models = app_utils.fetch_available_models(new_emb_url, filter_type='embed')
-            
-            # PRESERVE SELECTION: Ensure current model is in list so it doesn't vanish
-            current_emb = st.session_state.emb_model
-            if current_emb and current_emb not in emb_models:
-                emb_models.insert(0, current_emb)
-            
-            if not emb_models:
-                emb_models = [current_emb] if current_emb else ["text-embedding-nomic-embed-text-v1.5"]
-            
-            # Find index safely
-            try:
-                current_idx = emb_models.index(current_emb)
-            except ValueError:
-                current_idx = 0
-
-            selected_emb_model = st.selectbox(
-                "Select Embedding", 
-                emb_models, 
-                index=current_idx,
-                key="emb_selector",
-                on_change=_update_emb_model,
-                label_visibility="collapsed"
-            )
-
-        if st.button("💾 Apply & Load Embeddings", type="primary", width="stretch"):
-            from query.data_service import data_service
-            with st.spinner("Initializing Embeddings..."):
-                success = data_service.update_embedding_config(
-                    st.session_state.emb_url, 
-                    st.session_state.emb_model
+            # --- LOCAL PROVIDER LOGIC ---
+            if provider == "local":
+                # URL Input
+                local_url = st.text_input(
+                    "Local API URL", 
+                    value=st.session_state.llm_url,
+                    key="llm_url_input",
+                    on_change=lambda: st.session_state.update({"llm_url": st.session_state.llm_url_input})
                 )
-                if success:
-                    st.success(f"Loaded: {st.session_state.emb_model}")
-                    time.sleep(0.5)
-                    st.rerun()
-                else:
-                    st.error("Failed to connect to Embedding API.")
+                
+                # Refresh Models Button
+                c_mod, c_ref = st.columns([0.85, 0.15])
+                with c_ref:
+                    if st.button("🔄", help="Refresh Models"):
+                        models = fetch_available_models(local_url)
+                        if models:
+                            st.session_state.fetched_models = models
+                            st.toast(f"Found {len(models)} models")
+                        else:
+                            st.toast("No models found or API down", icon="⚠️")
+                
+                # Model Selector (Dropdown)
+                with c_mod:
+                    model_opts = st.session_state.fetched_models
+                    selected_model = st.selectbox("Model", model_opts, index=0)
 
-    # ==========================================
-    # 2. SYSTEM PERSONAS
-    # ==========================================
-    with st.expander("🎭 System Personas", expanded=False):
-        saved_prompts = app_utils.load_system_prompts()
-        prompt_names = list(saved_prompts.keys())
-        
-        if "selected_persona_name" not in st.session_state:
-            st.session_state.selected_persona_name = prompt_names[0]
-        
-        selected_name = st.selectbox(
-            "Load Preset", 
-            prompt_names, 
-            index=prompt_names.index(st.session_state.selected_persona_name) if st.session_state.selected_persona_name in prompt_names else 0,
-            key="persona_selector"
-        )
+            # --- GEMINI PROVIDER LOGIC ---
+            elif provider == "gemini":
+                api_key = st.text_input("Gemini API Key", type="password")
+                selected_model = st.text_input("Model Name", value="gemini-1.5-pro")
 
-        if selected_name != st.session_state.get("last_loaded_persona"):
-            st.session_state.custom_system_prompt = saved_prompts[selected_name]
-            st.session_state.last_loaded_persona = selected_name
-            st.session_state.selected_persona_name = selected_name
+            ctx_window = st.number_input("Context Window", 2048, 128000, 8192, step=1024)
 
-        custom_system_prompt = st.text_area(
-            "Current Instructions", 
-            key="custom_system_prompt", 
-            height=150
-        )
-
-        with st.popover("💾 Save New Persona"):
-            new_persona_name = st.text_input("Name", placeholder="e.g., Python Auditor")
-            if st.button("Save Preset", width='stretch'):
-                if new_persona_name and custom_system_prompt:
-                    app_utils.save_system_prompt(new_persona_name, custom_system_prompt)
-                    st.success(f"Saved '{new_persona_name}'")
-                    st.rerun()
-
-    # ==========================================
-    # 3. KNOWLEDGE BASE (Updated for Persistence)
-    # ==========================================
-    with st.expander("📚 Knowledge Base", expanded=True):
-        
-        # 1. Strategy Selector (Persisted)
-        rag_options = ["rag", "lightrag", "kag", "direct"]
-        try:
-            strat_idx = rag_options.index(st.session_state.rag_strategy)
-        except ValueError:
-            strat_idx = 0
+            st.divider()
             
-        rag_type = st.selectbox(
-            "Strategy", 
-            rag_options,
-            index=strat_idx,
+            # --- Embeddings ---
+            st.caption("Embedding Model")
+            emb_provider = st.selectbox("Emb Provider", ["local"], index=0, disabled=True)
+            emb_url = st.text_input("Emb API URL", value=st.session_state.emb_url)
+            emb_model = st.text_input("Emb Model Name", value="text-embedding-nomic-embed-text-v1.5")
+
+        # ==========================================
+        # 3. RAG STRATEGY & DATABASE (New Logic)
+        # ==========================================
+        st.subheader("🗄️ Knowledge Base")
+        
+        # Sync Strategy
+        curr_strat = st.session_state.rag_strategy
+        idx_strat = list(STRATEGY_MAP.keys()).index(curr_strat) if curr_strat in STRATEGY_MAP else 1
+        
+        selected_strategy_label = st.selectbox(
+            "Architecture", 
+            list(STRATEGY_MAP.keys()),
+            index=idx_strat,
             key="rag_type_selector",
-            on_change=_update_rag_type,
-            format_func=lambda x: {"rag": "Standard RAG", "lightrag": "LightRAG", "kag": "KAG", "direct": "LLM Only"}.get(x, x)
+            on_change=_update_rag_type
         )
-        is_direct = (rag_type == "direct")
-        
-        col_db_select, col_db_refresh = st.columns([0.85, 0.15])
-        
-        # 2. Get Available DBs based on selected strategy
-        dbs = list_available_dbs(rag_type) if not is_direct else [DEFAULT_DB_NAME]
-        
-        # 3. Ensure Persisted DB is valid for current strategy
-        # If the persisted DB (e.g., 'default') isn't in the new strategy (e.g., KAG has different DBs),
-        # we default to the first one available, but we don't overwrite session state immediately
-        # unless the user makes a selection.
-        current_selection_valid = st.session_state.persisted_db in dbs
-        
-        if not current_selection_valid and dbs:
-            # Auto-select first if invalid
-            current_db_value = dbs[0]
-            # Update persistence implicitly so logic downstream works
-            st.session_state.persisted_db = current_db_value
-        elif not dbs:
-            current_db_value = "No DB"
-        else:
-            current_db_value = st.session_state.persisted_db
+        rag_key = STRATEGY_MAP[selected_strategy_label]
+        is_direct = (rag_key == "direct")
 
-        try:
-            db_index = dbs.index(current_db_value)
-        except ValueError:
-            db_index = 0
+        # Dynamic DB List based on Strategy
+        available_dbs = get_dbs_for_strategy(rag_key)
+        selected_db = None
 
-        with col_db_select:
-            selected_db = st.selectbox(
-                "Database", 
-                dbs if dbs else ["No DB"], 
-                index=db_index,
-                disabled=is_direct, 
-                label_visibility="collapsed",
-                key="db_selector",
-                on_change=_update_selected_db
-            )
-        
-        with col_db_refresh:
-            if st.button("🔄", key="refresh_db", help="Refresh Database List", width='stretch'):
-                st.rerun()
-        
-        col_opt, col_hyb = st.columns(2)
-        hybrid = col_hyb.checkbox("Hybrid", value=True, disabled=is_direct)
-        verify = col_opt.checkbox("Verify Query", value=False, disabled=is_direct)
+        if not is_direct:
+            if available_dbs:
+                prev_db = st.session_state.persisted_db
+                db_idx = available_dbs.index(prev_db) if prev_db in available_dbs else 0
+                
+                c_db, c_ref_db = st.columns([0.85, 0.15])
+                with c_db:
+                    selected_db = st.selectbox(
+                        "Select Database", 
+                        available_dbs, 
+                        index=db_idx,
+                        key="db_selector",
+                        on_change=_update_selected_db,
+                        label_visibility="collapsed"
+                    )
+                with c_ref_db:
+                    if st.button("🔄", key="ref_db_list"): st.rerun()
+            else:
+                st.warning(f"No {selected_strategy_label} DBs.")
+                if st.button("🔄"): st.rerun()
 
-    # ==========================================
-    # 4. PARAMETERS
-    # ==========================================
-    with st.expander("🎛️ Parameters & Context", expanded=False):
-        top_k = st.slider("Retrieval Depth (Docs)", 1, 25, 10, disabled=is_direct)
-        history_limit = st.slider("Chat Memory (Msgs)", 0, 35, 5)
-        temp = st.slider("Temperature", 0.0, 1.0, 0.7)
+        col_opt1, col_opt2 = st.columns(2)
+        use_hybrid = col_opt1.checkbox("Hybrid Search", value=True, disabled=is_direct)
+        use_verify = col_opt2.checkbox("Verify respone", value=False, disabled=is_direct)
 
-    # Return clean configuration
+        # ==========================================
+        # 4. SYSTEM PROMPTS & PARAMS
+        # ==========================================
+        with st.expander("🎭 System Persona", expanded=False):
+            prompts = app_utils.load_system_prompts()
+            prompt_names = ["Custom"] + list(prompts.keys())
+            selected_persona = st.selectbox("Select Persona", prompt_names, index=1)
+            
+            if selected_persona == "Custom":
+                system_prompt = st.text_area("Custom Instructions", height=150)
+            else:
+                system_prompt = st.text_area("Instructions", value=prompts[selected_persona], height=150)
+
+        with st.expander("🎛️ Parameters", expanded=False):
+            top_k = st.slider("Retrieval Depth", 1, 25, 10, disabled=is_direct)
+            history_limit = st.slider("Chat Memory", 0, 35, 5)
+            temp = st.slider("Temperature", 0.0, 1.0, 0.7)
+
     return {
-        "provider": provider,
-        "api_key": api_key,
-        "selected_model": selected_model,
-        "local_url": local_url,
-        "ctx_window": ctx_window,
-        "custom_system_prompt": custom_system_prompt,
-        "rag_type": rag_type,
-        "selected_db": selected_db,
-        "hybrid": hybrid,
-        "top_k": top_k,
-        "history_limit": history_limit,
-        "temp": temp,
-        "verify": verify,
-        "is_direct": is_direct
+        "llm_config": {
+            "provider": provider,
+            "api_key": api_key,
+            "model_name": selected_model,
+            "local_url": local_url,
+            "context_window": ctx_window,
+            "temperature": temp,
+            "system_prompt": system_prompt
+        },
+        "embedding_config": {
+            "provider": emb_provider,
+            "url": emb_url,
+            "model_name": emb_model
+        },
+        "rag_config": {
+            "rag_type": rag_key,
+            "db_name": selected_db,
+            "top_k": top_k,
+            "hybrid": use_hybrid,
+            "verify": use_verify,
+            "history_limit": history_limit
+        }
     }

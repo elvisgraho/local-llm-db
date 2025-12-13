@@ -10,7 +10,6 @@ sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 # --- Internal Imports ---
 from query.query_data import query_direct, query_rag, query_lightrag, query_kag
 from query.session_manager import session_manager
-from query.global_vars import LOCAL_LLM_API_URL
 
 # --- New Utils Import ---
 import app_utils
@@ -99,7 +98,7 @@ def main():
         st.title("🗂️ Chats")
         
         # New Chat Button
-        if st.button("➕ New Chat", type="primary", width='stretch'):
+        if st.button("➕ New Chat", type="primary", use_container_width=True):
             new_sess = session_manager.create_session()
             # Update state immediately
             st.session_state.session_list.insert(0, {
@@ -124,17 +123,16 @@ def main():
             # Highlight Active
             if s["id"] == active_id:
                 label = f"📂 {label}"
-                type_btn = "secondary" # Active looks different
+                type_btn = "secondary" 
             else:
                 type_btn = "secondary"
 
             # Chat Select Button
-            if col_name.button(label, key=f"btn_{s['id']}", width='stretch', help=s.get("title")):
+            if col_name.button(label, key=f"btn_{s['id']}", use_container_width=True, help=s.get("title")):
                 st.session_state.active_session_id = s["id"]
                 st.rerun()
             
-            # Delete Popover (The Fix)
-            # Using popover prevents accidental deletes and removes need for complex confirmation logic
+            # Delete Popover
             with col_del.popover("✕", help="Delete Chat"):
                 st.caption("Are you sure?")
                 if st.button("🗑️ Delete", key=f"conf_del_{s['id']}", type="primary"):
@@ -148,19 +146,23 @@ def main():
         # ==========================================
         # SIDEBAR - SETTINGS
         # ==========================================
-        cfg = app_settings_ui.render_settings_sidebar()
+        # Unpack structured config from new UI
+        full_config = app_settings_ui.render_settings_sidebar()
+        llm_cfg = full_config["llm_config"]
+        rag_cfg = full_config["rag_config"]
+        # embedding_cfg is handled via global vars/state in callbacks
 
         # ==========================================
         # SIDEBAR - TOKEN ESTIMATOR
         # ==========================================
         curr_msgs = current_session["messages"] if current_session else []
-        sys_tokens_est = app_utils.count_tokens(cfg["custom_system_prompt"]) if cfg["custom_system_prompt"] else 0
+        sys_tokens_est = app_utils.count_tokens(llm_cfg["system_prompt"]) if llm_cfg["system_prompt"] else 0
         
         app_utils.render_token_estimator(
-            cfg["top_k"] if not cfg["is_direct"] else 0,
-            cfg["history_limit"], 
+            rag_cfg["top_k"] if rag_cfg["rag_type"] != "direct" else 0,
+            rag_cfg["history_limit"], 
             curr_msgs, 
-            cfg["ctx_window"],
+            llm_cfg["context_window"],
             sys_tokens_est
         )
 
@@ -206,9 +208,9 @@ def main():
         with st.chat_message(msg["role"]):
             if msg.get("reasoning"):
                 with st.expander("💭 Reasoning", expanded=False): 
-                    st.markdown(msg["reasoning"]) # Reasoning usually doesn't have sources
+                    st.markdown(msg["reasoning"])
 
-            # 1. Apply formatting
+            # Apply formatting
             formatted_content = app_utils.format_citations(msg["content"])
             st.markdown(formatted_content, unsafe_allow_html=True) 
 
@@ -227,15 +229,15 @@ def main():
         with st.chat_message("user"): st.markdown(prompt)
 
         # 2. Smart Context Construction
-        safe_ctx_limit = cfg["ctx_window"] - 1000 - (cfg["top_k"] * 250) 
+        safe_ctx_limit = llm_cfg["context_window"] - 1000 - (rag_cfg["top_k"] * 250) 
         full_history = [{"role": m["role"], "content": m["content"]} for m in current_session["messages"][:-1]]
         
         # Smart Pruning
         rag_history = app_utils.smart_prune_history(full_history, safe_ctx_limit)
         
         # Enforce the user slider hard cap
-        if cfg["history_limit"] < len(rag_history):
-            rag_history = rag_history[-cfg["history_limit"]:]
+        if rag_cfg["history_limit"] < len(rag_history):
+            rag_history = rag_history[-rag_cfg["history_limit"]:]
 
         final_query = prompt
         if current_session.get("temp_context"):
@@ -246,51 +248,63 @@ def main():
             start_time = time.time()
             response_container = st.empty()
             
-        with st.status("🧠 Orchestrating...", expanded=True) as status:
-            try:
-                # Prepare arguments
-                common_args = {
-                    "query_text": final_query, 
-                    "llm_config": {
-                        "provider": cfg["provider"], 
-                        "modelName": cfg["selected_model"], 
-                        "apiKey": cfg["api_key"], 
-                        "api_url": cfg["local_url"] if cfg["provider"] == "local" else None,
-                        "temperature": cfg["temp"], 
-                        "system_prompt": cfg["custom_system_prompt"],
-                        "context_window": cfg["ctx_window"] 
-                    }, 
-                    "conversation_history": rag_history
-                }
-                
-                # Execution
-                if cfg["rag_type"] == 'direct':
-                    status.write("Direct LLM query (no retrieval)...")
-                    response = query_direct(**common_args, verify=cfg["verify"])
+            # Status Container
+            with st.status("🧠 Orchestrating...", expanded=True) as status:
+                try:
+                    # Prepare arguments structure for query_functions
+                    # Note: We now use the structured config dictionaries
+                    common_args = {
+                        "query_text": final_query, 
+                        "llm_config": {
+                            "provider": llm_cfg["provider"], 
+                            "modelName": llm_cfg["model_name"], 
+                            "apiKey": llm_cfg["api_key"], 
+                            "api_url": llm_cfg["local_url"],
+                            "temperature": llm_cfg["temperature"], 
+                            "system_prompt": llm_cfg["system_prompt"],
+                            "context_window": llm_cfg["context_window"] 
+                        }, 
+                        "conversation_history": rag_history
+                    }
                     
-                elif cfg["selected_db"]:
-                    status.write(f"🔍 Retrieving from **{cfg['selected_db']}** ({cfg['rag_type']})...")
-                    strategies = {'rag': query_rag, 'lightrag': query_lightrag, 'kag': query_kag}
-                    
-                    response = strategies[cfg["rag_type"]](
-                        **common_args, 
-                        top_k=cfg["top_k"], 
-                        db_name=cfg["selected_db"], 
-                        hybrid=cfg["hybrid"],
-                        verify=cfg["verify"]
-                    )
-                    src_count = len(response.get("sources", []))
-                    status.write(f"✅ Found {src_count} relevant documents.")
-                
-                status.update(label="Response Generated!", state="complete", expanded=False)
+                    # Execution Dispatch
+                    rag_type = rag_cfg["rag_type"]
+                    db_name = rag_cfg["db_name"]
 
-            except Exception as e:
-                if type(e).__name__ == "StopException":
-                    raise e
-                status.update(label="❌ Error", state="error")
-                st.error(f"Pipeline Error: {str(e)}")
-                logging.error(e, exc_info=True)
-                st.stop()
+                    if rag_type == 'direct':
+                        status.write("Direct LLM query (no retrieval)...")
+                        response = query_direct(**common_args, verify=rag_cfg["verify"])
+                        
+                    elif db_name:
+                        status.write(f"🔍 Retrieving from **{db_name}** ({rag_type.upper()})...")
+                        strategies = {'rag': query_rag, 'lightrag': query_lightrag, 'kag': query_kag}
+                        
+                        # Validate strategy exists
+                        if rag_type not in strategies:
+                             raise ValueError(f"Unknown RAG strategy: {rag_type}")
+
+                        response = strategies[rag_type](
+                            **common_args, 
+                            db_name=db_name,
+                            rag_type=rag_type,
+                            top_k=rag_cfg["top_k"], 
+                            hybrid=rag_cfg["hybrid"],
+                            verify=rag_cfg["verify"]
+                        )
+                        src_count = len(response.get("sources", []))
+                        status.write(f"✅ Found {src_count} relevant documents.")
+                    
+                    else:
+                        # RAG selected but no DB
+                        raise ValueError(f"Please select a database for {rag_type}.")
+
+                    status.update(label="Response Generated!", state="complete", expanded=False)
+
+                except Exception as e:
+                    status.update(label="❌ Error", state="error")
+                    st.error(f"Pipeline Error: {str(e)}")
+                    logging.error(e, exc_info=True)
+                    st.stop()
                     
             # 4. Parse & Display
             text = response.get("text", "")
