@@ -12,3 +12,6 @@ volumes/*
 *.7z
 *.zip
 *.pdf
+*.txt
+*.log
+writeups/

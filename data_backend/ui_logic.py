@@ -1,13 +1,14 @@
+import fitz
+import json
 import os
+import psutil
+import requests
+import shutil
 import subprocess
 import sys
-import requests
-import psutil
-import shutil
-import json
-from pathlib import Path
+from collections import deque
 from datetime import datetime
-from langchain_community.document_loaders import PyPDFLoader
+from pathlib import Path
 
 # --- Path Configuration ---
 # 1. Add current directory to path to ensure we can import 'query' module
@@ -121,9 +122,8 @@ def extract_text_for_preview(file_path, char_limit=10000):
     try:
         suffix = file_path.suffix.lower()
         if suffix == '.pdf':
-            loader = PyPDFLoader(str(file_path))
-            docs = loader.load()[:2]
-            text = "\n\n".join([d.page_content for d in docs])
+            with fitz.open(file_path) as doc:
+                text = "".join(page.get_text() for page in doc)
         elif suffix in ['.txt', '.md', '.markdown', '.log', '.json']:
             with open(file_path, "r", encoding='utf-8', errors='ignore') as f:
                 text = f.read(char_limit * 2)
@@ -201,12 +201,13 @@ def start_script_background(script_name, args, env_vars, log_file):
         )
     return proc.pid
 
-def read_log_file(log_file):
-    """Reads the log file safely."""
+def read_log_file(log_file, num_lines=500):
+    """Reads the last N lines of the log file efficiently."""
     if log_file.exists():
         try:
             with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-                return f.read()
+                # deque with maxlen discards old lines automatically
+                return "".join(deque(f, maxlen=num_lines))
         except Exception:
             return "Reading logs..."
     return ""

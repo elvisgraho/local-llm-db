@@ -9,7 +9,6 @@ try:
     TIKTOKEN_AVAILABLE = True
 except ImportError:
     TIKTOKEN_AVAILABLE = False
-from pypdf import PdfReader
 from query.data_service import data_service
 
 # --- Constants ---

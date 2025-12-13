@@ -12,6 +12,8 @@ LM_STUDIO_API_URL = f"{_base_url}/v1/embeddings"
 # Fetch model name from environment
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-embedder_collection")
 
+# prevent accumulation of open sockets
+session = requests.Session()
 
 class LMStudioEmbeddings(Embeddings):
     """Custom embedding function to use LM Studio's local API."""
@@ -22,7 +24,7 @@ class LMStudioEmbeddings(Embeddings):
         payload = {"model": EMBEDDING_MODEL_NAME, "input": texts}
 
         try:
-            response = requests.post(LM_STUDIO_API_URL, json=payload, headers=headers)
+            response = session.post(LM_STUDIO_API_URL, json=payload, headers=headers)
             response.raise_for_status()  # Raise an exception for bad status codes
             
             response_data = response.json()

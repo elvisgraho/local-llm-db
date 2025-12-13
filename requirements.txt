@@ -10,7 +10,7 @@ networkx
 pandas
 psutil
 pydantic
-pypdf
+PyMuPDF
 rank-bm25
 requests
 scikit-learn

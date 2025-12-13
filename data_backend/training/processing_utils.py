@@ -221,3 +221,17 @@ def clear_db_directory(db_dir: Path) -> None:
             logger.info(f"Directory {db_dir} does not exist or is not a dir.")
     except Exception as e:
         logger.error(f"Error clearing {db_dir}: {e}")
+
+def get_unique_path(out_dir: Path, filename: str) -> Path:
+    """Guarantees no overwrites by appending a counter."""
+    # Sanitize filename
+    safe_name = re.sub(r'[^a-z0-9_]', '', filename.lower())
+    if not safe_name: 
+        safe_name = "untitled_doc"
+    
+    candidate = out_dir / f"{safe_name}.txt"
+    counter = 1
+    while candidate.exists():
+        candidate = out_dir / f"{safe_name}_{counter}.txt"
+        counter += 1
+    return candidate

@@ -1,15 +1,15 @@
 import logging
 import json
 import re
+import fitz
+from tqdm import tqdm
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from tqdm import tqdm
+from query.database_paths import RAW_FILES_DIR
 
 # --- Modern LangChain Imports ---
-from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_community.document_loaders import TextLoader
 from langchain_core.documents import Document
-from query.database_paths import RAW_FILES_DIR
-import pypdf
 
 logger = logging.getLogger(__name__)
 
@@ -40,23 +40,27 @@ def extract_metadata(file_path: str) -> Dict[str, Any]:
 
 def preprocess_text(text: str) -> str:
     """
-    Clean and normalize text while PRESERVING paragraph structure.
+    Clean and normalize text while preserving code blocks (```...```).
     """
     if not text:
         return ""
-        
-    # 1. Normalize line endings
-    text = text.replace('\r\n', '\n').replace('\r', '\n')
-    
-    # 2. Collapse runs of horizontal whitespace (spaces, tabs) into a single space
-    #    We do NOT match \n here to preserve line breaks
-    text = re.sub(r'[ \t]+', ' ', text)
-    
-    # 3. Collapse multiple newlines into a max of two (paragraph break)
-    text = re.sub(r'\n\s*\n', '\n\n', text)
-    
-    # 4. Remove leading/trailing whitespace
-    return text.strip()
+
+    # Split text by code blocks. Odd indices will be the code content.
+    # non-greedy match for code blocks
+    parts = re.split(r'(```.*?```)', text, flags=re.DOTALL) 
+
+    for i in range(len(parts)):
+        # Only normalize parts that are NOT code blocks (even indices)
+        if i % 2 == 0:
+            # Normalize line endings
+            s = parts[i].replace('\r\n', '\n').replace('\r', '\n')
+            # Collapse horizontal whitespace
+            s = re.sub(r'[ \t]+', ' ', s)
+            # Collapse multiple newlines into paragraph break
+            s = re.sub(r'\n\s*\n', '\n\n', s)
+            parts[i] = s
+
+    return "".join(parts).strip()
 
 def validate_document(doc: Document) -> bool:
     """
@@ -128,152 +132,13 @@ class RegistryManager:
         except FileNotFoundError:
             pass
 
-def try_load_pdf_chapters(file_path: str, min_pages_for_split: int = 20) -> Optional[List[Document]]:
-    """
-    Robustly attempts to split a PDF into chapters using recursive outline parsing.
-    
-    Improvements over basic implementation:
-    1. Handles nested bookmarks (recursive parsing).
-    2. Resolves 'Named Destinations' (links that aren't direct page numbers).
-    3. Merges bookmarks pointing to the same page (avoids empty documents).
-    4. sanitizes titles and handles metadata inheritance.
-    """
-    try:
-        reader = pypdf.PdfReader(file_path)
-        total_pages = len(reader.pages)
-        
-        # 1. Basic Heuristic Checks
-        if total_pages < min_pages_for_split:
-            return None
-        
-        if not reader.outline:
-            return None
-
-        # 2. Recursive Outline Extraction
-        # We want a flat list of: (PageNumber, Title, Level)
-        # Level helps us distinguish "Part I" from "Chapter 1" if needed, 
-        # though here we flatten for content splitting.
-        
-        flat_outline = []
-
-        def _recursive_parse(outlines, level=0):
-            for item in outlines:
-                if isinstance(item, list):
-                    _recursive_parse(item, level + 1)
-                elif isinstance(item, pypdf.generic.Destination):
-                    try:
-                        # Robustly get page number (handles named destinations & integers)
-                        page_num = reader.get_destination_page_number(item)
-                        
-                        # Sanity check: page_num must be valid
-                        if page_num is not None and 0 <= page_num < total_pages:
-                            title = item.title.strip() if item.title else "Untitled Section"
-                            flat_outline.append({
-                                "page": page_num,
-                                "title": title,
-                                "level": level
-                            })
-                    except Exception:
-                        # If a specific bookmark is corrupted, skip it but continue processing
-                        continue
-
-        _recursive_parse(reader.outline)
-
-        if not flat_outline:
-            return None
-
-        # 3. Smart Deduplication & Sorting
-        # Sort primarily by page number
-        flat_outline.sort(key=lambda x: x["page"])
-
-        # Consolidate bookmarks that point to the same page.
-        # Logic: If "Part 1" and "Chapter 1" are on Page 5, we call it "Part 1 - Chapter 1"
-        # and start the chunk there.
-        unique_chapters = []
-        
-        if flat_outline:
-            current_chapter = flat_outline[0]
-            
-            for next_item in flat_outline[1:]:
-                if next_item["page"] == current_chapter["page"]:
-                    # Merge titles (e.g., "Part 1 > Chapter 1")
-                    current_chapter["title"] += f" > {next_item['title']}"
-                else:
-                    unique_chapters.append(current_chapter)
-                    current_chapter = next_item
-            
-            # Append the last one
-            unique_chapters.append(current_chapter)
-
-        # Heuristic: If we only found 1 chapter (and it's page 0), 
-        # the outline is useless (it's just "The Book"). Return None to use default loader.
-        if len(unique_chapters) < 2 and unique_chapters[0]['page'] == 0:
-            return None
-
-        # 4. Load Content (Bulk Load)
-        # We load all pages once using PyPDFLoader to ensure we get LangChain compatible objects
-        # This is safer than reading raw text from pypdf because PyPDFLoader handles some encoding edge cases.
-        loader = PyPDFLoader(file_path)
-        all_pages = loader.load()
-
-        if len(all_pages) != total_pages:
-            logger.warning(f"Page count mismatch in {file_path}. Outline: {total_pages}, Loader: {len(all_pages)}. Fallback.")
-            return None
-
-        documents = []
-
-        # 5. Slicing logic
-        for i, chapter in enumerate(unique_chapters):
-            start_page = chapter["page"]
-            title = chapter["title"]
-            
-            # Determine End Page
-            if i + 1 < len(unique_chapters):
-                end_page = unique_chapters[i+1]["page"]
-            else:
-                end_page = total_pages
-            
-            # Skip empty ranges (should represent error states)
-            if start_page >= end_page:
-                continue
-
-            # Extract pages for this chapter
-            chapter_pages = all_pages[start_page:end_page]
-            
-            if not chapter_pages:
-                continue
-
-            # Merge Content
-            # We add double newlines to separate pages clearly
-            chapter_text = "\n\n".join(p.page_content for p in chapter_pages)
-            
-            # Create Document with enriched metadata
-            # We take the metadata from the first page of the chapter as the base
-            meta = chapter_pages[0].metadata.copy()
-            meta.update({
-                "chapter_title": title,
-                "chapter_start_index": start_page,
-                "chapter_end_index": end_page - 1,
-                "source_type": "book_chapter",
-                "page_count": len(chapter_pages)
-            })
-
-            documents.append(Document(page_content=chapter_text, metadata=meta))
-
-        logger.info(f"PDF Split Success: {len(documents)} chapters extracted from {file_path}")
-        return documents
-
-    except Exception as e:
-        logger.warning(f"Smart PDF split failed for {file_path} (falling back to standard load): {str(e)}")
-        return None
-
 # ==========================================
 # 3. MAIN LOADING LOGIC
 # ==========================================
 
 def _process_single_file(file_path: Path) -> List[Document]:
     """
-    Internal helper to load, clean, and validate a single file.
+    Optimized loader using PyMuPDF for high-performance PDF parsing.
     """
     ext = file_path.suffix.lower()
     documents = []
@@ -281,23 +146,21 @@ def _process_single_file(file_path: Path) -> List[Document]:
     try:
         # --- 1. Load Raw Content ---
         if ext == '.pdf':
-            # A. Attempt to split by chapter first (Logic for "Large Books")
-            chapter_docs = try_load_pdf_chapters(str(file_path))
-            
-            if chapter_docs:
-                logger.info(f"Split {file_path.name} into {len(chapter_docs)} chapters.")
-                documents = chapter_docs
-            else:
-                # B. Fallback: Standard load (for small files or no-outline files)
-                loader = PyPDFLoader(str(file_path))
-                raw_docs = loader.load()
-                if raw_docs:
-                    # Merge pages to avoid arbitrary splitting
-                    text = "\n\n".join(doc.page_content for doc in raw_docs)
-                    # Use metadata from first page
-                    meta = raw_docs[0].metadata.copy() if raw_docs else {}
-                    documents = [Document(page_content=text, metadata=meta)]
-        
+            with fitz.open(file_path) as doc:
+                # A. Attempt split by chapter (Zero-copy pass)
+                chapter_docs = try_load_pdf_chapters(doc, file_path.name)
+                
+                if chapter_docs:
+                    logger.info(f"Split {file_path.name} into {len(chapter_docs)} chapters.")
+                    documents = chapter_docs
+                else:
+                    # B. Fallback: Fast linear load (C-speed text extraction)
+                    text = "".join(page.get_text() for page in doc)
+                    if text:
+                        meta = extract_metadata(str(file_path))
+                        meta.update(doc.metadata)
+                        documents = [Document(page_content=text, metadata=meta)]
+
         elif ext in ['.txt', '.md', '.markdown', '.log', '.json']:
             loader = TextLoader(str(file_path), encoding='utf-8', autodetect_encoding=True)
             documents = loader.load()
@@ -309,18 +172,13 @@ def _process_single_file(file_path: Path) -> List[Document]:
         file_meta = extract_metadata(str(file_path))
 
         for doc in documents:
-            # Apply text cleaning
             doc.page_content = preprocess_text(doc.page_content)
             
             if validate_document(doc):
-                # Update with reliable file metadata
-                # Note: We use update() so we don't overwrite chapter metadata if it exists
                 doc.metadata.update(file_meta)
-                
-                # Cleanup noisy keys often added by PDF loaders
-                for k in ["producer", "creation_date", "mod_date", "total_pages"]:
+                # Cleanup PyMuPDF/Loader metadata keys
+                for k in ["producer", "creationDate", "modDate", "total_pages", "format", "encryption"]:
                     doc.metadata.pop(k, None)
-                
                 valid_docs.append(doc)
 
         return valid_docs
@@ -328,8 +186,79 @@ def _process_single_file(file_path: Path) -> List[Document]:
     except Exception as e:
         logger.error(f"Error loading {file_path.name}: {e}")
         return []
-    
 
+def try_load_pdf_chapters(doc: fitz.Document, filename: str, min_pages_for_split: int = 20) -> Optional[List[Document]]:
+    """
+    Uses PyMuPDF's native get_toc() for O(1) outline extraction.
+    """
+    try:
+        if doc.page_count < min_pages_for_split:
+            return None
+
+        # get_toc(simple=True) returns [lvl, title, page_num, ...]
+        # page_num is 1-based in PyMuPDF
+        toc = doc.get_toc(simple=True)
+        
+        if not toc:
+            return None
+
+        documents = []
+        total_pages = doc.page_count
+
+        # Filter and Deduplicate Logic
+        # We only care about the page flow, so we flatten nested structures naturally
+        cleaned_chapters = []
+        for entry in toc:
+            lvl, title, page_num = entry[0], entry[1], entry[2]
+            if page_num > 0 and page_num <= total_pages:
+                 # Deduplicate: if same page as last chapter, append title
+                if cleaned_chapters and cleaned_chapters[-1]['page'] == (page_num - 1):
+                    cleaned_chapters[-1]['title'] += f" > {title}"
+                else:
+                    cleaned_chapters.append({
+                        "page": page_num - 1, # Convert to 0-based
+                        "title": title.strip()
+                    })
+
+        # Heuristic: If useless outline (only 1 chapter at page 0), abort
+        if len(cleaned_chapters) < 2 and cleaned_chapters[0]['page'] == 0:
+            return None
+
+        # Extraction Loop
+        for i, chapter in enumerate(cleaned_chapters):
+            start_page = chapter["page"]
+            title = chapter["title"]
+            
+            # Determine end page
+            if i + 1 < len(cleaned_chapters):
+                end_page = cleaned_chapters[i+1]["page"]
+            else:
+                end_page = total_pages
+
+            if start_page >= end_page: 
+                continue
+
+            # Fast Text Extraction
+            # Use chr(12) (Form Feed) as page delimiter if strictly needed, or \n\n
+            chapter_text = "\n\n".join(doc[p].get_text() for p in range(start_page, end_page))
+
+            meta = {
+                "chapter_title": title,
+                "chapter_start_index": start_page,
+                "chapter_end_index": end_page - 1,
+                "source_type": "book_chapter",
+                "page_count": end_page - start_page,
+                "source": filename
+            }
+            
+            documents.append(Document(page_content=chapter_text, metadata=meta))
+
+        return documents
+
+    except Exception as e:
+        logger.warning(f"Fast PDF split failed for {filename}: {str(e)}")
+        return None
+    
 def load_documents(directory: Optional[Path] = None, db_dir: Optional[Path] = None, ignore_processed: bool = False) -> List[Document]:
     """
     Load documents from the data directory.

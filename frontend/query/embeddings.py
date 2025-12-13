@@ -6,6 +6,9 @@ from query.global_vars import LOCAL_LLM_API_URL
 
 logger = logging.getLogger(__name__)
 
+# prevent accumulation of open sockets
+session = requests.Session()
+
 class GenericOpenAIEmbeddings(Embeddings):
     """Generic embedding function for any OpenAI-compatible API (LM Studio, Ollama, vLLM)."""
 
@@ -30,7 +33,7 @@ class GenericOpenAIEmbeddings(Embeddings):
         payload = {"model": self.model_name, "input": texts}
 
         try:
-            response = requests.post(self.api_url, json=payload, headers=headers, timeout=60)
+            response = session.post(self.api_url, json=payload, headers=headers, timeout=60)
             response.raise_for_status()
             response_data = response.json()
             

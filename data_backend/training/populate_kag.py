@@ -215,18 +215,15 @@ def main():
 
         # 5. Build Graph
         logger.info("Building Knowledge Graph...")
-        graph = load_graph(graph_path) # Load existing or create new
+        graph = load_graph(graph_path)
         
-        # Prepare batch lists for optimized graph update
         new_nodes = []
         new_edges = []
-        
-        for chunk, embedding in zip(all_chunks, all_embeddings):
+        checkpoint_interval = 100  # Save every 100 chunks
+
+        for i, (chunk, embedding) in enumerate(zip(all_chunks, all_embeddings)):
             source_file = chunk.metadata.get("source", "unknown")
             chunk_idx = chunk.metadata.get("chunk_index", 0)
-            
-            # ID Scheme: filename:chunk_index
-            # sanitize filename slightly for ID if needed, but path is usually fine
             chunk_id = f"{source_file}:{chunk_idx}"
 
             # Create Chunk Node
@@ -237,20 +234,23 @@ def main():
                 "type": "chunk"
             }
             new_nodes.append((chunk_id, node_attrs))
-
-            # Create File Node (parent)
             new_nodes.append((source_file, {"type": "file"}))
-            
-            # Create Edge: File -> Chunk
             new_edges.append((source_file, chunk_id, {"relation": "contains"}))
 
-        # Batch Add to NetworkX (Much faster than adding one by one)
-        logger.info(f"Adding {len(new_nodes)} nodes and {len(new_edges)} edges to graph...")
-        graph.add_nodes_from(new_nodes)
-        graph.add_edges_from(new_edges)
+            # Checkpoint
+            if len(new_nodes) >= checkpoint_interval:
+                graph.add_nodes_from(new_nodes)
+                graph.add_edges_from(new_edges)
+                save_graph(graph, graph_path, db_dir)
+                logger.info(f"Checkpoint saved at chunk {i+1}")
+                new_nodes = [] # Reset buffers
+                new_edges = []
 
-        # 6. Save
-        save_graph(graph, graph_path, db_dir)
+        # Final flush
+        if new_nodes:
+            graph.add_nodes_from(new_nodes)
+            graph.add_edges_from(new_edges)
+            save_graph(graph, graph_path, db_dir)
 
         # 7. Final Report
         logger.info("="*40)

@@ -8,7 +8,7 @@ networkx
 pandas
 psutil
 pydantic
-pypdf
+PyMuPDF
 requests
 streamlit
 tenacity

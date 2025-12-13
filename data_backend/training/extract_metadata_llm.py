@@ -77,6 +77,9 @@ Output:
 }}"""
     return ChatPromptTemplate.from_template(template_str)
 
+# prevent accumulation of open sockets
+session = requests.Session()
+
 def _get_llm_response(prompt_text: str) -> str:
     headers = {"Content-Type": "application/json"}
     
@@ -90,8 +93,6 @@ def _get_llm_response(prompt_text: str) -> str:
     else:
         url = base
         
-    print(f"DEBUG: Tagging via {url} (Model: {LOCAL_MAIN_MODEL})", flush=True)
-
     payload = {
         "model": LOCAL_MAIN_MODEL,
         "messages": [{"role": "user", "content": prompt_text}],
@@ -99,7 +100,7 @@ def _get_llm_response(prompt_text: str) -> str:
     }
     
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=120)
+        response = session.post(url, json=payload, headers=headers, timeout=180)
         response.raise_for_status()
         data = response.json()
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -163,6 +164,9 @@ def extract_text_parts(text: str, part_size: int = 1800, part_count: int = 17) -
     if L <= part_size * num_parts:
         return text
 
+    if part_count <= 1:
+        return text[part_size:]
+
     max_start = L - part_size
     parts = []
 
@@ -178,8 +182,9 @@ def extract_metadata_llm(text: str) -> Dict[str, Any]:
         prompt_template = get_metadata_extraction_prompt()
         format_instructions = parser.get_format_instructions()
         
+        safe_text = extract_text_parts(text).replace("{", "{{").replace("}", "}}")
         prompt_value = prompt_template.invoke({
-            "text": extract_text_parts(text), 
+            "text": safe_text, 
             "format_instructions": format_instructions
         })
         final_prompt_str = prompt_value.to_string()

@@ -6,7 +6,6 @@ langchain-chroma
 langchain-community
 langchain-core
 networkx
-pypdf
 rank-bm25
 requests
 scikit-learn

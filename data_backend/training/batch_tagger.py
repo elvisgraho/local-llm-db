@@ -1,135 +1,41 @@
+import os
 import re
 import sys
 import json
+import time
 import argparse
+import logging
 from pathlib import Path
 from typing import Any, Dict
-from query.database_paths import DATABASE_DIR
+
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from training.processing_utils import get_unique_path
 from training.load_documents import load_documents
+from training.history_manager import ProcessingHistory
 from training.extract_metadata_llm import (
-        DocumentMetadata,
-        _get_llm_response,
-        _clean_and_parse_json,
-        PydanticOutputParser,
-        DocumentMetadata,
-        extract_text_parts, 
-        get_metadata_extraction_prompt,
-        Field
-    )
+    _get_llm_response,
+    _clean_and_parse_json,
+    extract_text_parts, 
+    get_metadata_extraction_prompt,
+    PydanticOutputParser,
+    DocumentMetadata,
+    Field
+)
 
-# if python is confused about imports
-# $env:PYTHONPATH = "C:\Users\user\Desktop\AI\local-llm-db\data_backend"
+# Configure Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("metadata_processing.log"),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
-def main():
-    parser = argparse.ArgumentParser(description="Parse folders using LangChain loader and tag files.")
-    parser.add_argument("input_dir", type=Path, help="Path to source folder")
-    parser.add_argument("output_dir", type=Path, nargs="?", default=Path(__file__).parent / "processed", help="Output folder")
-    
-    args = parser.parse_args()
-    
-    # 1. Prepare Directories
-    if not args.input_dir.exists():
-        print(f"CRITICAL: Input directory '{args.input_dir}' does not exist.")
-        sys.exit(1)
-    
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Source: {args.input_dir}")
-    print(f"Target: {args.output_dir}\n")
-
-    history_file = args.output_dir / "processed_history.json"
-    processed_paths = set()
-    
-    if history_file.exists():
-        try:
-            processed_paths = set(json.loads(history_file.read_text(encoding='utf-8')))
-            print(f"Resuming: Found {len(processed_paths)} previously processed files.")
-        except json.JSONDecodeError:
-            print("WARNING: Corrupt history file. Starting fresh.")
-
-    # ignore_processed=True forces re-processing of all files found
-    try:
-        documents = load_documents(directory=args.input_dir, ignore_processed=True)
-    except Exception as e:
-        print(f"CRITICAL: Loader failed: {e}")
-        sys.exit(1)
-
-    if not documents:
-        print("No documents found or loaded.")
-        sys.exit(0)
-
-    print(f"\nProcessing {len(documents)} documents with LLM...")
-
-    # 3. Process & Write
-    try:
-        for doc in documents:
-            original_source = str(Path(doc.metadata.get('source', '')).resolve())
-            # CHECKPOINT: Skip if already in history
-            if original_source in processed_paths:
-                continue
-
-            content = doc.page_content
-            original_source = doc.metadata.get('source', 'unknown')
-            
-            # 1. Extract and preserve existing Released date if present
-            existing_date = None
-            date_match = re.search(r'^Released:\s*(.+)$', content, flags=re.MULTILINE)
-            if date_match:
-                existing_date = date_match.group(1).strip()
-                # Remove the Released line from content to avoid duplication/LLM bias
-                content = re.sub(r'^Released:.*(\n|\r\n)?', '', content, count=1, flags=re.MULTILINE)
-
-            # 2. Remove existing Tags line
-            content = re.sub(r'^Tags:\s*\{.*?\}\s*(\n|\r\n)?', '', content, count=1, flags=re.MULTILINE).strip()
-
-            if not content:
-                continue
-
-            # LLM Extraction
-            meta = process_content_llm(content)
-            
-            if not meta:
-                print(f"  [Skip] Metadata extraction failed for {Path(original_source).name}")
-                continue
-
-            # Extract Header Fields
-            fname = meta.pop('suggested_filename', 'untitled_doc')
-            llm_date = meta.pop('release_date', None)
-
-            # 2. Determine final displayed date based on priority and filtering 'Unknown'.
-            if existing_date:
-                rdate = existing_date
-            elif llm_date and llm_date != 'Unknown':
-                rdate = llm_date
-            else:
-                rdate = None 
-
-            # Construct Content
-            # Only include "Released:" line if rdate is set to a valid, non-None value.
-            date_line = f"Released: {rdate}\n" if rdate else ""
-
-            final_data = (
-                f"{date_line}"
-                f"Tags: {json.dumps(meta)}\n\n"
-                f"{content}"
-            )
-
-            # Write to Output
-            out_path = get_unique_path(args.output_dir, fname)
-            try:
-                out_path.write_text(final_data, encoding='utf-8')
-                print(f"  [Saved] {out_path.absolute()}")
-            except Exception as e:
-                print(f"  [Error] Writing {out_path.name}: {e}")
-
-            processed_paths.add(original_source)
-            try:
-                # Write to disk every time to survive interrupts
-                history_file.write_text(json.dumps(list(processed_paths), indent=2), encoding='utf-8')
-            except Exception as e:
-                print(f"  [Warning] Failed to update history file: {e}")
-    except KeyboardInterrupt:                       
-        print("\n\n[!] Processing stopped by user.")
-        sys.exit(0)
 
 class FileGenMetadata(DocumentMetadata):
     suggested_filename: str = Field(..., description="Snake_case filename (no extension, e.g., 'auth_bypass_v2').")
@@ -141,30 +47,159 @@ def process_content_llm(text: str) -> Dict[str, Any]:
         prompt = get_metadata_extraction_prompt()
         fmt_instructions = parser.get_format_instructions()
         
-        # Limit context to first 3500 chars
+        # Extract representative parts to stay within context window
+        # (Assuming extract_text_parts handles large files intelligently)
+        sampled_text = extract_text_parts(text, part_size=2000, part_count=4)
+
         prompt_val = prompt.invoke({
-            "text": extract_text_parts(text), 
+            "text": sampled_text, 
             "format_instructions": fmt_instructions
         })
         
         raw_response = _get_llm_response(prompt_val.to_string())
         return _clean_and_parse_json(raw_response)
     except Exception as e:
-        print(f"Error during LLM processing: {e}")
+        logger.error(f"LLM Processing Error: {e}")
         return {}
+
+# -------------------------------------------------------------------------
+# 3. Main Execution
+# -------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="Parse folders, extract metadata, and rename.")
+    parser.add_argument("input_dir", type=Path, help="Path to source folder")
+    parser.add_argument("output_dir", type=Path, nargs="?", default=Path(__file__).parent / "processed", help="Output folder")
+    parser.add_argument("--force", action="store_true", help="Ignore history and process everything.")
     
-def get_unique_path(out_dir: Path, filename: str) -> Path:
-    """Guarantees no overwrites by appending a counter."""
-    safe_name = re.sub(r'[^a-z0-9_]', '', filename.lower())
-    # Fallback if LLM returns empty string
-    if not safe_name: safe_name = "untitled_doc"
+    args = parser.parse_args()
     
-    candidate = out_dir / f"{safe_name}.txt"
-    counter = 1
-    while candidate.exists():
-        candidate = out_dir / f"{safe_name}_{counter}.txt"
-        counter += 1
-    return candidate
+    # 1. Prepare Directories
+    if not args.input_dir.exists():
+        logger.error(f"CRITICAL: Input directory '{args.input_dir}' does not exist.")
+        sys.exit(1)
+    
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 2. Initialize History
+    history_path = args.output_dir / "processing_history.json"
+    if args.force and history_path.exists():
+        history_path.unlink()
+
+    history = ProcessingHistory(history_path)
+
+    print(f"--- Configuration ---")
+    print(f"Source: {args.input_dir}")
+    print(f"Target: {args.output_dir}")
+    print(f"History: {history_path}")
+
+    # 3. Load Documents
+    logger.info("Loading document index...")
+    # NOTE: We set ignore_processed=False because we handle history ourselves logic 
+    # (to detect modifications, which standard loaders might miss)
+    try:
+        documents = load_documents(directory=args.input_dir, ignore_processed=False)
+    except Exception as e:
+        logger.error(f"Loader failed: {e}")
+        sys.exit(1)
+
+    if not documents:
+        logger.info("No documents found.")
+        sys.exit(0)
+
+    total_docs = len(documents)
+    logger.info(f"Processing {total_docs} documents...")
+
+    stats = {"processed": 0, "skipped": 0, "errors": 0}
+
+    try:
+        for i, doc in enumerate(documents, 1):
+            source_path_str = doc.metadata.get('source', '')
+            if not source_path_str:
+                continue
+            
+            file_path = Path(source_path_str).resolve()
+
+            # --- Check History ---
+            if not history.should_process(file_path):
+                stats["skipped"] += 1
+                # ... [logging] ...
+                continue
+
+            print(f"[{i}/{total_docs}] Processing: {file_path.name} ...", end="\r")
+
+            # --- Clean Content ---
+            content = doc.page_content
+            
+            # Extract existing Released date if present (Regex improved)
+            existing_date = None
+            date_match = re.search(r'^Released:\s*(.+)$', content, flags=re.MULTILINE | re.IGNORECASE)
+            if date_match:
+                existing_date = date_match.group(1).strip()
+                # Remove line
+                content = re.sub(r'^Released:.*(\n|\r\n)?', '', content, count=1, flags=re.MULTILINE | re.IGNORECASE)
+
+            # Remove existing Tags line
+            content = re.sub(r'^Tags:\s*\{.*?\}\s*(\n|\r\n)?', '', content, count=1, flags=re.MULTILINE | re.IGNORECASE).strip()
+
+            if not content:
+                logger.warning(f"  [Empty] Content empty after cleaning: {file_path.name}")
+                stats["errors"] += 1
+                continue
+
+            # --- LLM Extraction ---
+            meta = process_content_llm(content)
+            
+            if not meta:
+                logger.warning(f"  [Fail] Metadata extraction failed: {file_path.name}")
+                stats["errors"] += 1
+                continue
+
+            # --- Prepare Output Data ---
+            fname = meta.pop('suggested_filename', 'untitled_doc')
+            llm_date = meta.pop('release_date', None)
+
+            # Determine date logic
+            if existing_date:
+                rdate = existing_date
+            elif llm_date and str(llm_date).lower() != 'unknown':
+                rdate = llm_date
+            else:
+                rdate = None 
+
+            date_line = f"Released: {rdate}\n" if rdate else ""
+            
+            final_data = (
+                f"{date_line}"
+                f"Tags: {json.dumps(meta)}\n\n"
+                f"{content}"
+            )
+
+            # --- Write New Output ---
+            out_path = get_unique_path(args.output_dir, fname)
+            try:
+                out_path.write_text(final_data, encoding='utf-8')
+                logger.info(f"  [Saved] {out_path.name} (Source: {file_path.name})")
+                # Update History
+                history.record_processing(file_path, output_file=str(out_path.resolve()))
+                stats["processed"] += 1
+            except Exception as e:
+                logger.error(f"  [Write Error] {out_path.name}: {e}")
+                stats["errors"] += 1
+            
+            # Clean console line
+            sys.stdout.write("\033[K")
+
+    except KeyboardInterrupt:
+        print("\n\n[!] Processing stopped by user. Saving history...")
+    finally:
+        history.save()
+
+    print(f"\n--- Summary ---")
+    print(f"Processed: {stats['processed']}")
+    print(f"Skipped:   {stats['skipped']}")
+    print(f"Errors:    {stats['errors']}")
+    print(f"Log:       metadata_processing.log")
 
 if __name__ == "__main__":
     main()
