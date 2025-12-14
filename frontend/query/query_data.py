@@ -22,7 +22,7 @@ from query.retrieval import (
 )
 from query.processing import (
     _rerank_results,
-    _select_docs_for_context,
+    select_docs_for_context,
     _generate_response
 )
 
@@ -140,7 +140,7 @@ def query_rag(
         reranked_docs_scores = _rerank_results(retrieval_query, initial_docs_scores, top_k)
         
         # Select final docs (cutting off if context limit exceeded)
-        final_docs, sources, estimated_tokens = _select_docs_for_context(reranked_docs_scores, tokens)
+        final_docs, sources, estimated_tokens = select_docs_for_context(reranked_docs_scores, tokens)
 
         # 6. Generate
         return _generate_response(
@@ -204,7 +204,7 @@ def query_lightrag(
         # 5. Rerank & Select
         # Use top_k here
         reranked_docs_scores = _rerank_results(retrieval_query, threshold_filtered_docs, top_k)
-        final_docs, sources, estimated_tokens = _select_docs_for_context(reranked_docs_scores, tokens)
+        final_docs, sources, estimated_tokens = select_docs_for_context(reranked_docs_scores, tokens)
 
         # 6. Generate
         return _generate_response(
@@ -274,7 +274,7 @@ def query_kag(
         # 4. Rerank & Select
         # Use top_k here
         reranked_docs_scores = _rerank_results(retrieval_query, initial_docs_scores, top_k)
-        final_docs, sources, estimated_tokens = _select_docs_for_context(reranked_docs_scores, tokens)
+        final_docs, sources, estimated_tokens = select_docs_for_context(reranked_docs_scores, tokens)
 
         # 5. Generate
         return _generate_response(

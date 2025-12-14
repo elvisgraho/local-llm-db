@@ -65,9 +65,9 @@ KAG_RELATIONSHIP_QUALIFIER_CITE = " or 'Relationships'"
 KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT = "5. Incorporate specific details from the Knowledge Context directly.\n"
 KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID = "5. Incorporate specific details from the Knowledge Context directly.\n"
 EMPTY_STRING = ""
-DIRECT_TEMPLATE = "Instruction: Answer based on general knowledge.\nQuestion: {question}"
+DIRECT_TEMPLATE = "Answer based on general knowledge and chat context.\nQuestion: {question}"
 VERIFY_TEMPLATE = """
-**INSTRUCTION: ADVERSARIAL TECHNICAL AUDIT & SYNTHESIS**
+**INSTRUCTION: TECHNICAL AUDIT & SYNTHESIS**
 
 You are a Principal Security Researcher. Your task is to rigorously critique and reconstruct the `## INITIAL ANSWER` using the `## CONTEXT` as the ground truth.
 

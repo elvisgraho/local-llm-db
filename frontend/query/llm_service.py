@@ -12,9 +12,6 @@ from query.global_vars import LOCAL_LLM_API_URL, LOCAL_MAIN_MODEL
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Constants
-DEFAULT_CONTEXT_LENGTH = 8192
-
 # prevent accumulation of open sockets
 session = requests.Session()
 
@@ -98,7 +95,7 @@ def get_llm_response(
 
         try:
             # Shortened timeout for direct feedback, but long enough for RAG processing
-            response = session.post(api_url, json=payload, headers=headers, timeout=180)
+            response = session.post(api_url, json=payload, headers=headers, timeout=240)
             response.raise_for_status()
             
             data = response.json()
@@ -128,7 +125,7 @@ def get_llm_response(
                 payload["messages"] = verify_messages
                 payload["temperature"] = 0.1 # Lower temp for critical analysis
                 
-                v_response = session.post(api_url, json=payload, headers=headers, timeout=180)
+                v_response = session.post(api_url, json=payload, headers=headers, timeout=240)
                 v_response.raise_for_status()
                 v_data = v_response.json()
                 return v_data["choices"][0]["message"]["content"]

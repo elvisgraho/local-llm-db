@@ -62,7 +62,7 @@ def _rerank_results(
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:k]
 
-def _select_docs_for_context(
+def select_docs_for_context(
     docs_with_scores: List[Tuple[Document, float]], 
     available_tokens: int
 ) -> Tuple[List[Document], List[str], int]:

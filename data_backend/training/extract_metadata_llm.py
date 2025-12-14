@@ -100,7 +100,7 @@ def _get_llm_response(prompt_text: str) -> str:
     }
     
     try:
-        response = session.post(url, json=payload, headers=headers, timeout=180)
+        response = session.post(url, json=payload, headers=headers, timeout=240)
         response.raise_for_status()
         data = response.json()
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")

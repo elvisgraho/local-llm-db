@@ -270,7 +270,7 @@ def render_settings_sidebar():
                 system_prompt = st.text_area("Instructions", value=prompts[selected_persona], height=150)
 
         with st.expander("🎛️ Parameters", expanded=False):
-            top_k = st.slider("Retrieval Depth", 1, 25, 10, disabled=is_direct)
+            top_k = st.slider("Retrieval Depth", 1, 50, 10, disabled=is_direct)
             history_limit = st.slider("Chat Memory", 0, 35, 5)
             temp = st.slider("Temperature", 0.0, 1.0, 0.7)
 
