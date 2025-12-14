@@ -212,7 +212,9 @@ def main():
 
             # Apply formatting
             formatted_content = app_utils.format_citations(msg["content"])
-            st.markdown(formatted_content, unsafe_allow_html=True) 
+            formatted_content = app_utils.sanitize_markdown(formatted_content)
+            
+            st.markdown(formatted_content, unsafe_allow_html=True)
 
             if msg.get("sources"):
                 with st.expander(f"📚 Sources ({len(msg['sources'])})"):
@@ -286,7 +288,6 @@ def main():
                         response = strategies[rag_type](
                             **common_args, 
                             db_name=db_name,
-                            rag_type=rag_type,
                             top_k=rag_cfg["top_k"], 
                             hybrid=rag_cfg["hybrid"],
                             verify=rag_cfg["verify"]

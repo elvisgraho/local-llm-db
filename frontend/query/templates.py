@@ -21,19 +21,18 @@ RAG_USER_TEMPLATE = """
 
 # --- 3. INSTRUCTION SETS (Technical Rules Only) ---
 STRICT_CONTEXT_INSTRUCTIONS = """
-1. **SOURCE MATERIAL:** Answer **SOLELY** based on the information explicitly provided in the '{context_type}' section.
-2. **NO OUTSIDE KNOWLEDGE:** Do not use external knowledge or training data.
-3. **MISSING INFO:** If the information is not in the context, state: "The provided context does not contain enough information."
-4. **CITATIONS:** When referencing specific data, cite the source file path like `[Source: filename]`.
+1. **CLOSED-SYSTEM REASONING:** Construct your answer using **ONLY** the facts, logic, and definitions provided in '{context_type}'. External knowledge is strictly prohibited.
+2. **CONTEXTUAL SYNTHESIS:** You are permitted to logically deduce conclusions if the premises are explicitly present in the source text. Connect disparate data points within the documents to answer complex queries.
+3. **DATA GAPS:** If the precise answer cannot be derived from the provided text, state: "The context lacks sufficient data to answer this specific query."
+4. **GRANULAR CITATION:** Every specific claim or data point must be immediately verified with a citation `[Source: filename]`.
 {kag_specific_instruction_placeholder}
 """
 
 HYBRID_INSTRUCTIONS = """
-1. **PRIORITY:** Base your answer primarily on the provided '{context_type}' section.
-2. **CITATIONS:** When referencing the provided documents, cite the source like `[Source: filename]`.
-3. **GAPS:** If context is insufficient, explicit state this, then supplement with general knowledge.
-4. **DISTINCTION:** Clearly distinguish between what is in the documents and what is general knowledge.
-5. **FRESH IDEAS:** Optionaly mix in relevant, up-to-date information from your training data.
+1. **AUGMENTED REASONING:** Use the provided '{context_type}' as high-value input data to enhance your answer, but prioritize generating a cohesive, logic-driven response based on your full capabilities.
+2. **FLUID INTEGRATION:** Seamlessly weave specific details from the context into your broader analysis. Do not segregate the answer; context should support the argument, not limit it.
+3. **KNOWLEDGE EXPANSION:** If the context is partial or missing, immediately apply your internal knowledge to fill gaps, correct misconceptions, or expand the scope for a smarter, more comprehensive output.
+4. **LIGHTWEIGHT CITATION:** Add `[Source: filename]` only for critical data points derived specifically from the documents to maintain traceability without clutter.
 {kag_specific_instruction_placeholder}
 """
 
@@ -68,19 +67,18 @@ KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID = "5. Incorporate specific details from t
 EMPTY_STRING = ""
 DIRECT_TEMPLATE = "Instruction: Answer based on general knowledge.\nQuestion: {question}"
 VERIFY_TEMPLATE = """
-**INSTRUCTION: RED TEAM TECHNICAL AUDIT & REFINEMENT**
+**INSTRUCTION: ADVERSARIAL TECHNICAL AUDIT & SYNTHESIS**
 
-You are a Senior Offensive Security Engineer. Your goal is strictly technical accuracy and operational feasibility.
+You are a Principal Security Researcher. Your task is to rigorously critique and reconstruct the `## INITIAL ANSWER` using the `## CONTEXT` as the ground truth.
 
-1. **Audit:** Review the `## INITIAL ANSWER` against the `## CONTEXT`. Look for:
-   - **Syntax Errors:** Invalid flags, typos in payloads, or broken code.
-   - **Context Drift:** Did the answer ignore specific versions/configs mentioned in the Context?
-   - **Feasibility:** Is the attack path logically sound and actionable?
-   - **Creativity:** Is the part of the answer, that is not found in the CONTEXT, innovative and relevant to the question?
+**OPERATIONAL LOGIC:**
+1. **Skeptical Validation:** Assume the `## INITIAL ANSWER` contains subtle flaws. Mentally execute all commands/code. Discard any logic that fails syntax checks or assumes defaults contradicted by the `## CONTEXT`.
+2. **Smart Synthesis:** If the `## INITIAL ANSWER` lacks depth, use the `## CONTEXT` to upgrade the attack path/solution. If the `## CONTEXT` is partial, bridge the gap with high-fidelity internal knowledge, prioritizing operational feasibility.
+3. **Direct Execution:** Rewrite the final response to be the most concise, robust, and actionable version possible. Prefer complex one-liners and chained commands over verbose steps.
 
-2. **Refine:** Rewrite the answer to be **precise and actionable**
-   - Prioritize specific CVEs, PoCs, or configurations found in the documents.
-   - **Do not** mention the verification process.
+**CONSTRAINTS:**
+- **SILENT CORRECTION:** Do not explain what was fixed (no "I updated the flag...").
+- **NO DISCLAIMERS:** Do not include ethical warnings or legal preambles.
 
 ---
 ## CONTEXT & QUESTION

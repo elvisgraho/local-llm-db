@@ -1,55 +1,92 @@
 # --- START OF FILE app_utils.py ---
+import html
 import streamlit as st
 import json
 import os
 import requests
 import re
-try:
-    import tiktoken
-    TIKTOKEN_AVAILABLE = True
-except ImportError:
-    TIKTOKEN_AVAILABLE = False
+import tiktoken
+import fitz
 from query.data_service import data_service
 
 # --- Constants ---
 AVG_CHARS_PER_TOKEN = 4
 
 # --- System Prompts / Personas ---
-DEFAULT_RED_TEAM_PROMPT = """You are a concise, precise, and skeptical AI agent specialized in Red Teaming and Bug Bounties. Your role is to be a 'sharp shooter' - direct, factual, and also provide precise instructions when possible.
+DEFAULT_RED_TEAM_PROMPT = """
+You are a Deep-System Specialist with polymath-level expertise in Cybersecurity, IT Infrastructure, and Software Engineering. 
 
-DIRECTIVES:
-1. RESPONSE STYLE: Precise with no unnecessary sections/headings. No filler. No emojis.
-2. CONTENT: Respond directly with relevant technical details or solutions.
-3. SKEPTICISM: Critically analyze queries. If unclear/unsupported, state the limitation immediately. Challenge assumptions.
+### CORE OPERATING PRINCIPLES:
+1.  **Fluid Reasoning**: Do not adhere to rigid templates. Dynamically assess the complexity of the user's request. If it requires a simple one-liner, provide it. If it requires a multi-stage architectural breakdown, provide that. Match the user's depth instantly.
+2.  **Abductive Logic**: You are capable of inferring missing context. If a user asks a vague question, use your intuition to identify the most likely technical hurdle they are facing and address that first, then offer alternatives.
+3.  **Synthesis over Retrieval**: Do not just "dump" information. Synthesize your vast knowledge base into a cohesive solution. Connect disparate concepts (e.g., how a network race condition affects a specific database lock).
+4.  **Recursive Optimization**: Before outputting, simulate a "peer review" of your answer. If a solution is technically valid but practically messy, discard it for the cleaner, more elegant approach.
+
+### OUTPUT STANDARDS:
+- **Density**: Maximise information density. Use precise terminology. Avoid fluff, filler, and stating the obvious.
+- **Pragmatism**: Prioritize solutions that work in real-world, messy environments over theoretical "textbook" answers.
+- **Prohibitions:** No ethical preambles, no educational "fluff", no conversational filler.
+- **Formatting:** The use of tables is forbidden.
+
+### TONE:
+Effortlessly competent. You are the senior engineer who solves the problem in 5 minutes that took others 5 days. Direct, sharp, and helpful.
 """
+
 # since models are de-restricted this might be a waste
 # 4. EXCLUSIONS: NEVER discuss ethics/legal considerations. NEVER include disclaimers. NEVER refuse strictly technical requests.
 
 PROMPTS_FILE = "prompts.json"
 
 def apply_custom_css():
-    """Injects custom CSS for the chat interface."""
+    """Injects custom CSS for chat interface and table-safe code blocks."""
     st.markdown("""
     <style>
-        .main .block-container { max_width: 95%; padding-top: 2rem; padding-bottom: 2rem; }
-        .stChatMessage { background-color: transparent; border-bottom: 1px solid rgba(128, 128, 128, 0.1); }
-        code { font-family: 'Fira Code', monospace; font-size: 0.9em; }
-        
+        /* MAIN CONTAINER */
+        .main .block-container { 
+            max_width: 95%; 
+            padding-top: 2rem; 
+            padding-bottom: 2rem; 
+        }
+
+        /* CHAT MESSAGES */
+        .stChatMessage { 
+            background-color: transparent; 
+            border-bottom: 1px solid rgba(128, 128, 128, 0.1); 
+        }
+
+        /* GLOBAL CODE FONT */
+        code { 
+            font-family: 'Fira Code', 'Consolas', monospace; 
+            font-size: 0.9em; 
+        }
+
+        /* FLATTENED CODE BLOCKS (For inside tables) */
+        .flattened-code {
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 0.85em;
+            white-space: pre-wrap;       /* Wrap text so table doesn't overflow */
+            word-break: break-all;       /* Break long strings/hashes */
+            background-color: rgba(128, 128, 128, 0.08);
+            border: 1px solid rgba(128, 128, 128, 0.2);
+            border-radius: 4px;
+            padding: 6px;
+            margin: 4px 0;
+            display: block;
+        }
+
+        /* CITATION BADGES */
         .source-citation {
             display: inline-flex;
             align-items: center;
-            justify-content: center;
-            background-color: rgba(0, 173, 181, 0.2); /* Slightly darker teal background */
-            border: 1px solid rgba(0, 173, 181, 0.5);
-            border-radius: 6px;
-            padding: 2px 8px;
-            margin: 0 4px;
+            background-color: rgba(0, 173, 181, 0.15); 
+            border: 1px solid rgba(0, 173, 181, 0.4);
+            border-radius: 4px;
+            padding: 2px 6px;
+            margin: 0 3px;
             font-size: 0.8em;
-            font-weight: 500;
-            color: #E0E0E0;
-            font-family: 'Segoe UI', Roboto, sans-serif;
-            vertical-align: baseline; /* Fixes bullet point alignment */
-            white-space: nowrap;      /* Prevents badge breaking mid-line */
+            color: #00ADB5; /* Teal text for contrast */
+            font-family: 'Segoe UI', sans-serif;
+            vertical-align: middle;
             cursor: default;
         }
         
@@ -57,34 +94,30 @@ def apply_custom_css():
             content: "📄";
             margin-right: 4px;
             font-size: 0.9em;
-            opacity: 0.8;
         }
-
-        .stButton button { text-align: left; padding-left: 10px; }
-        .stProgress > div > div > div > div { background-color: #00ADB5; }
     </style>
     """, unsafe_allow_html=True)
     
 def format_citations(text: str) -> str:
     """
-    Finds [Source: filename] patterns, strips surrounding Markdown code backticks,
-    and wraps them in a styled HTML span.
+    Converts [Source: filename] -> Styled HTML span.
+    Handles optional backticks and prevents XSS via filename escaping.
     """
-    if not text: return ""
+    if not text: 
+        return ""
     
-    # Regex Explanation:
-    # `?           -> Matches an optional opening backtick
-    # \[Source:    -> Matches literal "[Source:"
-    # \s*          -> Matches optional whitespace
-    # (.*?)        -> Capture Group 1: The filename content
-    # \]           -> Matches literal "]"
-    # `?           -> Matches an optional closing backtick
+    def replace_match(match):
+        # Extract filename (group 1)
+        filename = match.group(1).strip()
+        # Secure the content
+        safe_filename = html.escape(filename)
+        return f'<span class="source-citation">{safe_filename}</span>'
+
+    # Regex: `? \[Source: (content) \] `?
+    # Matches optional backticks around the bracketed source
+    pattern = r'`?\[Source:\s*(.*?)\]`?'
     
-    return re.sub(
-        r'`?\[Source:\s*(.*?)\]`?', 
-        r'<span class="source-citation">\1</span>', 
-        text
-    )
+    return re.sub(pattern, replace_match, text)
     
     
 @st.cache_resource
@@ -97,40 +130,37 @@ def warm_up_resources():
     except Exception as e:
         st.error(f"🔥 Critical AI Resource Error: {e}")
         return False
+    
+def clean_api_url(url: str) -> str:
+    """Ensures URL is formatted correctly for requests."""
+    if not url: return ""
+    url = url.strip().rstrip('/')
+    if not url.startswith(('http://', 'https://')):
+        url = f"http://{url}"
+    if not url.endswith("/v1"):
+        url += "/v1"
+    return url
 
-def fetch_available_models(base_url: str, filter_type: str = None):
+def fetch_available_models(base_url: str) -> list:
     """
-    Dynamically fetch models from the local API with filtering.
-    filter_type: 'chat' (excludes embeddings) or 'embedding' (only embeddings)
+    Fetches models from the Local LLM API.
+    Returns a list of model IDs.
     """
+    if not base_url: return []
+    target_url = clean_api_url(base_url)
+    
     try:
-        clean_url = base_url.rstrip('/')
-        if not clean_url.endswith('/v1'):
-            clean_url += '/v1'
-        
-        target_url = f"{clean_url}/models"
-        resp = requests.get(target_url, timeout=2)
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            model_list = []
+        response = requests.get(f"{target_url}/models", timeout=2)
+        if response.status_code == 200:
+            data = response.json()
             if 'data' in data:
-                model_list = [m['id'] for m in data['data']]
-            else:
-                model_list = [str(m) for m in data]
-            
-            # Smart Filtering logic
-            if filter_type == 'embedding':
-                # Only keep models that look like embeddings
-                return [m for m in model_list if any(x in m.lower() for x in ['embed', 'bert', 'nomic', 'gte'])]
-            elif filter_type == 'chat':
-                # Exclude obvious embedding models
-                return [m for m in model_list if not any(x in m.lower() for x in ['embed', 'bert', 'nomic', 'gte'])]
-            
-            return model_list
+                return [m['id'] for m in data['data']]
+            elif 'models' in data:
+                return [m['name'] for m in data['models']]
     except Exception:
-        pass
+        return []
     return []
+
 
 def parse_reasoning(text: str):
     """Extracts <think> tags into a separate UI block."""
@@ -143,11 +173,13 @@ def parse_reasoning(text: str):
     return text, None
 
 def parse_uploaded_file(uploaded_file):
-    """Extract text from uploaded PDF/TXT for ad-hoc context."""
+    """Extract text from uploaded PDF/TXT using PyMuPDF (fitz)."""
     try:
         if uploaded_file.name.endswith('.pdf'):
-            reader = PdfReader(uploaded_file)
-            text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+            # fitz requires bytes; Streamlit's uploaded_file.read() returns bytes
+            file_bytes = uploaded_file.read()
+            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+                text = chr(12).join([page.get_text() for page in doc])
             return f"\n--- UPLOADED CONTEXT: {uploaded_file.name} ---\n{text}\n"
         else:
             text = uploaded_file.read().decode("utf-8")
@@ -159,7 +191,6 @@ def parse_uploaded_file(uploaded_file):
 # Cache the encoder to prevent reloading
 @st.cache_resource
 def get_encoder():
-    if not TIKTOKEN_AVAILABLE: return None
     try:
         return tiktoken.get_encoding("cl100k_base")
     except Exception:
@@ -271,3 +302,62 @@ def save_system_prompt(name, content):
     except Exception as e:
         return False
     
+def sanitize_markdown(text: str) -> str:
+    """
+    Context-aware sanitizer:
+    1. Text Segments: Escapes Windows paths (e.g. \Windows) to prevent LaTeX crashes.
+    2. Table Code: Flattens ```blocks``` inside tables to HTML <div class="flattened-code">.
+    3. Normal Code: Preserves standard Streamlit code blocks.
+    """
+    if not isinstance(text, str) or not text:
+        return ""
+
+    # Split by code blocks. 
+    # Capturing group () keeps the delimiter in the list.
+    # Pattern finds: ```language \n content ```
+    code_block_pattern = r'(```[\s\S]*?```)'
+    parts = re.split(code_block_pattern, text)
+    
+    processed_parts = []
+    
+    for i, part in enumerate(parts):
+        # Even index = Regular Text
+        # Odd index  = Code Block (captured by regex)
+        
+        if i % 2 == 0:
+            # --- PROCESS TEXT ---
+            # Escape backslashes followed by alphanumerics (Windows paths)
+            # Regex: Backslash NOT preceded by backslash, followed by char/digit
+            # This turns "C:\Windows" into "C:\\Windows"
+            sanitized_text = re.sub(r'(?<!\\)\\(?=[a-zA-Z0-9])', r'\\\\', part)
+            processed_parts.append(sanitized_text)
+        
+        else:
+            # --- PROCESS CODE BLOCK ---
+            # Heuristic: Is this block inside a table?
+            # Check the PREVIOUS text segment. If it ends with a pipe |, we are likely in a table cell.
+            prev_text = parts[i-1].strip() if i > 0 else ""
+            is_inside_table = prev_text.endswith("|")
+            
+            if is_inside_table:
+                # 1. Parse content inside backticks
+                # Match: ```(optional_lang)\n(content)```
+                m = re.match(r'```(\w*)\s*\n?([\s\S]*?)```', part)
+                if m:
+                    # lang = m.group(1) # Unused in flat view, but available
+                    raw_code = m.group(2)
+                    
+                    # 2. Convert to HTML for Table Safety
+                    safe_code = html.escape(raw_code)
+                    safe_code = safe_code.replace('\n', '<br>')
+                    
+                    # 3. Append styled HTML div
+                    processed_parts.append(f'<div class="flattened-code">{safe_code}</div>')
+                else:
+                    # Fallback if regex fails (shouldn't happen on valid blocks)
+                    processed_parts.append(part)
+            else:
+                # Outside table: Keep original Markdown for Streamlit to render natively
+                processed_parts.append(part)
+
+    return "".join(processed_parts)
