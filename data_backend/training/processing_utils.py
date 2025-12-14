@@ -3,6 +3,8 @@ import logging
 import re
 import shutil
 import sys
+import gc
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -72,8 +74,7 @@ def split_document(
         chunk_overlap=chunk_overlap,
         length_function=len,
         is_separator_regex=False,
-        # We prefer splitting at double newlines, then headers, then single lines
-        separators=["\n\n", "\n##", "\n###", "\n", ". ", " ", ""],
+        separators=["\n\n", "\n", ". ", "? ", "! ", " ", ""],
         keep_separator=True
     )
 
@@ -155,15 +156,28 @@ def split_document(
 
 
 def initialize_chroma_vectorstore(chroma_path: Path, reset: bool = False) -> Optional[Chroma]:
-    """Initialize or load the Chroma vectorstore with robust reset logic."""
     try:
         embedding_function = get_embedding_function()
         path_str = str(chroma_path)
 
         if reset:
             logger.info(f"Resetting ChromaDB at {path_str}...")
+            # Unload any existing instances
+            gc.collect()
+            
             if chroma_path.exists():
-                shutil.rmtree(chroma_path)
+                # specific retry for the chroma folder
+                try:
+                    shutil.rmtree(chroma_path)
+                except PermissionError:
+                    logger.warning("ChromaDB folder locked. Attempting forced cleanup...")
+                    time.sleep(1)
+                    try:
+                        shutil.rmtree(chroma_path)
+                    except Exception as e:
+                        logger.error(f"Could not delete locked DB: {e}")
+                        return None
+                        
             chroma_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Initializing ChromaDB at {path_str}")
@@ -172,6 +186,7 @@ def initialize_chroma_vectorstore(chroma_path: Path, reset: bool = False) -> Opt
             embedding_function=embedding_function
         )
         return vectorstore
+
     except Exception as e:
         logger.error(f"Error managing ChromaDB at {chroma_path}: {e}")
         return None
@@ -213,24 +228,29 @@ def manage_db_configuration(db_dir: Path, rag_type: str, args) -> None:
 
 def clear_db_directory(db_dir: Path) -> None:
     """
-    Safely clear the contents of a database directory.
+    Safely clear directory with Windows file lock handling.
     """
-    try:
-        if db_dir.exists() and db_dir.is_dir():
-            logger.info(f"Clearing directory: {db_dir}")
-            for item in db_dir.iterdir():
-                try:
-                    if item.is_file():
-                        item.unlink()
-                    elif item.is_dir():
-                        shutil.rmtree(item)
-                except Exception as e:
-                    logger.error(f"Failed to remove {item}: {e}")
-            logger.info("Directory cleared.")
-        else:
-            logger.info(f"Directory {db_dir} does not exist or is not a dir.")
-    except Exception as e:
-        logger.error(f"Error clearing {db_dir}: {e}")
+    if not db_dir.exists(): return
+
+    logger.info(f"Clearing directory: {db_dir}")
+    
+    # Force Garbage Collection to release file handles
+    gc.collect() 
+    
+    # Retry loop for Windows permissions
+    for _ in range(3):
+        try:
+            if db_dir.exists():
+                shutil.rmtree(db_dir)
+            break
+        except PermissionError:
+            logger.warning("File locked. Waiting 1s before retry...")
+            time.sleep(1)
+        except Exception as e:
+            logger.error(f"Error clearing {db_dir}: {e}")
+            break
+            
+    logger.info("Directory cleared.")
 
 def get_unique_path(out_dir: Path, filename: str) -> Path:
     """Guarantees no overwrites by appending a counter."""

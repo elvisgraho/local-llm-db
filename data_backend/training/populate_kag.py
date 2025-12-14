@@ -223,7 +223,7 @@ def main():
         
         new_nodes = []
         new_edges = []
-        checkpoint_interval = 500
+        checkpoint_interval = 2500
 
         for i, (chunk, embedding) in enumerate(zip(all_chunks, all_embeddings)):
             source_file = chunk.metadata.get("source", "unknown")
@@ -241,7 +241,6 @@ def main():
             new_nodes.append((source_file, {"type": "file"}))
             new_edges.append((source_file, chunk_id, {"relation": "contains"}))
 
-            # Checkpoint
             if len(new_nodes) >= checkpoint_interval:
                 graph.add_nodes_from(new_nodes)
                 graph.add_edges_from(new_edges)
