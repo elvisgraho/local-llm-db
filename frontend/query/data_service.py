@@ -31,6 +31,7 @@ from langchain_core.documents import Document
 # --- Integration Imports ---
 from langchain_chroma import Chroma
 from langchain_community.vectorstores import FAISS
+from chromadb.config import Settings
 
 # --- Local Imports ---
 from query.database_paths import get_db_paths, DEFAULT_DB_NAME
@@ -140,7 +141,8 @@ class DataService:
             
             db = Chroma(
                 persist_directory=str(chroma_path_obj),
-                embedding_function=self.embedding_function
+                embedding_function=self.embedding_function,
+                client_settings=Settings(anonymized_telemetry=False)
             )
             
             self._chroma_cache[cache_key] = db

@@ -313,14 +313,20 @@ def load_documents(directory: Optional[Path] = None, db_dir: Optional[Path] = No
 
     # Load and Process
     all_documents = []
+    SAVE_INTERVAL = 50 
+
     with tqdm(total=len(files_to_process), desc="Loading Documents", unit="file") as pbar:
-        for file_path in files_to_process:
+        for i, file_path in enumerate(files_to_process):
             docs = _process_single_file(file_path)
             if docs:
                 all_documents.extend(docs)
-                # Mark as processed immediately if successful
                 if registry:
                     registry.mark_processed(file_path)
+            
+            # Periodically save registry
+            if registry and i % SAVE_INTERVAL == 0:
+                registry.save()
+                
             pbar.update(1)
     
     # Persist registry updates

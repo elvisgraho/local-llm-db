@@ -263,10 +263,18 @@ with tab_import:
 
     with c_imp2:
         st.subheader("Staging Area")
+        # Logic is now fast thanks to the fix above
         file_rows, total_files = logic.get_file_inventory(limit=50)
+        
         if total_files > 0:
             st.info(f"Total Staged Files: {total_files}")
+            if total_files > 1000:
+                st.warning("Large dataset detected. Ensure you have enough RAM for processing.")
+            
+            # Only show the preview of 50
             st.dataframe(file_rows, height=300, width='stretch')
+            st.caption(f"Showing first 50 of {total_files} files.")
+            
             if st.button("Clear Staging Area"):
                 for item in RAW_FILES_DIR.iterdir():
                     if item.is_file():
@@ -284,11 +292,11 @@ with tab_preview:
     with c_prev1:
         chunk_size = st.slider(
             "Chunk Size", 100, 1500, 512, 
-            key="chunk_size_preview" # Referenced in ui_tab_build
+            key="chunk_size_preview" 
         )
         chunk_overlap = st.slider(
             "Overlap", 0, 500, 200, 
-            key="chunk_overlap_preview" # Referenced in ui_tab_build
+            key="chunk_overlap_preview"
         )
         
         all_files = [f for f in RAW_FILES_DIR.rglob('*') if f.is_file() and not f.name.startswith('.')]

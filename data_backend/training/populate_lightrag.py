@@ -102,7 +102,7 @@ def main():
     chroma_path = db_paths.get("chroma_path") or db_paths.get("vectorstore_path")
     db_dir = db_paths["db_dir"]
     
-    manage_db_configuration(db_paths["db_dir"], "rag", args)
+    manage_db_configuration(db_paths["db_dir"], "lightrag", args)
 
     if not chroma_path:
         logger.error(f"Could not determine Chroma path for {rag_type}/{db_name}")
@@ -157,12 +157,22 @@ def main():
                     batch = all_processed_chunks[i : i + args.chunk_size]
                     try:
                         vectorstore.add_documents(batch)
-                    except Exception as e:
-                        logger.error(f"Failed to index batch {i}: {e}")
-                    finally:
                         pbar.update(len(batch))
+                    except Exception as e:
+                        logger.error(f"Batch indexing failed at {i}. Retrying individually... Error: {e}")
+                        
+                        # FIX: Fallback to individual insertion so valid docs aren't lost
+                        for doc in batch:
+                            try:
+                                vectorstore.add_documents([doc])
+                            except Exception as inner_e:
+                                src = doc.metadata.get('source', 'unknown')
+                                logger.error(f"Failed to index specific doc {src}: {inner_e}")
+                            finally:
+                                pbar.update(1)
 
             logger.info("Indexing complete.")
+            
         else:
              logger.warning("No valid chunks generated. Database remains empty.")
 

@@ -1,11 +1,15 @@
 import logging
-from typing import Any, Optional, List, Dict, Tuple, Union
+import os
+import hashlib
+from typing import Any, Optional, List, Dict, Tuple, Union, Set
+
+# Modern LangChain Core Imports
 from langchain_core.documents import Document
+
+# Internal Imports
 from query.data_service import data_service
 from query.llm_service import get_llm_response
 from query.query_helpers import _estimate_tokens, _reorder_documents_for_context
-
-# Updated Imports
 from query.templates import (
     RAG_SYSTEM_CONSTRUCTION, RAG_USER_TEMPLATE,
     STRICT_CONTEXT_INSTRUCTIONS, HYBRID_INSTRUCTIONS,
@@ -17,8 +21,10 @@ from query.templates import (
 
 logger = logging.getLogger(__name__)
 
-# Constants
+# --- Constants ---
 DOC_SEPARATOR = "\n\n---\n\n"
+MIN_DOC_LENGTH = 50           # Minimum characters for a chunk to be considered useful
+HEADER_ONLY_THRESHOLD = 150   # Max length for a chunk starting with '#' to be considered a "header orphan"
 
 def _rerank_results(
     query_text: str, 
@@ -26,32 +32,46 @@ def _rerank_results(
     k: int
 ) -> List[Tuple[Document, float]]:
     """
-    Reranks retrieval results using the CrossEncoder model from DataService.
-    Falls back to original scores if reranker is unavailable or fails.
+    Reranks retrieval results using the CrossEncoder model.
+    Includes robust error handling and input validation.
     """
     reranker = data_service.reranker
     
-    if not reranker or not results:
-        # Sort by original score just in case
+    # Fast exit conditions
+    if not results:
+        return []
+    if not reranker:
+        # Fallback to original vector/bm25 scores
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:k]
 
     try:
         logger.info(f"Reranking {len(results)} results.")
         
-        # Prepare pairs for CrossEncoder: [Query, Document Content]
-        pairs = [[query_text, doc.page_content] for doc, _ in results]
+        # Prepare pairs: [Query, Document Content]
+        # Validate content exists to prevent model crashes
+        pairs = []
+        valid_indices = []
         
+        for i, (doc, _) in enumerate(results):
+            content = doc.page_content
+            if content and isinstance(content, str) and content.strip():
+                pairs.append([query_text, content])
+                valid_indices.append(i)
+        
+        if not pairs:
+            logger.warning("No valid text content found for reranking.")
+            return results[:k]
+
         # Predict scores
         rerank_scores = reranker.predict(pairs)
         
-        # Update scores preserving Document objects
-        reranked_results = [
-            (results[i][0], float(rerank_scores[i])) 
-            for i in range(len(results))
-        ]
+        # Reconstruct list with new scores
+        reranked_results = []
+        for idx, new_score in zip(valid_indices, rerank_scores):
+            reranked_results.append((results[idx][0], float(new_score)))
         
-        # Sort by new rerank scores
+        # Sort descending
         reranked_results.sort(key=lambda x: x[1], reverse=True)
         
         logger.info(f"Selected top {k} results after reranking.")
@@ -67,43 +87,90 @@ def select_docs_for_context(
     available_tokens: int
 ) -> Tuple[List[Document], List[str], int]:
     """
-    Selects documents from a sorted list to fit within the estimated token limit.
-    Returns: (selected_docs, unique_sources, tokens_used)
+    Selects documents to fit within token limits.
+    
+    OPTIMIZATIONS:
+    1. Filters empty documents.
+    2. Filters "Header-Only" chunks (common splitting artifact).
+    3. Deduplicates identical content.
+    4. Fallback mechanism to ensure at least one doc is returned if possible.
     """
     selected_docs = []
     selected_sources = set()
     current_tokens = 0
     separator_tokens = _estimate_tokens(DOC_SEPARATOR)
+    seen_content_hashes: Set[str] = set()
 
-    logger.info(f"Selecting documents to fit within {available_tokens} estimated tokens.")
+    logger.info(f"Selecting documents from {len(docs_with_scores)} candidates (Limit: {available_tokens} tokens).")
 
-    for doc, score in docs_with_scores:
+    for i, (doc, score) in enumerate(docs_with_scores):
         doc_content = doc.page_content
-        doc_tokens = _estimate_tokens(doc_content)
         
-        # This check prevents Context Overflow (e.g. 8k limit)
-        if current_tokens + doc_tokens + separator_tokens <= available_tokens:
+        # --- FILTER 1: Empty/None ---
+        if not doc_content or not doc_content.strip():
+            continue
+
+        # --- FILTER 2: Header-Only Artifacts ---
+        # Detects chunks that are just "## Title" created by aggressive splitting
+        stripped_content = doc_content.strip()
+        if stripped_content.startswith('#') and len(stripped_content) < HEADER_ONLY_THRESHOLD:
+            # If it has very few newlines, it's likely just a header without body
+            if stripped_content.count('\n') < 2:
+                logger.debug(f"Skipping Header-Only Chunk: {stripped_content[:50]}...")
+                continue
+        
+        # --- FILTER 3: Noise / Too Short ---
+        if len(stripped_content) < MIN_DOC_LENGTH:
+            logger.debug(f"Skipping Short Chunk ({len(stripped_content)} chars).")
+            continue
+
+        # --- FILTER 4: Content Deduplication ---
+        # Hash the content to detect exact duplicates across different chunks/files
+        content_hash = hashlib.md5(stripped_content.encode('utf-8')).hexdigest()
+        if content_hash in seen_content_hashes:
+            logger.debug(f"Skipping duplicate content (Doc {i}).")
+            continue
+        seen_content_hashes.add(content_hash)
+
+        # --- TOKEN CHECK ---
+        est_tokens = _estimate_tokens(doc_content)
+        
+        # Check if adding this doc exceeds the budget
+        if current_tokens + est_tokens + separator_tokens <= available_tokens:
             selected_docs.append(doc)
-            current_tokens += doc_tokens + separator_tokens
+            current_tokens += est_tokens + separator_tokens
             
-            # Extract and clean source
-            source = doc.metadata.get("source")
-            if source and isinstance(source, str) and source.strip():
-                selected_sources.add(source.strip())
+            # Extract clean source name
+            source_raw = doc.metadata.get("source")
+            if source_raw and isinstance(source_raw, str) and source_raw.strip():
+                # Clean path to just filename
+                filename = os.path.basename(source_raw)
+                selected_sources.add(filename)
         else:
-            # Limit reached
-            logger.warning(f"Stopping retrieval: Context limit reached ({current_tokens}/{available_tokens})")
+            logger.info(f"Context limit reached at doc {i}. Used {current_tokens}/{available_tokens} tokens.")
             break 
 
+    # --- FALLBACK MECHANISM ---
+    # If filters removed everything but we had candidates, force include the top result
+    # to avoid "No relevant information" errors due to strict filtering.
+    if not selected_docs and docs_with_scores:
+        logger.warning("All documents were filtered out. Applying fallback to include Top-1.")
+        top_doc = docs_with_scores[0][0]
+        if top_doc.page_content and top_doc.page_content.strip():
+            selected_docs.append(top_doc)
+            current_tokens = _estimate_tokens(top_doc.page_content)
+            
+            src = top_doc.metadata.get("source")
+            if src: selected_sources.add(os.path.basename(src))
+
     if not selected_docs:
-        logger.warning("No documents could be selected within the available token limit.")
+        logger.warning("No documents selected after filtering and fallback.")
         return [], [], 0
 
-    estimated_tokens_used = current_tokens
-    unique_sources = sorted(list(selected_sources))
+    unique_sources_list = sorted(list(selected_sources))
+    logger.info(f"Final Selection: {len(selected_docs)} docs | ~{current_tokens} tokens | Sources: {len(unique_sources_list)}")
     
-    logger.info(f"Selected {len(selected_docs)} documents using ~{estimated_tokens_used} tokens. Sources: {len(unique_sources)}")
-    return selected_docs, unique_sources, estimated_tokens_used
+    return selected_docs, unique_sources_list, current_tokens
 
 def _generate_response(
     query_text: str,
@@ -119,17 +186,22 @@ def _generate_response(
 ) -> Dict[str, Union[str, List[str], int]]:
     
     # 1. Validation
+    # If KAG is used, we might have relationships even if we have no docs
     if not final_docs and not (rag_type == 'kag' and formatted_relationships):
-        no_info_msg = "No relevant information found in the database."
+        no_info_msg = "No relevant information found in the database to answer your specific query."
         return {"text": no_info_msg, "sources": [], "estimated_context_tokens": 0}
 
-    # 2. Prepare Context Text
+    # 2. Prepare Context Text (XML Style)
     reordered_docs = _reorder_documents_for_context(final_docs)
     context_parts = []
+    
     for doc in reordered_docs:
-        src = doc.metadata.get("source", "unknown")
-        if "/" in src or "\\" in src: src = src.split("/")[-1].split("\\")[-1]
-        context_parts.append(f"<document source='{src}'>\n{doc.page_content}\n</document>")
+        # Clean source for context tag
+        raw_source = doc.metadata.get("source", "unknown")
+        clean_source = os.path.basename(raw_source) if raw_source else "unknown"
+        
+        # XML wrapping helps models distinguish separate documents
+        context_parts.append(f"<document source='{clean_source}'>\n{doc.page_content}\n</document>")
     
     context_text = "\n\n".join(context_parts)
 
@@ -137,8 +209,7 @@ def _generate_response(
     is_kag = (rag_type == 'kag')
     context_type_label = KAG_CONTEXT_TYPE if is_kag else STANDARD_CONTEXT_TYPE
     
-    # 4. Select Instructions based on Mode
-    # We no longer select a 'Persona'. We only select 'Rules'.
+    # 4. Select Instructions
     if hybrid:
         instructions_base = HYBRID_INSTRUCTIONS
         kag_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID if is_kag else EMPTY_STRING
@@ -151,8 +222,7 @@ def _generate_response(
         kag_specific_instruction_placeholder=kag_instruction
     )
 
-    # 5. CONSTRUCT SYSTEM PROMPT (User Persona + RAG Rules)
-    # Extract the user's custom prompt from the config
+    # 5. CONSTRUCT SYSTEM PROMPT
     user_persona = llm_config.get('system_prompt', "You are a helpful AI assistant.")
     
     final_system_prompt = RAG_SYSTEM_CONSTRUCTION.format(
@@ -160,7 +230,7 @@ def _generate_response(
         rag_instructions=rag_rules
     )
 
-    # 6. CONSTRUCT USER PROMPT (Data + Question)
+    # 6. CONSTRUCT USER PROMPT
     question_block = QUESTION_BLOCK.format(question=query_text)
     context_block = CONTEXT_BLOCK.format(context_type=context_type_label, context=context_text)
     sources_block = SOURCES_BLOCK.format(sources=sources)
@@ -177,8 +247,7 @@ def _generate_response(
         question_block_placeholder=question_block
     )
 
-    # 7. Execute
-    # We update the config with the COMBINED system prompt
+    # 7. Execute LLM Call
     run_config = llm_config.copy() if llm_config else {}
     run_config['system_prompt'] = final_system_prompt
 

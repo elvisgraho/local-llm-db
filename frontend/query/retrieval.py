@@ -98,7 +98,6 @@ def _retrieve_keyword(
             reverse=True
         )
         
-        # Select Top K candidates (Score > 0)
         top_bm25_candidates = [
             (doc_id, score) 
             for doc_id, _, score in bm25_scored_docs_info 
@@ -116,18 +115,33 @@ def _retrieve_keyword(
         bm25_docs_with_scores = []
         id_to_score = dict(top_bm25_candidates)
         
-        # Reconstruct Documents with Scores
         if chroma_bm25_docs_data and chroma_bm25_docs_data.get("ids"):
+            # Handle case where 'documents' might be None or a list containing Nones
+            retrieved_contents = chroma_bm25_docs_data.get("documents")
+            if retrieved_contents is None:
+                retrieved_contents = [None] * len(chroma_bm25_docs_data["ids"])
+
             for doc_id, content, metadata in zip(
                 chroma_bm25_docs_data["ids"], 
-                chroma_bm25_docs_data["documents"], 
+                retrieved_contents, 
                 chroma_bm25_docs_data["metadatas"]
             ):
-                doc = Document(page_content=content, metadata=metadata)
+                final_content = content
+                if not final_content and metadata:
+                    # Check common keys for content stored in metadata
+                    final_content = metadata.get("page_content") or metadata.get("text") or metadata.get("content") or ""
+                
+                # If still empty, skip it immediately
+                if not final_content or not final_content.strip():
+                    continue
+                    
+                doc = Document(page_content=final_content, metadata=metadata)
                 score = id_to_score.get(doc_id, 0.0)
-                bm25_docs_with_scores.append((doc, score))
+                
+                # Only add if we actually have content to search against
+                if final_content.strip():
+                    bm25_docs_with_scores.append((doc, score))
 
-        # Apply metadata filter *after* retrieving BM25 candidates
         return _apply_metadata_filter(bm25_docs_with_scores, metadata_filter)
         
     except Exception as e:

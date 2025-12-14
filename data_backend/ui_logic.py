@@ -108,21 +108,27 @@ def get_file_inventory(limit=50):
     try:
         if not RAW_FILES_DIR.exists(): return [], 0
         
-        # Use rglob('*') for recursive search of all files and directories
-        # Filter for only files and exclude dotfiles
-        all_files = sorted(
-            [f for f in RAW_FILES_DIR.rglob('*') if f.is_file() and not f.name.startswith('.')], 
-            key=os.path.getmtime, 
-            reverse=True
-        )
+        # 1. Fast Count
+        file_count = sum(1 for _ in RAW_FILES_DIR.rglob('*') if _.is_file() and not _.name.startswith('.'))
         
-        files = [{
-            "Filename": str(f.relative_to(RAW_FILES_DIR)), # Use relative path for clarity
+        if file_count == 0:
+            return [], 0
+        
+        # Get iterator
+        files_iter = (f for f in RAW_FILES_DIR.rglob('*') if f.is_file() and not f.name.startswith('.'))
+        
+        # Take first 'limit' files (much faster than converting 8000 to list)
+        files_subset = []
+        for _, f in zip(range(limit), files_iter):
+            files_subset.append(f)
+            
+        files_formatted = [{
+            "Filename": str(f.relative_to(RAW_FILES_DIR)),
             "Size (KB)": f"{f.stat().st_size/1024:.1f}",
             "Modified": datetime.fromtimestamp(f.stat().st_mtime).strftime('%H:%M:%S')
-        } for f in all_files[:limit]]
+        } for f in files_subset]
         
-        return files, len(all_files)
+        return files_formatted, file_count
     except Exception:
         return [], 0
 

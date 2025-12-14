@@ -41,7 +41,6 @@ def validate_metadata(metadata: Dict[str, Any]) -> bool:
     
     for field in required_fields:
         val = metadata.get(field)
-        # Check existence and non-empty string in one go
         if not val or not isinstance(val, str):
             logger.debug(f"Metadata invalid/missing field '{field}': {val}")
             return False
@@ -56,8 +55,7 @@ def split_document(
     chunk_size: Optional[int] = None
 ) -> List[Document]:
     """
-    Split a document into semantic chunks.
-    OPTIMIZED: Pre-compiled regex, parameter aliasing, and single metadata pass.
+    Split a document into semantic chunks with NOISE FILTERING.
     """
     # 2. Generate Metadata (ONCE per file)
     if add_tags_llm:
@@ -74,6 +72,7 @@ def split_document(
         chunk_overlap=chunk_overlap,
         length_function=len,
         is_separator_regex=False,
+        # We prefer splitting at double newlines, then headers, then single lines
         separators=["\n\n", "\n##", "\n###", "\n", ". ", " ", ""],
         keep_separator=True
     )
@@ -87,7 +86,39 @@ def split_document(
         doc.page_content = content
 
         # 5. Split
-        doc_chunks = text_splitter.split_documents([doc])
+        raw_chunks = text_splitter.split_documents([doc])
+
+        valid_chunks = []
+        for chunk in raw_chunks:
+            text = chunk.page_content.strip()
+            
+            # A. Skip Empty
+            if not text:
+                continue
+                
+            # B. Skip "Header Orphans" (The specific cause of your issue)
+            # If chunk starts with '#' (Header), is short, and has few newlines, it's a detached title.
+            if text.startswith('#') and len(text) < 150 and text.count('\n') < 2:
+                continue
+                
+            # C. Skip Noise
+            if len(text) < 50:
+                continue
+                
+            valid_chunks.append(chunk)
+
+        # 3. Fallback: If strict filtering removed everything, keep original if it had substance
+        if not valid_chunks and len(doc.page_content) > 100:
+             valid_chunks = raw_chunks
+
+        doc_chunks = valid_chunks
+
+        
+        if not doc_chunks:
+            # If everything was filtered (rare), keep the original valid chunks to avoid total data loss
+            # or return empty if the doc was just garbage.
+            if len(doc.page_content) > 50:
+                 doc_chunks = raw_chunks
 
         # Limit Chunks
         if len(doc_chunks) > max_total_chunks:
@@ -100,12 +131,10 @@ def split_document(
         total_chunks = len(doc_chunks)
         source = doc.metadata.get("source", "unknown")
         
-        # Extract base file metadata once
         file_metadata = extract_metadata(source)
         base_timestamp = datetime.now().isoformat()
 
         for i, chunk in enumerate(doc_chunks):
-            # Fast dictionary merge
             merged_metadata = file_metadata.copy()
             merged_metadata.update(chunk.metadata)
             merged_metadata.update({
@@ -124,10 +153,9 @@ def split_document(
         logger.error(f"Failed to split document {source}: {e}")
         return []
 
+
 def initialize_chroma_vectorstore(chroma_path: Path, reset: bool = False) -> Optional[Chroma]:
-    """
-    Initialize or load the Chroma vectorstore with robust reset logic.
-    """
+    """Initialize or load the Chroma vectorstore with robust reset logic."""
     try:
         embedding_function = get_embedding_function()
         path_str = str(chroma_path)
@@ -136,59 +164,39 @@ def initialize_chroma_vectorstore(chroma_path: Path, reset: bool = False) -> Opt
             logger.info(f"Resetting ChromaDB at {path_str}...")
             if chroma_path.exists():
                 shutil.rmtree(chroma_path)
-            # Re-create parent directory just in case
             chroma_path.parent.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Initializing ChromaDB at {path_str}")
-        
         vectorstore = Chroma(
             persist_directory=path_str, 
             embedding_function=embedding_function
         )
-        
         return vectorstore
-
     except Exception as e:
         logger.error(f"Error managing ChromaDB at {chroma_path}: {e}")
         return None
 
 def manage_db_configuration(db_dir: Path, rag_type: str, args) -> None:
-    """
-    Validates existing DB configuration against requested arguments.
-    Saves new configuration if resetting or creating new.
-    Exits the program if there is a mismatch to protect data integrity.
-    """
     config_path = db_dir / "db_config.json"
-    
-    # 1. Validation Logic
     if config_path.exists() and not args.reset:
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 existing = json.load(f)
-                
-            # Check Critical Parameters
             old_chunk = existing.get("chunk_size")
             old_overlap = existing.get("chunk_overlap")
-            
-            # Only validate if the existing config actually has these fields
             if old_chunk is not None:
                 if old_chunk != args.chunk_size or old_overlap != args.chunk_overlap:
                     logger.error(f"⛔ CONFIGURATION MISMATCH for '{args.db_name}'")
                     logger.error(f"   Stored:    Chunk={old_chunk}, Overlap={old_overlap}")
                     logger.error(f"   Requested: Chunk={args.chunk_size}, Overlap={args.chunk_overlap}")
-                    logger.error("   Action: Use --reset to overwrite, or match the existing parameters.")
                     sys.exit(1)
-            
             logger.info("✅ Configuration match verified.")
-            
         except Exception as e:
             logger.warning(f"Could not read existing config: {e}")
 
-    # 2. Save/Update Logic (On Reset, New Creation, or adopting Legacy DB)
     if args.reset or not config_path.exists():
         if not args.reset and db_dir.exists() and any(db_dir.iterdir()):
              logger.warning("Adopting existing legacy database: creating configuration file.")
-             
         db_dir.mkdir(parents=True, exist_ok=True)
         try:
             with open(config_path, "w", encoding="utf-8") as f:

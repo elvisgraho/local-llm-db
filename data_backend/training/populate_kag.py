@@ -213,7 +213,9 @@ def main():
                     pbar.update(len(batch))
 
         if len(all_embeddings) != len(all_chunks):
-             raise RuntimeError(f"Embedding mismatch: {len(all_chunks)} chunks vs {len(all_embeddings)} vectors.")
+             logger.critical(f"DATA CORRUPTION: Chunks ({len(all_chunks)}) != Embeddings ({len(all_embeddings)})")
+             logger.critical("Aborting graph construction to prevent mismatched data.")
+             sys.exit(1)
 
         # 5. Build Graph
         logger.info("Building Knowledge Graph...")

@@ -157,21 +157,24 @@ def validate_metadata_field(field_name: str, value: Any) -> Any:
 def extract_text_parts(text: str, part_size: int = 1800, part_count: int = 17) -> str:
     """
     Picks n uniformly spaced parts of size part_size from the text.
-    If the text is too short, returns the whole text.
+    Optimized to prevent ZeroDivisionError and logical indexing errors.
     """
     L = len(text)
-    num_parts = part_count
-    if L <= part_size * num_parts:
+    
+    # If text is shorter than total requested size, return all of it
+    if L <= part_size * part_count:
         return text
 
     if part_count <= 1:
-        return text[part_size:]
+        return text[:part_size]
 
     max_start = L - part_size
     parts = []
 
-    for i in range(num_parts):
-        start = int(i * max_start / (num_parts - 1))
+    divisor = part_count - 1 if part_count > 1 else 1
+
+    for i in range(part_count):
+        start = int(i * max_start / divisor)
         parts.append(text[start : start + part_size])
 
     return "".join(parts)
