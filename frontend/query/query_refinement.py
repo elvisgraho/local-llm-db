@@ -6,8 +6,9 @@ from query.data_service import data_service
 logger = logging.getLogger(__name__)
 
 # Constants
-VECTOR_CAPACITY_CHARS = 1000 
-DEFAULT_TOP_N_QUERY = 15
+# If a query is longer than this, it's likely a log paste or code dump.
+# We summarize it to prevent "context stuffing" the retrieval.
+LOG_DUMP_THRESHOLD_CHARS = 1000 
 
 class KeyBERTAdapter:
     """
@@ -54,99 +55,86 @@ class QueryProcessor:
         except Exception:
             return None
 
-    def _extract_keywords_raw(self, text: str, top_n: int = 10, use_mmr: bool = True) -> List[Tuple[str, float]]:
+    def _extract_keywords(self, text: str, top_n: int = 5) -> List[str]:
         """
-        Returns the raw list of (keyword, score) tuples. 
-        Used for internal logic to determine query density.
+        Extracts keywords using general semantic density.
+        
+        CRITICAL CHANGE: stop_words=None.
+        In cybersecurity and coding, 'import', 'from', 'who', 'am', 'i' are 
+        critical tokens. We must not strip them.
         """
         model = self._get_model()
         if not model or not text.strip():
             return []
 
         try:
-            # We use a lower diversity here to ensure we catch all relevant topics
-            # to judge density, before filtering.
             keywords = model.extract_keywords(
                 text, 
-                keyphrase_ngram_range=(1, 2), 
-                stop_words='english', 
-                use_mmr=use_mmr,
-                diversity=0.5, 
+                keyphrase_ngram_range=(1, 2), # Captures "buffer overflow", "syntax error"
+                stop_words=None,              # GENERALIZATION: Preserves code/shell syntax
+                use_mmr=True,                 # Maximize diversity of keywords
+                diversity=0.3,                # Low diversity to stay focused on topic
                 top_n=top_n
             )
-            return keywords
+            return [kw[0] for kw in keywords]
         except Exception as e:
             logger.warning(f"KeyBERT extraction failed: {e}")
+            # Fallback: if extraction fails, return empty so we default to raw text
             return []
 
     def process_query(self, query_text: str, conversation_history: Optional[List[Dict]] = None) -> str:
         """
-        Constructs the optimal retrieval query by fusing History Anchors with User Intent.
+        Prepares the optimal query for Hybrid Search (Vector + Keyword).
         
         Strategy:
-        1. Extract Keywords from Current Query.
-        2. Check Semantic Density: 
-           - If Query has < 2 strong keywords, it is "Context Dependent" (e.g. "Why?", "It failed").
-           - If Query has many keywords, it is "Self Contained".
-        3. Dynamically inject history based on Density.
+        1. Identify if input is a "Log Dump" or "Natural Question".
+        2. If Log Dump -> Extract semantic keywords (reduce noise).
+        3. If Natural Question -> Keep raw text (preserve specificity).
+        4. Inject 'Anchors' from conversation history to resolve ambiguity (e.g., "it", "that function").
         """
-        # --- Step 1: Analyze Current Query Density ---
-        # We try to extract up to 10 keywords.
-        query_kw_tuples = self._extract_keywords_raw(query_text, top_n=10, use_mmr=True)
         
-        # A "Strong" keyword is one that isn't just a stopword (KeyBERT handles stopwords, 
-        # but we also check if the list is empty).
-        query_keywords = [kw[0] for kw in query_kw_tuples]
+        # --- Step 1: Input Analysis ---
+        is_log_dump = len(query_text) > LOG_DUMP_THRESHOLD_CHARS
         
-        # Determine Dependency
-        # If we found 0 or 1 keyword, the user likely typed "Why?" or "Tell me more".
-        # Even "Java" (1 keyword) benefits from history context to know *what* about Java.
-        # "Python Loop Error" (3 keywords) is specific.
-        is_context_dependent = len(query_keywords) < 2
+        cleaned_query = query_text
         
-        # --- Step 2: Handle Input Capacity (Noise Reduction) ---
-        if len(query_text) > VECTOR_CAPACITY_CHARS:
-            # If text is huge (logs), we MUST use the extracted keywords
-            refined_query = " ".join(query_keywords)
-        else:
-            # If text fits, keep raw text to preserve syntax/grammar
-            refined_query = query_text
-
-        # --- Step 3: Dynamic History Injection ---
-        history_anchors = ""
+        # --- Step 2: Query Refinement ---
+        if is_log_dump:
+            # If user pastes a massive error log, the vector search will dilute.
+            # We extract the top 10 most semantic terms from the log.
+            # This turns a 2000-char stack trace into "NullPointerException authentication failure timeout"
+            extracted = self._extract_keywords(query_text, top_n=15)
+            if extracted:
+                cleaned_query = " ".join(extracted)
+        
+        # --- Step 3: History Context Injection (Augmentation) ---
+        history_augmentation = ""
         
         if conversation_history:
-            # logic: If the query is context dependent, we need DEEP history.
-            # If the query is specific, we need LIGHT history (or none) to avoid vector pollution.
+            # logic: We want to grab the "Topic" of the last interaction, not the whole text.
+            # This helps disambiguate queries like "how do I fix it?"
             
-            target_history_count = 5 if is_context_dependent else 1
+            # Get last AI response (usually contains the most relevant technical terms)
+            last_message = conversation_history[-1].get("content", "")
             
-            recent_history = conversation_history[-2:]
-            history_text = " ".join([m.get("content", "") for m in recent_history])
-            
-            if history_text.strip():
-                # Extract history keywords
-                hist_tuples = self._extract_keywords_raw(
-                    history_text, 
-                    top_n=target_history_count, 
-                    use_mmr=True
-                )
-                history_anchors = " ".join([kw[0] for kw in hist_tuples])
+            if last_message:
+                # We extract only 2-3 keywords. 
+                # Why? We want to nudge the vector, not drag it completely to the past.
+                hist_keywords = self._extract_keywords(last_message, top_n=3)
+                history_augmentation = " ".join(hist_keywords)
 
-        # --- Step 4: Semantic Fusion ---
-        # Construct the final vector search string
-        final_parts = []
+        # --- Step 4: Final Construction ---
+        # We combine the user's immediate intent with the historical context.
+        # We do NOT use labels like "Context:" because they add noise to BM25/Vector scores.
         
-        # If we have history anchors, add them as context
-        if history_anchors:
-            final_parts.append(f"Context: {history_anchors}")
+        if history_augmentation:
+            # "python loop error" + "pandas dataframe"
+            final_search_text = f"{cleaned_query} {history_augmentation}"
+        else:
+            final_search_text = cleaned_query
             
-        # Add the actual question/query
-        final_parts.append(f"Query: {refined_query}")
-        
-        final_search_text = " ".join(final_parts)
-        
-        logger.info(f"Query Processing: Dependent={is_context_dependent} | Keywords Found={len(query_keywords)} | Final Vector: {final_search_text}")
+        # Logging for observability
+        logger.info(f"Query Processed: LogDump={is_log_dump} | Context Added='{history_augmentation}'")
         
         return final_search_text
 

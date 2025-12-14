@@ -13,7 +13,7 @@ from query.llm_service import get_llm_response
 from query.global_vars import (
     RAG_SIMILARITY_THRESHOLD
 )
-from query.query_helpers import _calculate_available_context
+from query.query_helpers import calculate_available_context
 from query.retrieval import (
     _retrieve_semantic,
     _retrieve_keyword,
@@ -56,7 +56,7 @@ def _prepare_retrieval_context(
     )
     
     # 2. Context Calculation
-    truncated_history, available_tokens = _calculate_available_context(
+    truncated_history, available_tokens = calculate_available_context(
         query_text=query_text,
         conversation_history=conversation_history,
         llm_config=llm_config

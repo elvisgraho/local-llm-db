@@ -85,7 +85,7 @@ def _apply_metadata_filter(
     logger.debug(f"Metadata filter: {len(docs_with_scores)} -> {len(filtered)} docs.")
     return filtered
 
-def _calculate_available_context(
+def calculate_available_context(
     query_text: str,
     conversation_history: Optional[List[Dict[str, str]]],
     llm_config: Optional[Dict[str, Any]],
