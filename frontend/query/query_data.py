@@ -10,21 +10,17 @@ from query.database_paths import DEFAULT_DB_NAME
 from query.data_service import data_service
 from query.templates import DIRECT_TEMPLATE
 from query.llm_service import get_llm_response
-from query.global_vars import (
-    RAG_SIMILARITY_THRESHOLD
-)
+from query.global_vars import RAG_SIMILARITY_THRESHOLD
 from query.query_helpers import calculate_available_context
 from query.retrieval import (
     _retrieve_semantic,
-    _retrieve_keyword,
-    MAX_INITIAL_RETRIEVAL_LIMIT
+    _retrieve_keyword
 )
 from query.processing import (
     _rerank_results,
     select_docs_for_context,
     _generate_response
 )
-
 from query.query_refinement import query_processor
 
 # Configure logging
@@ -37,7 +33,6 @@ logger = logging.getLogger(__name__)
 # --- Helper Functions ---
 
 def _get_db_or_raise(rag_type: str, db_name: str) -> Any:
-    """Helper to retrieve Chroma DB or raise error if missing."""
     db = data_service.get_chroma_db(rag_type, db_name)
     if not db:
         raise ValueError(f"Chroma DB '{rag_type}/{db_name}' not loaded.")
@@ -54,7 +49,6 @@ def _prepare_retrieval_context(
         conversation_history
     )
     
-    # 2. Context Calculation
     truncated_history, available_tokens = calculate_available_context(
         query_text=query_text,
         conversation_history=conversation_history,
@@ -71,15 +65,9 @@ def query_direct(
     verify: Optional[bool] = False,
     conversation_history: Optional[List[Dict[str, str]]] = None
 ) -> Dict[str, Union[str, List[str]]]:
-    """
-    Query the model directly without using RAG.
-    """
     try:
         logger.debug("Processing direct query")
         prompt_template = ChatPromptTemplate.from_template(DIRECT_TEMPLATE)
-        
-        # If DIRECT_TEMPLATE uses a history placeholder, format it here. 
-        # For simplicity, assuming standard template.
         prompt_val = prompt_template.invoke({"question": query_text})
         prompt_str = prompt_val.to_string() 
 
@@ -105,9 +93,6 @@ def query_rag(
     conversation_history: Optional[List[Dict[str, str]]] = None,
     metadata_filter: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Union[str, List[str], int]]:
-    """
-    Query using standard RAG (Semantic + Keyword + Reranking).
-    """
     try:
         # 1. Prepare
         retrieval_query, history, tokens = _prepare_retrieval_context(
@@ -118,10 +103,12 @@ def query_rag(
         db = _get_db_or_raise('rag', db_name)
         
         # 3. Retrieve
-        # We fetch 3x more documents initially to give the Reranker enough candidates to sort.
-        # But we enforce a sanity limit (e.g., don't fetch 300 docs if user asks for 100).
-        k_initial = min(top_k * 3, MAX_INITIAL_RETRIEVAL_LIMIT)
-        logger.info(f"RAG initial retrieval k = {k_initial} (Target Top-K: {top_k})")
+        # ADJUSTMENT: _retrieve_semantic now multiplies by 4 internally.
+        # We only need a slight buffer here to merge with keyword results.
+        k_initial = min(int(top_k * 1.5), 100)
+        if k_initial < top_k: k_initial = top_k
+        
+        logger.info(f"RAG initial retrieval k = {k_initial}")
 
         semantic_results = _retrieve_semantic(retrieval_query, db, k_initial, metadata_filter)
         keyword_results = _retrieve_keyword(retrieval_query, db, 'rag', db_name, k_initial, metadata_filter)
@@ -135,10 +122,7 @@ def query_rag(
         initial_docs_scores = sorted(list(combined_dict.values()), key=lambda x: x[1], reverse=True)
 
         # 5. Rerank & Select
-        # Rerank and keep only 'top_k' best matches
         reranked_docs_scores = _rerank_results(retrieval_query, initial_docs_scores, top_k)
-        
-        # Select final docs (cutting off if context limit exceeded)
         final_docs, sources, estimated_tokens = select_docs_for_context(reranked_docs_scores, tokens)
 
         # 6. Generate
@@ -167,9 +151,6 @@ def query_lightrag(
     conversation_history: Optional[List[Dict[str, str]]] = None,
     metadata_filter: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Union[str, List[str], int]]:
-    """
-    Query using LightRAG (Semantic + Similarity Threshold).
-    """
     try:
         # 1. Prepare
         retrieval_query, history, tokens = _prepare_retrieval_context(
@@ -180,7 +161,7 @@ def query_lightrag(
         db = _get_db_or_raise('lightrag', db_name)
 
         # 3. Retrieve
-        k_initial = min(top_k * 3, MAX_INITIAL_RETRIEVAL_LIMIT)
+        k_initial = min(int(top_k * 1.5), 100)
         logger.info(f"LightRAG initial retrieval k = {k_initial}")
         
         semantic_results = _retrieve_semantic(retrieval_query, db, k_initial, metadata_filter)
@@ -201,7 +182,6 @@ def query_lightrag(
             }
 
         # 5. Rerank & Select
-        # Use top_k here
         reranked_docs_scores = _rerank_results(retrieval_query, threshold_filtered_docs, top_k)
         final_docs, sources, estimated_tokens = select_docs_for_context(reranked_docs_scores, tokens)
 
@@ -222,24 +202,21 @@ def query_lightrag(
         raise
 
 # --- Main Execution ---
-
 def main():
     parser = argparse.ArgumentParser(description="Run RAG queries using Modern LCEL stack.")
     parser.add_argument("query_text", type=str, help="The query text.")
     parser.add_argument("--rag_type", type=str, choices=['rag', 'direct', 'lightrag'], default='rag')
     parser.add_argument("--db_name", type=str, default=DEFAULT_DB_NAME)
-    parser.add_argument("--optimize", action="store_true")
-    parser.add_argument("--hybrid", action="store_true")
-    
-    # New CLI arg for top_k
+    parser.add_argument("--hybrid", action="store_true", help="Enable Hybrid (Graph+Vector) instructions.")
     parser.add_argument("--top_k", type=int, default=5, help="Number of documents to retrieve.")
+    parser.add_argument("--verify", action="store_true", help="Enable LLM self-correction/verification.")
 
     args = parser.parse_args()
 
     try:
         default_llm_config = {'provider': 'local', 'modelName': ''}
         
-        logger.info(f"CLI Start: Type={args.rag_type.upper()} | DB={args.db_name} | TopK={args.top_k}")
+        logger.info(f"CLI Start: Type={args.rag_type.upper()} | DB={args.db_name} | TopK={args.top_k} | Verify={args.verify}")
 
         query_func_map = {
             'direct': query_direct,
@@ -249,19 +226,20 @@ def main():
 
         query_func = query_func_map[args.rag_type]
 
+        # Base arguments for ALL functions (Direct, RAG, LightRAG)
         func_args = {
             "query_text": args.query_text,
             "llm_config": default_llm_config,
-            "conversation_history": None 
+            "conversation_history": None,
+            "verify": args.verify 
         }
         
+        # Add RAG-specific arguments
         if args.rag_type != 'direct':
             func_args.update({
-                "optimize": args.optimize,
                 "hybrid": args.hybrid,
-                "rag_type": args.rag_type,
                 "db_name": args.db_name,
-                "top_k": args.top_k  # Pass CLI arg
+                "top_k": args.top_k
             })
 
         result = query_func(**func_args)
@@ -272,6 +250,3 @@ def main():
     except Exception as e:
         logger.error(f"Critical error: {str(e)}", exc_info=True)
         print(f"Error: {str(e)}")
-
-if __name__ == "__main__":
-    main()

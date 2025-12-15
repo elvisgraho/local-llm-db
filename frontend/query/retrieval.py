@@ -7,13 +7,10 @@ from langchain_core.vectorstores import VectorStore
 
 # Local Imports
 from query.data_service import data_service
+# Ensure query_helpers has the NEW logic-aware _apply_metadata_filter
 from query.query_helpers import _apply_metadata_filter
 
 logger = logging.getLogger(__name__)
-
-# Constants
-INITIAL_RETRIEVAL_MULTIPLIER = 2  # Retrieve more docs initially for better reranking
-MAX_INITIAL_RETRIEVAL_LIMIT = 50  # Hard limit on initial document retrieval count
 
 def _retrieve_semantic(
     query_text: str, 
@@ -22,30 +19,38 @@ def _retrieve_semantic(
     metadata_filter: Optional[Dict[str, Any]]
 ) -> List[Tuple[Document, float]]:
     """
-    Performs semantic search using ChromaDB with dimension mismatch safeguard.
+    Performs semantic search with Post-Retrieval Filtering.
     """
     try:
-        logger.info(f"Performing semantic search (k={k}) with filter: {metadata_filter}")
+        # Fetch 4x candidates to account for Python-side filtering attrition
+        # e.g., If k=10, we fetch 40, filter down to ~15, then return top 10.
+        fetch_k = k * 4
         
-        results = db.similarity_search_with_score(
+        # Hard cap the internal fetch to prevent retrieving entire DB
+        # If MAX_INITIAL=100, k=100 -> fetch_k=400. This is upper bound of safety.
+        if fetch_k > 400: 
+            fetch_k = 400
+
+        logger.debug(f"Semantic Search: Fetching {fetch_k} candidates for post-filtering.")
+        
+        # 1. Retrieve Raw (No DB Filter)
+        raw_results = db.similarity_search_with_score(
             query_text, 
-            k=k, 
-            filter=metadata_filter 
+            k=fetch_k
         )
-        return results
+
+        # 2. Apply Logic Filter in Python
+        filtered_results = _apply_metadata_filter(raw_results, metadata_filter)
+
+        # 3. Return top k
+        return filtered_results[:k]
 
     except Exception as e:
         error_msg = str(e)
-        if "dimension" in error_msg and ("expecting" in error_msg or "got" in error_msg):
-            logger.error(
-                f"CONFIGURATION ERROR: Embedding Dimension Mismatch.\n"
-                f"The Database expects a different model than the one currently active.\n"
-                f"Details: {error_msg}\n"
-                f"Fix: Update 'global_vars.py' to use the embedding model that matches your DB."
-            )
-            return []
-            
-        logger.error(f"Error during semantic search: {e}", exc_info=True)
+        if "dimension" in error_msg:
+             logger.error("Configuration Error: Embedding Dimension Mismatch.")
+        else:
+             logger.error(f"Error during semantic search: {e}", exc_info=True)
         return []
 
 def _retrieve_keyword(
@@ -59,82 +64,52 @@ def _retrieve_keyword(
     """
     Performs keyword search using the cached BM25 index.
     """
-    # Access cache directly (Acknowledging internal implementation detail of DataService)
-    # Ideally DataService would expose a method like `get_bm25_search_results`
     bm25_data = data_service._bm25_cache.get((rag_type, db_name))
     
     if not bm25_data or bm25_data[0] is None:
-        # Try to trigger a load if missing, or fail gracefully
         data_service.get_bm25_index(rag_type, db_name)
         bm25_data = data_service._bm25_cache.get((rag_type, db_name))
         
     if not bm25_data or bm25_data[0] is None:
-        logger.warning(f"BM25 index not available for {rag_type}/{db_name}. Skipping keyword search.")
+        logger.warning(f"BM25 index missing for {rag_type}/{db_name}.")
         return []
 
     bm25, bm25_corpus, bm25_doc_ids = bm25_data
 
     try:
-        logger.info(f"Performing keyword search (BM25, k={k}).")
-        
-        # Simple tokenization: Lowercase and split
         tokenized_query = query_text.lower().split()
-        
         bm25_scores = bm25.get_scores(tokenized_query)
         
-        # Zip and Sort: (ID, Corpus, Score)
-        # We assume bm25_doc_ids maps 1:1 to corpus indices
-        bm25_scored_docs_info = sorted(
-            zip(bm25_doc_ids, bm25_corpus, bm25_scores), 
-            key=lambda x: x[2], 
-            reverse=True
-        )
+        # Get top indices (k * 4 for filtering buffer)
+        top_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:k*4]
         
-        top_bm25_candidates = [
-            (doc_id, score) 
-            for doc_id, _, score in bm25_scored_docs_info 
-            if score > 0
-        ][:k]
-        
-        top_bm25_ids = [doc_id for doc_id, _ in top_bm25_candidates]
+        # Filter zero scores
+        top_candidates_indices = [i for i in top_indices if bm25_scores[i] > 0]
 
-        if not top_bm25_ids:
+        if not top_candidates_indices:
             return []
 
-        # Retrieve full documents from Chroma by ID
-        chroma_bm25_docs_data = db.get(ids=top_bm25_ids, include=["metadatas", "documents"])
-        
-        bm25_docs_with_scores = []
-        id_to_score = dict(top_bm25_candidates)
-        
-        if chroma_bm25_docs_data and chroma_bm25_docs_data.get("ids"):
-            # Handle case where 'documents' might be None or a list containing Nones
-            retrieved_contents = chroma_bm25_docs_data.get("documents")
-            if retrieved_contents is None:
-                retrieved_contents = [None] * len(chroma_bm25_docs_data["ids"])
+        # Map to IDs
+        target_ids = [bm25_doc_ids[i] for i in top_candidates_indices]
+        id_to_score = {bm25_doc_ids[i]: bm25_scores[i] for i in top_candidates_indices}
 
-            for doc_id, content, metadata in zip(
-                chroma_bm25_docs_data["ids"], 
-                retrieved_contents, 
-                chroma_bm25_docs_data["metadatas"]
-            ):
-                final_content = content
-                if not final_content and metadata:
-                    # Check common keys for content stored in metadata
-                    final_content = metadata.get("page_content") or metadata.get("text") or metadata.get("content") or ""
-                
-                # If still empty, skip it immediately
-                if not final_content or not final_content.strip():
-                    continue
-                    
-                doc = Document(page_content=final_content, metadata=metadata)
-                score = id_to_score.get(doc_id, 0.0)
-                
-                # Only add if we actually have content to search against
-                if final_content.strip():
-                    bm25_docs_with_scores.append((doc, score))
+        # Retrieve docs
+        chroma_data = db.get(ids=target_ids, include=["metadatas", "documents"])
+        
+        results = []
+        if chroma_data and chroma_data.get("ids"):
+            ids = chroma_data["ids"]
+            docs = chroma_data.get("documents") or [None] * len(ids)
+            metas = chroma_data.get("metadatas") or [{}] * len(ids)
 
-        return _apply_metadata_filter(bm25_docs_with_scores, metadata_filter)
+            for doc_id, text, meta in zip(ids, docs, metas):
+                final_text = text or meta.get("page_content") or ""
+                if final_text.strip():
+                    doc = Document(page_content=final_text, metadata=meta)
+                    score = id_to_score.get(doc_id, 0.0)
+                    results.append((doc, score))
+
+        return _apply_metadata_filter(results, metadata_filter)[:k]
         
     except Exception as e:
         logger.error(f"Error during BM25 search: {e}", exc_info=True)

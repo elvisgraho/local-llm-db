@@ -221,7 +221,14 @@ def _generate_response(
     # 6. CONSTRUCT USER PROMPT
     question_block = QUESTION_BLOCK.format(question=query_text)
     context_block = CONTEXT_BLOCK.format(context_type=context_type_label, context=context_text)
-    sources_block = SOURCES_BLOCK.format(sources=sources)
+    # Convert list ['a.pdf', 'b.txt'] -> "a.pdf, b.txt"
+    # This prevents brackets and quotes from confusing the model's source citation style.
+    if isinstance(sources, list):
+        sources_str = ", ".join(sources)
+    else:
+        sources_str = str(sources)
+
+    sources_block = SOURCES_BLOCK.format(sources=sources_str)
     
     relationships_block = EMPTY_STRING
 

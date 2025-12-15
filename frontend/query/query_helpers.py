@@ -1,11 +1,6 @@
 import logging
+import tiktoken
 from typing import Any, Optional, List, Dict, Tuple
-
-try:
-    import tiktoken
-except ImportError:
-    tiktoken = None
-
 # Modern LangChain Core Import
 from langchain_core.documents import Document
 
@@ -14,9 +9,7 @@ from query.llm_service import get_model_context_length, truncate_history
 from query.templates import (
     RAG_USER_TEMPLATE,
     STRICT_CONTEXT_INSTRUCTIONS,
-    QUESTION_BLOCK,
-    STRICT_CONTEXT_INSTRUCTIONS, 
-    QUESTION_BLOCK,
+    QUESTION_BLOCK
 )
 
 # Configure Logger
@@ -67,18 +60,36 @@ def _apply_metadata_filter(
     metadata_filter: Optional[Dict[str, Any]]
 ) -> List[Tuple[Document, float]]:
     """
-    Applies exact-match metadata filtering to a list of (Document, score) tuples.
+    Applies logic-aware filtering. 
+    Handles flattened strings (e.g. "recon, poc") by splitting and checking membership.
     """
     if not metadata_filter:
         return docs_with_scores
 
     filtered = []
     for doc, score in docs_with_scores:
-        # Check if all filter criteria match document metadata
-        match = all(
-            doc.metadata.get(key) == value 
-            for key, value in metadata_filter.items()
-        )
+        match = True
+        for key, target_val in metadata_filter.items():
+            # 1. Get actual value (default to empty string to prevent NoneType error)
+            actual_val = doc.metadata.get(key, "")
+            
+            # 2. Normalize to string for comparison
+            actual_str = str(actual_val)
+            target_str = str(target_val)
+
+            # 3. Check Membership (Split by comma if it looks like a list)
+            # This handles "recon, poc" containing "poc"
+            if "," in actual_str:
+                actual_list = [item.strip() for item in actual_str.split(",")]
+                if target_str not in actual_list:
+                    match = False
+                    break
+            else:
+                # Fallback to direct equality or substring if strict matching isn't required
+                if actual_str != target_str:
+                    match = False
+                    break
+        
         if match:
             filtered.append((doc, score))
             

@@ -61,7 +61,7 @@ DIRECT_TEMPLATE = "Answer based on general knowledge and chat context.\nQuestion
 VERIFY_TEMPLATE = """
 **INSTRUCTION: TECHNICAL AUDIT & SYNTHESIS**
 
-You are a Principal Security Researcher. Your task is to rigorously critique and reconstruct the `## INITIAL ANSWER` using the `## CONTEXT` as the ground truth.
+You are a Master Researcher. Your task is to rigorously critique and reconstruct the `## INITIAL ANSWER` using the `## CONTEXT` as the ground truth.
 
 **OPERATIONAL LOGIC:**
 1. **Skeptical Validation:** Assume the `## INITIAL ANSWER` contains subtle flaws. Mentally execute all commands/code. Discard any logic that fails syntax checks or assumes defaults contradicted by the `## CONTEXT`.
