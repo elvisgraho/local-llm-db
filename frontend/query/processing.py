@@ -13,9 +13,8 @@ from query.query_helpers import _estimate_tokens, _reorder_documents_for_context
 from query.templates import (
     RAG_SYSTEM_CONSTRUCTION, RAG_USER_TEMPLATE,
     STRICT_CONTEXT_INSTRUCTIONS, HYBRID_INSTRUCTIONS,
-    CONTEXT_BLOCK, SOURCES_BLOCK, RELATIONSHIPS_BLOCK, QUESTION_BLOCK,
-    STANDARD_CONTEXT_TYPE,
-    EMPTY_STRING
+    CONTEXT_BLOCK, SOURCES_BLOCK, QUESTION_BLOCK,
+    STANDARD_CONTEXT_TYPE
 )
 
 logger = logging.getLogger(__name__)
@@ -229,12 +228,9 @@ def _generate_response(
         sources_str = str(sources)
 
     sources_block = SOURCES_BLOCK.format(sources=sources_str)
-    
-    relationships_block = EMPTY_STRING
 
     final_user_prompt = RAG_USER_TEMPLATE.format(
         context_block_placeholder=context_block,
-        relationships_block_placeholder=relationships_block,
         sources_block_placeholder=sources_block,
         question_block_placeholder=question_block
     )
