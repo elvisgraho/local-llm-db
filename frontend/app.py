@@ -1,357 +1,70 @@
 import streamlit as st
-import os
 import sys
-import time
+import os
 import logging
 
-# --- Path Setup ---
+#Path Setup
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
-# --- Internal Imports ---
-from query.query_data import query_direct, query_rag, query_lightrag
+from interface.state import StateManager
+from interface.styles import apply_custom_styles
+from interface.sidebar import render_sidebar
+from interface.chat import render_chat_area
+from interface.processor import process_user_input
 from query.session_manager import session_manager
 
-# --- New Utils Import ---
-import app_utils
-import app_settings_ui
+# Logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Configuration ---
-st.set_page_config(
-    page_title="RAG Architect",
-    page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Config
+st.set_page_config(page_title="RAG Architect", page_icon="🧠", layout="wide", initial_sidebar_state="expanded")
 
-# Apply Styles from Utils
-app_utils.apply_custom_css()
-
-# --- Helper: Optimistic Session Management ---
-def get_or_refresh_sessions(force_refresh=False):
-    """
-    Loads sessions from disk only if not in state or forced.
-    This drastically reduces disk I/O on every interaction.
-    """
-    if "session_list" not in st.session_state or force_refresh:
-        st.session_state.session_list = session_manager.list_sessions()
-    return st.session_state.session_list
-
-def handle_delete(session_id):
-    """
-    Deletes session from disk AND state immediately for instant UI feedback.
-    """
-    # 1. Delete from Disk
-    session_manager.delete_session(session_id)
-    
-    # 2. Delete from Memory (Optimistic UI update)
-    st.session_state.session_list = [
-        s for s in st.session_state.session_list if s["id"] != session_id
-    ]
-    
-    # 3. Handle Active Session Switch
-    if st.session_state.active_session_id == session_id:
-        if st.session_state.session_list:
-            st.session_state.active_session_id = st.session_state.session_list[0]["id"]
-        else:
-            # No chats left, create new one immediately
-            new_sess = session_manager.create_session()
-            st.session_state.session_list.insert(0, {
-                "id": new_sess["id"],
-                "title": new_sess["title"],
-                "updated_at": new_sess["updated_at"]
-            })
-            st.session_state.active_session_id = new_sess["id"]
-    
-    st.rerun()
-
-# --- Main Application ---
 def main():
-    # ==========================================
-    # SIDEBAR - SESSION MANAGEMENT
-    # ==========================================
+    # 1. Init State
+    state = StateManager()
+    state.initialize()
+
+    # 2. Apply CSS
+    apply_custom_styles()
+
+    # 3. Load Session Data FIRST
+    # (We need this data to calculate tokens in the sidebar)
+    active_id = state.get_active_session_id()
+    current_session = None
     
-    # Ensure session list is loaded
-    sessions = get_or_refresh_sessions()
-
-    # Ensure Active Session ID
-    if "active_session_id" not in st.session_state:
-        if sessions:
-            st.session_state.active_session_id = sessions[0]["id"]
-        else:
-            new_sess = session_manager.create_session()
-            sessions.insert(0, {
-                "id": new_sess["id"], 
-                "title": new_sess["title"], 
-                "updated_at": new_sess["updated_at"]
-            })
-            st.session_state.active_session_id = new_sess["id"]
-            
-    # Load actual content for current session
-    try:
-        current_session = session_manager.load_session(st.session_state.active_session_id)
-    except Exception:
-        # Fallback if file corrupt or missing
-        st.session_state.active_session_id = sessions[0]["id"] if sessions else None
-        st.rerun()
-
-    with st.sidebar:
-        st.title("🗂️ Chats")
-        
-        # New Chat Button
-        if st.button("➕ New Chat", type="primary", use_container_width=True):
-            new_sess = session_manager.create_session()
-            # Update state immediately
-            st.session_state.session_list.insert(0, {
-                "id": new_sess["id"],
-                "title": new_sess["title"],
-                "updated_at": new_sess["updated_at"]
-            })
-            st.session_state.active_session_id = new_sess["id"]
+    if active_id:
+        try:
+            current_session = session_manager.load_session(active_id)
+        except Exception as e:
+            st.error(f"Error loading session: {e}")
+            state.reset_session()
             st.rerun()
 
-        # Session List Rendering
-        active_id = st.session_state.active_session_id
-        
-        # Only render top 10 to keep DOM light
-        for s in sessions[:10]: 
-            col_name, col_del = st.columns([0.85, 0.15])
-            
-            # Truncate Title
-            clean_title = s.get("title", "Untitled")
-            label = clean_title[:22] + "..." if len(clean_title) > 25 else clean_title
-            
-            # Highlight Active
-            if s["id"] == active_id:
-                label = f"📂 {label}"
-                type_btn = "secondary" 
-            else:
-                type_btn = "secondary"
+    # 4. Render Sidebar
+    # Pass the loaded session so the Token Estimator works
+    app_config = render_sidebar(state, session_data=current_session)
 
-            # Chat Select Button
-            if col_name.button(label, key=f"btn_{s['id']}", use_container_width=True, help=s.get("title")):
-                st.session_state.active_session_id = s["id"]
-                st.rerun()
-            
-            # Delete Popover
-            with col_del.popover("✕", help="Delete Chat"):
-                st.caption("Are you sure?")
-                if st.button("🗑️ Delete", key=f"conf_del_{s['id']}", type="primary"):
-                    handle_delete(s["id"])
-        
-        if len(sessions) > 10:
-            st.caption(f"...and {len(sessions)-10} more")
-
-        st.divider()
-
-        # ==========================================
-        # SIDEBAR - SETTINGS
-        # ==========================================
-        # Unpack structured config from new UI
-        full_config = app_settings_ui.render_settings_sidebar()
-        llm_cfg = full_config["llm_config"]
-        rag_cfg = full_config["rag_config"]
-        # embedding_cfg is handled via global vars/state in callbacks
-
-        # ==========================================
-        # SIDEBAR - TOKEN ESTIMATOR
-        # ==========================================
-        curr_msgs = current_session["messages"] if current_session else []
-        sys_tokens_est = app_utils.count_tokens(llm_cfg["system_prompt"]) if llm_cfg["system_prompt"] else 0
-        
-        app_utils.render_token_estimator(
-            rag_cfg["top_k"] if rag_cfg["rag_type"] != "direct" else 0,
-            rag_cfg["history_limit"], 
-            curr_msgs, 
-            llm_cfg["context_window"],
-            sys_tokens_est
-        )
-
-    # ==========================================
-    # MAIN CONTENT AREA
-    # ==========================================
-    
-    if "active_session_id" not in st.session_state or not current_session:
-        st.warning("No active session. Create a new chat.")
+    # 5. Main Content Check
+    if not current_session:
+        st.warning("⚠️ No active session. Please create a new chat.")
         st.stop()
 
-    # Header & Title Edit
-    col_h1, col_h2 = st.columns([3, 1])
-    col_h1.subheader(f"💬 {current_session.get('title', 'Untitled')}")
-    
-    # Renaming Logic
-    new_title = col_h2.text_input("Rename", value=current_session.get("title"), label_visibility="collapsed")
-    if new_title != current_session.get("title"):
-        session_manager.update_title(current_session["id"], new_title)
-        # Update local list title to reflect change without disk reload
-        for s in st.session_state.session_list:
-            if s["id"] == current_session["id"]:
-                s["title"] = new_title
-                break
-        st.rerun()
+    # 6. Render Chat Area
+    render_chat_area(current_session, state)
 
-    # Context Injection (File Upload)
-    with st.expander("📎 Add Session Context (Upload File)"):
-        uploaded_file = st.file_uploader("Upload PDF/TXT/Code", type=['pdf', 'txt', 'py', 'md', 'json'])
-        if uploaded_file:
-            if uploaded_file.name not in current_session.get("temp_context", ""):
-                with st.spinner("Processing..."):
-                    text_content = app_utils.parse_uploaded_file(uploaded_file)
-                    current_session["temp_context"] = (current_session.get("temp_context", "") + text_content)
-                    session_manager.save_session(current_session)
-                    st.success("File added to context!")
-
-    # Warmup Resources
-    if not app_utils.warm_up_resources(): st.stop()
-
-    # Render Chat History
-    for msg in current_session["messages"]:
-        with st.chat_message(msg["role"]):
-            if msg.get("reasoning"):
-                with st.expander("💭 Reasoning", expanded=False): 
-                    st.markdown(msg["reasoning"])
-
-            # Apply formatting
-            formatted_content = app_utils.format_citations(msg["content"])
-            formatted_content = app_utils.sanitize_markdown(formatted_content)
-            
-            st.markdown(formatted_content, unsafe_allow_html=True)
-
-            if msg.get("sources"):
-                with st.expander(f"📚 Sources ({len(msg['sources'])})"):
-                    for src in msg["sources"]:
-                        st.markdown(f"📄 **{os.path.basename(src)}**\n`{src}`")
-                        
-    # ==========================================
-    # INPUT LOOP & LOGIC
-    # ==========================================
+    # 7. Input Loop
     if prompt := st.chat_input("Ask about your data..."):
-        # 1. Update UI immediately
         current_session["messages"].append({"role": "user", "content": prompt})
         session_manager.save_session(current_session)
-        with st.chat_message("user"): st.markdown(prompt)
+        st.rerun()
 
-        # 2. Smart Context Construction
-        safe_ctx_limit = llm_cfg["context_window"] - 1000 - (rag_cfg["top_k"] * 250) 
-        full_history = [{"role": m["role"], "content": m["content"]} for m in current_session["messages"][:-1]]
-        
-        # Smart Pruning
-        rag_history = app_utils.smart_prune_history(full_history, safe_ctx_limit)
-        
-        # Enforce the user slider hard cap
-        if rag_cfg["history_limit"] < len(rag_history):
-            rag_history = rag_history[-rag_cfg["history_limit"]:]
+    # 8. Processing Hook
+    if current_session["messages"] and current_session["messages"][-1]["role"] == "user":
+        process_user_input(
+            session_data=current_session,
+            config=app_config,
+            state_manager=state
+        )
 
-        final_query = prompt
-        if current_session.get("temp_context"):
-            final_query = f"Session Context:\n{current_session['temp_context']}\n\nQuery: {prompt}"
-
-        # 3. Execution
-        with st.chat_message("assistant"):
-            start_time = time.time()
-            response_container = st.empty()
-            
-            # Status Container
-            with st.status("🧠 Orchestrating...", expanded=True) as status:
-                try:
-                    # Prepare arguments structure for query_functions
-                    # Note: We now use the structured config dictionaries
-                    common_args = {
-                        "query_text": final_query, 
-                        "llm_config": {
-                            "provider": llm_cfg["provider"], 
-                            "modelName": llm_cfg["model_name"], 
-                            "apiKey": llm_cfg["api_key"], 
-                            "api_url": llm_cfg["local_url"],
-                            "temperature": llm_cfg["temperature"], 
-                            "system_prompt": llm_cfg["system_prompt"],
-                            "context_window": llm_cfg["context_window"] 
-                        }, 
-                        "conversation_history": rag_history
-                    }
-                    
-                    # Execution Dispatch
-                    rag_type = rag_cfg["rag_type"]
-                    db_name = rag_cfg["db_name"]
-
-                    if rag_type == 'direct':
-                        status.write("Direct LLM query (no retrieval)...")
-                        response = query_direct(**common_args, verify=rag_cfg["verify"])
-                        
-                    elif db_name:
-                        status.write(f"🔍 Retrieving from **{db_name}** ({rag_type.upper()})...")
-                        strategies = {'rag': query_rag, 'lightrag': query_lightrag}
-                        
-                        # Validate strategy exists
-                        if rag_type not in strategies:
-                             raise ValueError(f"Unknown RAG strategy: {rag_type}")
-
-                        response = strategies[rag_type](
-                            **common_args, 
-                            db_name=db_name,
-                            top_k=rag_cfg["top_k"], 
-                            hybrid=rag_cfg["hybrid"],
-                            verify=rag_cfg["verify"]
-                        )
-                        src_count = len(response.get("sources", []))
-                        status.write(f"✅ Found {src_count} relevant documents.")
-                    
-                    else:
-                        # RAG selected but no DB
-                        raise ValueError(f"Please select a database for {rag_type}.")
-
-                    status.update(label="Response Generated!", state="complete", expanded=False)
-
-                except Exception as e:
-                    status.update(label="❌ Error", state="error")
-                    st.error(f"Pipeline Error: {str(e)}")
-                    logging.error(e, exc_info=True)
-                    st.stop()
-                    
-            # 4. Parse & Display
-            text = response.get("text", "")
-            sources = response.get("sources", [])
-            tokens_est = response.get("estimated_context_tokens", 0)
-            clean_text, reasoning = app_utils.parse_reasoning(text)
-
-            # Display Reasoning
-            if reasoning:
-                with st.expander("💭 Internal Thought Process", expanded=False):
-                    st.markdown(reasoning)
-
-            formatted_response = app_utils.format_citations(clean_text)
-            response_container.markdown(formatted_response, unsafe_allow_html=True)
-
-            # Source Display
-            if sources:
-                with st.expander(f"📚 Cited Sources ({len(sources)})", expanded=False):
-                    unique_sources = list(set(sources))
-                    for src in unique_sources:
-                        col_ico, col_txt = st.columns([0.05, 0.95])
-                        col_ico.text("📄")
-                        col_txt.caption(f"{os.path.basename(src)} — `{src}`")
-
-            # Footer
-            col_time, col_tok, col_feed = st.columns([0.2, 0.3, 0.5])
-            col_time.caption(f"⏱️ {time.time()-start_time:.2f}s")
-            col_tok.caption(f"🪙 {tokens_est} ctx tokens")
-
-            # 5. Save State
-            current_session["messages"].append({
-                "role": "assistant", "content": clean_text, 
-                "reasoning": reasoning, "sources": sources
-            })
-            
-            # Auto-rename logic
-            if len(current_session["messages"]) == 2:
-                new_auto_title = (clean_text[:30] + "...") if len(clean_text) > 30 else clean_text
-                current_session["title"] = new_auto_title
-                # Update local state list to avoid reload
-                for s in st.session_state.session_list:
-                    if s["id"] == current_session["id"]:
-                        s["title"] = new_auto_title
-                        break
-
-            session_manager.save_session(current_session)
-            
 if __name__ == "__main__":
     main()
