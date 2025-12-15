@@ -54,7 +54,6 @@ def get_llm_response(
     provider = config.get('provider', 'local')
     model_name = config.get('modelName') or LOCAL_MAIN_MODEL
     
-    # URL construction logic
     api_url = config.get('api_url') or LOCAL_LLM_API_URL
     clean_url = api_url.rstrip('/')
     if clean_url.endswith("/chat/completions"): api_url = clean_url
@@ -70,18 +69,14 @@ def get_llm_response(
         headers = {"Content-Type": "application/json"}
         
         messages = []
-        
-        # 1. System Prompt
         system_prompt = config.get("system_prompt")
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
              
-        # 2. History
         for entry in history:
             if entry.get('content'):
                 messages.append({"role": entry.get('role'), "content": entry.get('content')})
         
-        # 3. Current Prompt
         messages.append({"role": "user", "content": prompt})
 
         payload = {
@@ -94,47 +89,46 @@ def get_llm_response(
         }
 
         try:
-            # Shortened timeout for direct feedback, but long enough for RAG processing
+            # 1. Initial Request
             response = session.post(api_url, json=payload, headers=headers, timeout=240)
             response.raise_for_status()
+            initial_content = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
             
-            data = response.json()
-            # Some backends return reasoning separately
-            initial_content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            
-            # 2. Verification Step
+            # 2. Verification Step (Isolated Error Handling)
             if verify:
-                logger.info("Performing LLM Verification...")
+                try:
+                    logger.info("Performing LLM Verification...")
+                    clean_content = THINKING_PATTERN.sub('', initial_content).strip()
 
-                # 1. Remove Thinking Tags
-                # Some backends return reasoning separately
-                initial_content = THINKING_PATTERN.sub('', initial_content).strip()
+                    verify_content = VERIFY_TEMPLATE.format(
+                        original_prompt=prompt,
+                        initial_answer=clean_content
+                    )
+                    
+                    verify_messages = []
+                    if system_prompt:
+                        verify_messages.append({"role": "system", "content": system_prompt})
+                    verify_messages.append({"role": "user", "content": verify_content})
+                    
+                    # Create new payload for verification to avoid mutating the original
+                    v_payload = payload.copy()
+                    v_payload["messages"] = verify_messages
+                    v_payload["temperature"] = 0.1 
+                    
+                    v_response = session.post(api_url, json=v_payload, headers=headers, timeout=240)
+                    v_response.raise_for_status()
+                    return v_response.json()["choices"][0]["message"]["content"]
 
-                verify_content = VERIFY_TEMPLATE.format(
-                    original_prompt=prompt,
-                    initial_answer=initial_content
-                )
-                
-                # Reset messages for verification: System + Verify Prompt only
-                # We do not pass the full chat history again to keep context distinct
-                verify_messages = []
-                if system_prompt:
-                    verify_messages.append({"role": "system", "content": system_prompt})
-                verify_messages.append({"role": "user", "content": verify_content})
-                
-                payload["messages"] = verify_messages
-                payload["temperature"] = 0.1 # Lower temp for critical analysis
-                
-                v_response = session.post(api_url, json=payload, headers=headers, timeout=240)
-                v_response.raise_for_status()
-                v_data = v_response.json()
-                return v_data["choices"][0]["message"]["content"]
+                except Exception as e:
+                    # Log error but return initial content (bypass retry)
+                    logger.error(f"Verification Failed (returning initial): {e}")
+                    return initial_content
 
             return initial_content
             
         except Exception as e:
             logger.error(f"Local LLM Error: {e}")
-            raise
+            raise # Triggers retry
 
     # --- GEMINI PROVIDER ---
     elif provider == 'gemini':
@@ -147,26 +141,28 @@ def get_llm_response(
                 hist_text = "\n".join([f"{m['role']}: {m['content']}" for m in history])
                 full_prompt = f"{hist_text}\nUser: {prompt}"
 
-
             # 1. Initial Request
             resp = model.generate_content(full_prompt)
             initial_content = resp.text
 
-            # 2. Verification Step
+            # 2. Verification Step (Isolated Error Handling)
             if verify:
-                logger.info("Performing Gemini Verification...")
-                verify_content = VERIFY_TEMPLATE.format(
-                    original_prompt=full_prompt,
-                    initial_answer=initial_content
-                )
-                # Generate verified response
-                v_resp = model.generate_content(verify_content)
-                return v_resp.text
+                try:
+                    logger.info("Performing Gemini Verification...")
+                    verify_content = VERIFY_TEMPLATE.format(
+                        original_prompt=full_prompt,
+                        initial_answer=initial_content
+                    )
+                    v_resp = model.generate_content(verify_content)
+                    return v_resp.text
+                except Exception as e:
+                    logger.error(f"Gemini Verification Failed (returning initial): {e}")
+                    return initial_content
 
             return initial_content
         
         except Exception as e:
             logger.error(f"Gemini Error: {e}")
-            raise
+            raise # Triggers retry
 
     return "Error: Unknown Provider"

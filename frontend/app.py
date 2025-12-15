@@ -56,15 +56,25 @@ def main():
     if prompt := st.chat_input("Ask about your data..."):
         current_session["messages"].append({"role": "user", "content": prompt})
         session_manager.save_session(current_session)
+        
+        st.session_state.pending_processing = True 
         st.rerun()
 
     # 8. Processing Hook
-    if current_session["messages"] and current_session["messages"][-1]["role"] == "user":
-        process_user_input(
-            session_data=current_session,
-            config=app_config,
-            state_manager=state
-        )
+    if st.session_state.get("pending_processing", False):
+        
+        # Safety check: Ensure the last message is actually from the user
+        if current_session["messages"] and current_session["messages"][-1]["role"] == "user":
+            process_user_input(
+                session_data=current_session,
+                config=app_config,
+                state_manager=state
+            )
+        
+        # Reset flag so refreshing the page doesn't re-trigger the LLM
+        st.session_state.pending_processing = False
+        # Optional: One last rerun to clean the state logic, though process_user_input usually handles it
+        # st.rerun() 
 
 if __name__ == "__main__":
     main()

@@ -171,8 +171,8 @@ def render_token_estimator(top_k, history_limit, current_messages, context_windo
         retrieval_tokens = actual_retrieval_tokens
         est_label = ""
     else:
-        # Estimate: ~132 tokens per chunk
-        retrieval_tokens = top_k * 132
+        # Estimate: ~135 tokens per chunk
+        retrieval_tokens = top_k * 135
         est_label = "~"
 
     TEMPLATE_OVERHEAD = 250
