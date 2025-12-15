@@ -128,7 +128,6 @@ class QueryProcessor:
         # We do NOT use labels like "Context:" because they add noise to BM25/Vector scores.
         
         if history_augmentation:
-            # "python loop error" + "pandas dataframe"
             final_search_text = f"{cleaned_query} {history_augmentation}"
         else:
             final_search_text = cleaned_query

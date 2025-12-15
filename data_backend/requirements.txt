@@ -1,16 +1,11 @@
 chromadb
-fastapi
 langchain
 langchain-chroma
 langchain-community
 langchain-core
-networkx
-pandas
 psutil
 pydantic
 PyMuPDF
 requests
 streamlit
-tenacity
 tqdm
-uvicorn

@@ -153,13 +153,28 @@ def _render_llm_settings(state_manager):
                     url = st.session_state.get("llm_url", LOCAL_LLM_API_URL)
                     models = app_utils.fetch_available_models(url)
                     chat_models = [m for m in models if "embed" not in m.lower()]
-                    st.session_state.fetched_models = chat_models if chat_models else ["(No models found)"]
-            
+                    
+                    if chat_models:
+                        st.session_state.fetched_models = chat_models
+                        st.session_state.llm_selector = chat_models[0]
+                    else:
+                        st.session_state.fetched_models = ["(No models found)"]
+
             with c_mod:
                 opts = st.session_state.get("fetched_models", ["local-model"])
-                current_sel = st.session_state.get("llm_selector")
-                idx = opts.index(current_sel) if current_sel in opts else 0
-                selected_model = st.selectbox("Model", options=opts, index=idx, key="llm_selector")
+                
+                # --- STATE VALIDATION ---
+                current_val = st.session_state.get("llm_selector")
+                if current_val not in opts:
+                    st.session_state.llm_selector = opts[0]
+
+                # --- RENDER ---
+                # ERROR FIX: Removed 'index=idx'.
+                selected_model = st.selectbox(
+                    "Model", 
+                    options=opts, 
+                    key="llm_selector"
+                )
 
             return {
                 "provider": "local",
@@ -180,8 +195,13 @@ def _render_llm_settings(state_manager):
             }
 
 def _render_embedding_settings(state_manager):
-    """Renders Embedding Model settings."""
+    """
+    Renders Embedding Model settings.
+    Includes Smart Recovery to prioritize 'embed' models if state is lost.
+    """
     with st.expander("🧠 Embeddings", expanded=False):
+        
+        # 1. URL Input
         st.text_input(
             "Emb API URL", 
             value=st.session_state.get("emb_url", LOCAL_LLM_API_URL),
@@ -190,29 +210,41 @@ def _render_embedding_settings(state_manager):
         )
 
         c_emb, c_ref = st.columns([0.85, 0.15])
+        
+        # 2. Refresh Button
         with c_ref:
             if st.button("🔄", key="ref_emb", help="Refresh Embed Models"):
                 url = st.session_state.get("emb_url", LOCAL_LLM_API_URL)
                 models = app_utils.fetch_available_models(url)
                 if models:
                     st.session_state.fetched_emb_models = models
+                    # SMART SELECT: Force "embed" model on manual refresh
                     best = next((m for m in models if 'embed' in m.lower()), models[0])
                     st.session_state.emb_model_selector = best
                 else:
                     st.session_state.fetched_emb_models = []
+                    st.toast("No models found.", icon="⚠️")
 
+        # 3. Selectbox with SMART VALIDATION
         with c_emb:
             opts = st.session_state.get("fetched_emb_models", [])
             if not opts:
                 opts = ["(Click 🔄 to fetch)"]
             
-            curr = st.session_state.get("emb_model_selector")
-            idx = opts.index(curr) if curr in opts else 0
+            # --- FIX STARTS HERE ---
+            current_val = st.session_state.get("emb_model_selector")
             
+            # If the current value is invalid (not in list) or missing...
+            if current_val not in opts:
+                # ...Do NOT just pick opts[0]. 
+                # Scan the list again for the best "embed" model.
+                best_recovery = next((m for m in opts if 'embed' in m.lower()), opts[0])
+                st.session_state.emb_model_selector = best_recovery
+
+            # --- RENDER ---
             selected_emb = st.selectbox(
                 "Emb Model", 
                 options=opts, 
-                index=idx,
                 key="emb_model_selector"
             )
             
@@ -221,6 +253,7 @@ def _render_embedding_settings(state_manager):
         "url": st.session_state.emb_url,
         "model_name": selected_emb if selected_emb != "(Click 🔄 to fetch)" else None
     }
+
 
 def _render_rag_strategy(state_manager):
     """Renders only the Architecture and Database selection."""
@@ -301,38 +334,45 @@ def _render_rag_params(is_direct):
 def render_usage_stats(session_data, config, state_manager):
     """
     Renders the visual Token Usage bar.
+    
+    FIX: Now prioritizes the LIVE CONFIG (Sliders) for the bar visualization
+    so the user can see how changes affect the budget for the NEXT query.
     """
     if not session_data: return
 
     msgs = session_data.get("messages", [])
     
-    # 1. Determine retrieval count
-    final_retrieval_count = None
-    state_val = state_manager.get_last_retrieval_count()
+    # 1. Get Live Config Values (The "Plan")
+    # We use the config object which is directly tied to the sidebar sliders
+    live_top_k = config["rag_config"]["top_k"]
+    live_hist_limit = config["rag_config"]["history_limit"]
     
-    if state_val is not None:
-        final_retrieval_count = state_val
-    elif msgs and msgs[-1]["role"] == "assistant":
-        usage = msgs[-1].get("usage", {})
-        if "retrieval_tokens" in usage:
-            final_retrieval_count = usage["retrieval_tokens"]
-    
-    # 2. Handle Config Defaults for Estimation
-    # FIX: Explicitly grab from session state to ensure the math uses the value 
-    # the user sees on the slider, even if config passing lagged.
-    current_top_k = st.session_state.get("rag_top_k", 10)
-    
+    # If Direct mode, Retrieval is 0
     if config["rag_config"]["rag_type"] == "direct":
-        current_top_k = 0
-        final_retrieval_count = 0
+        live_top_k = 0
+
+    # 2. Calculate "Planned" Usage (for the visual bar)
+    # This ensures the bar moves immediately when you drag the slider
     
     sys_tokens = app_utils.count_tokens(config["llm_config"].get("system_prompt", ""))
     
+    # Render the estimator using the LIVE parameters
     app_utils.render_token_estimator(
-        top_k=current_top_k,
-        history_limit=config["rag_config"]["history_limit"],
+        top_k=live_top_k,
+        history_limit=live_hist_limit,
         current_messages=msgs,
         context_window=config["llm_config"]["context_window"],
         sys_tokens=sys_tokens,
-        actual_retrieval_tokens=final_retrieval_count
+        # Passing None forces the estimator to use the 'live_top_k' estimation logic
+        # instead of locking to the previous message's metadata.
+        actual_retrieval_tokens=None 
     )
+
+    # 3. Optional: Show "Last Actuals" as text only (for reference)
+    last_actual = 0
+    if msgs and msgs[-1]["role"] == "assistant":
+        usage = msgs[-1].get("usage", {})
+        last_actual = usage.get("retrieval_tokens", 0)
+        
+    if last_actual > 0:
+        st.caption(f"📝 *Last query used {last_actual} retrieval tokens*")

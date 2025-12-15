@@ -9,14 +9,11 @@ Updates:
 - Removed LegacyChainWrapper (Standard .invoke() API).
 - Strict typing and path management.
 """
-
-import json
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
 import pickle
-import networkx as nx
 from rank_bm25 import BM25Okapi
 from sentence_transformers import CrossEncoder
 

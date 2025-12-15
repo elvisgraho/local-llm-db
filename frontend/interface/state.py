@@ -35,9 +35,42 @@ class StateManager:
         
         self._init_setting("rag_top_k", 10)
         self._init_setting("rag_history_limit", 6)
-        
-        self._init_setting("fetched_models", [DEFAULT_LLM_MODEL])
-        self._init_setting("fetched_emb_models", [])
+
+        # --- 2. EAGER MODEL FETCH (The Fix) ---
+        # We fetch ONCE when the app starts. 
+        if "startup_fetch_done" not in st.session_state:
+            import app_utils  # Import here to avoid circular dependency at top level
+            
+            # A. Fetch Chat Models
+            try:
+                chat_models = app_utils.fetch_available_models(st.session_state.llm_url)
+                # Filter: remove embedding models from chat list
+                clean_chat = [m for m in chat_models if "embed" not in m.lower()]
+                
+                if clean_chat:
+                    st.session_state.fetched_models = clean_chat
+                    st.session_state.llm_selector = clean_chat[0]
+                else:
+                    st.session_state.fetched_models = ["local-model"]
+            except Exception:
+                st.session_state.fetched_models = ["local-model"]
+
+            # B. Fetch Embedding Models
+            try:
+                emb_models = app_utils.fetch_available_models(st.session_state.emb_url)
+                
+                if emb_models:
+                    st.session_state.fetched_emb_models = emb_models
+                    # Smart Select: Auto-pick the one with 'embed' in the name
+                    best = next((m for m in emb_models if 'embed' in m.lower()), emb_models[0])
+                    st.session_state.emb_model_selector = best
+                else:
+                    st.session_state.fetched_emb_models = []
+            except Exception:
+                st.session_state.fetched_emb_models = []
+
+            # Mark complete so we don't re-fetch on every interaction
+            st.session_state.startup_fetch_done = True
         
         self._init_setting("rag_strategy", "Standard RAG")
         self._init_setting("persisted_db", None)

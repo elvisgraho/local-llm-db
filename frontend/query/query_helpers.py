@@ -1,5 +1,6 @@
 import logging
 import tiktoken
+import math
 from typing import Any, Optional, List, Dict, Tuple
 # Modern LangChain Core Import
 from langchain_core.documents import Document
@@ -22,24 +23,25 @@ DEFAULT_RESPONSE_RESERVE = 1500  # Tokens reserved for the LLM's generated answe
 
 # --- Helper Functions ---
 
-def _estimate_tokens(text: str) -> int:
+def _estimate_tokens(text: str, model_encoding: str = "cl100k_base") -> int:
     """
-    Estimates tokens using tiktoken if available, else heuristic.
-    Essential for Code/Log heavy contexts.
+    Estimates tokens. Prioritizes safety (overestimation) in heuristic fallback.
     """
     if not text:
         return 0
         
-    if tiktoken:
+    # Check if tiktoken is actually imported in local/global scope
+    if 'tiktoken' in globals():
         try:
-            # cl100k_base is used by GPT-4/3.5 and many modern embeddings
-            enc = tiktoken.get_encoding("cl100k_base") 
-            return len(enc.encode(text))
+            enc = tiktoken.get_encoding(model_encoding)
+            # encode_ordinary is faster as it ignores special tokens
+            return len(enc.encode_ordinary(text))
         except Exception:
             pass
             
-    # Heuristic fallback: Code is denser than prose
-    return len(text) // 3.5 
+    # Fallback: Use 3.0 chars/token for safety buffer. 
+    # Use math.ceil to ensure we don't return 0 for non-empty short strings.
+    return math.ceil(len(text) / 3.0)
 
 def _reorder_documents_for_context(docs: List[Document]) -> List[Document]:
     """

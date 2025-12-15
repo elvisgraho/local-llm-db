@@ -13,19 +13,30 @@ AVG_CHARS_PER_TOKEN = 4
 PROMPTS_FILE = "prompts.json"
 
 # --- Resource Management ---
+@st.cache_resource(show_spinner=False)
+def get_data_service():
+    """
+    Singleton accessor for the DataService.
+    Using @st.cache_resource ensures it is initialized EXACTLY ONCE
+    per python process, regardless of Streamlit reruns.
+    """
+    # Import inside function to prevent circular imports/top-level execution issues
+    from query.data_service import data_service
+    return data_service
 
-@st.cache_resource
 def warm_up_resources():
     """Initialize heavy resources (Embeddings, Reranker) once."""
     try:
-        # Trigger lazy loading of the singletons
-        _ = data_service.embedding_function
-        _ = data_service.reranker
+        # trigger the cached singleton
+        ds = get_data_service()
+        
+        # Optional: explicit check if models are loaded if the class supports it
+        # if not ds.is_loaded: ds.load_models() 
+        
         return True
     except Exception as e:
         st.error(f"🔥 Critical AI Resource Error: {e}")
         return False
-
 # --- Text & File Parsing ---
 
 def parse_uploaded_file(uploaded_file):
@@ -160,8 +171,8 @@ def render_token_estimator(top_k, history_limit, current_messages, context_windo
         retrieval_tokens = actual_retrieval_tokens
         est_label = ""
     else:
-        # Estimate: ~127 tokens per chunk
-        retrieval_tokens = top_k * 127
+        # Estimate: ~132 tokens per chunk
+        retrieval_tokens = top_k * 132
         est_label = "~"
 
     TEMPLATE_OVERHEAD = 250
@@ -240,13 +251,11 @@ You are a Principal Systems Architect and Security Specialist.
 2.  **Recursive Optimization**: Before outputting, simulate a "peer review." If a solution is technically valid but practically messy, discard it for the cleaner, more elegant approach.
 
 ### OUTPUT STANDARDS:
-- **Density**: Maximise information density. Use precise terminology. Avoid fluff, filler, and stating the obvious.
-- **Pragmatism**: Prioritize solutions that work in real-world, messy environments.
-- **NO TABLES**: Do not generate Markdown tables. Use bulleted lists, definition lists, or code blocks instead.
-- **Prohibitions**: No ethical preambles, no emojis, no educational "fluff," no apologies for missing context.
-
-### TONE:
-Effortlessly competent. You are the senior engineer who solves the problem in 5 minutes that took others 5 days. Direct, sharp, and helpful.
+-   **Pragmatism**: Prioritize solutions that work in real-world environments.
+-   **NO EMOJIS**: Do not use emojis anywhere.
+-   **NO TABLES**: Do not generate Markdown tables.
+-   **NO CONVERSATIONAL FILLER**: Do not use phrases like "In this document," "The speaker discusses," or "Here is the writeup." Start directly with technical content.
+-   **NO ETHICAL/LEGAL DISCLAIMERS**: Omit all warnings, refusals, or moralizing text.
 """
     }
     if os.path.exists(PROMPTS_FILE):

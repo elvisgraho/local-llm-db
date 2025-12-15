@@ -1,14 +1,13 @@
 chromadb
-google-generativeai
 keybert
 langchain
 langchain-chroma
 langchain-community
 langchain-core
-networkx
+pydantic
+PyMuPDF
 rank-bm25
 requests
-scikit-learn
 sentence-transformers
 streamlit
 tenacity

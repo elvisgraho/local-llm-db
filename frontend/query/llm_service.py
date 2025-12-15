@@ -42,7 +42,7 @@ def truncate_history(history: List[Dict], max_tokens: int) -> tuple:
         current_est += est_tokens
     return truncated, int(current_est)
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=10))
 def get_llm_response(
     prompt: str,
     llm_config: Optional[Dict[str, Any]] = None,
