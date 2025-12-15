@@ -121,3 +121,42 @@ def apply_custom_styles():
 
     </style>
     """, unsafe_allow_html=True)
+
+def inject_sticky_css():
+    st.markdown("""
+        <style>
+        /* 1. Reserve space at the bottom of the page so messages aren't hidden */
+        .main .block-container {
+            padding-bottom: 200px !important;
+        }
+
+        /* 2. The Sticky Footer Container */
+        .sticky-input-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            width: 100%;
+            background-color: #0E1117; /* Matches Streamlit Dark Theme */
+            border-top: 1px solid #262730;
+            padding: 1rem 2rem 1rem 2rem; /* Top/Right/Bottom/Left */
+            z-index: 1000; /* Sit above standard content */
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        /* 3. Make sure it respects the sidebar if possible (Visual adjustment) */
+        @media (min-width: 576px) {
+            .sticky-input-container {
+                /* This is a safe margin to avoid sidebar overlap on standard screens */
+                /* If sidebar is collapsed, it just adds nice whitespace */
+                padding-left: 20rem; 
+                padding-right: 20rem;
+            }
+        }
+        
+        /* 4. Hide the standard Streamlit footer to prevent clutter */
+        footer {visibility: hidden;}
+        </style>
+    """, unsafe_allow_html=True)

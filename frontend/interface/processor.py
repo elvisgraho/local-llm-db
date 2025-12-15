@@ -8,14 +8,23 @@ import app_utils
 from query.query_data import query_direct, query_rag, query_lightrag
 from query.session_manager import session_manager
 
-def process_user_input(session_data, config, state_manager):
+def process_user_input(session_data, config, state_manager, container=None):
     """
-    Orchestrates the AI response pipeline with optimized error handling 
-    and duplicate prevention.
+    Orchestrates the AI response pipeline.
+    
+    Args:
+        session_data: The active session dictionary.
+        config: App configuration.
+        state_manager: State manager instance.
+        container: (Optional) The Streamlit container to render output into. 
+                   Crucial for Sticky Footer layouts to prevent overlapping.
     """
     
-    # 1. Validation: Prevent processing if the last message is already from AI
-    # This prevents "double triggers" on rapid UI refreshes.
+    # 0. Define Output Target
+    # If a specific container (history) is provided, use it. Otherwise, default to main page.
+    target_ui = container if container else st
+    
+    # 1. Validation
     if not session_data.get("messages") or session_data["messages"][-1]["role"] == "assistant":
         return
 
@@ -23,70 +32,92 @@ def process_user_input(session_data, config, state_manager):
     llm_cfg = config["llm_config"]
     rag_cfg = config["rag_config"]
     
-    # Get the last user message
     last_msg = session_data["messages"][-1]
-    user_query = last_msg["content"]
-
-    # --- 2. Smart Context Construction ---
-    # Combine User Query with any Uploaded File Context
-    final_query_text = user_query
+    raw_user_query = last_msg["content"]
     
-    # Optimization: Only inject context if it exists and isn't empty
-    if session_data.get("temp_context"):
-        final_query_text = (
-            f"Session Context:\n{session_data['temp_context']}\n\n"
-            f"Query: {user_query}"
-        )
-
-    # --- 3. History Pruning (Performance) ---
-    # Calculate safe context limits
-    estimated_retrieval_tokens = rag_cfg["top_k"] * 200 
-    # Ensure limit never goes negative even with high top_k
+    # --- 2. PREPARE HISTORY ---
+    estimated_retrieval_tokens = rag_cfg["top_k"] * 250 
     safe_ctx_limit = max(1000, llm_cfg["context_window"] - 1500 - estimated_retrieval_tokens)
     
-    # Get history excluding the current query
-    history_msgs = [{"role": m["role"], "content": m["content"]} for m in session_data["messages"][:-1]]
+    raw_history = [{"role": m["role"], "content": m["content"]} for m in session_data["messages"][:-1]]
+    optimized_history = app_utils.smart_prune_history(raw_history, safe_ctx_limit)
     
-    # Prune
-    optimized_history = app_utils.smart_prune_history(history_msgs, safe_ctx_limit)
-    
-    # Enforce User Slider Limit
     if rag_cfg["history_limit"] < len(optimized_history):
         optimized_history = optimized_history[-rag_cfg["history_limit"]:]
 
-    # --- 4. Execution Pipeline ---
-    with st.chat_message("assistant"):
+    effective_query = raw_user_query
+
+    # --- 3. CONTEXTUAL REWRITE (Rendered inside Container) ---
+    if rag_cfg.get("rag_rewrite", False):
+        # Use target_ui.status to ensure it stays in the scrollable area
+        with target_ui.status("✨ Contextualizing Query...", expanded=False) as status:
+            try:
+                disambiguation_prompt = (
+                    "You are a Query Resolution Engine. Your goal is to convert the User's Latest Input "
+                    "into a stand-alone, context-rich search query that can be understood without history.\n\n"
+                    "RULES:\n"
+                    "1. RESOLVE PRONOUNS: If user says 'it', 'they', or 'that', replace them with the actual entities from Chat History.\n"
+                    "2. MERGE CONTEXT: If user asks a follow-up (e.g., 'Why?'), combine it with the previous topic to form a full question.\n"
+                    "3. OPTIMIZE FOR SEARCH: Use precise keywords suitable for vector retrieval.\n"
+                    "4. NO ANSWERING: Do NOT answer the question. Output ONLY the rewritten query string."
+                )
+
+                rewrite_cfg = llm_cfg.copy()
+                rewrite_cfg["system_prompt"] = disambiguation_prompt
+                rewrite_cfg["temperature"] = 0.3
+
+                rewrite_response = query_direct(
+                    query_text=raw_user_query,
+                    llm_config=rewrite_cfg,
+                    conversation_history=optimized_history
+                )
+                
+                optimized_text = rewrite_response.get("text", "").strip()
+                
+                if optimized_text and len(optimized_text) > 3:
+                    effective_query = optimized_text
+                    status.write(f"**Original:** {raw_user_query}")
+                    status.write(f"**Contextualized:** {effective_query}")
+                    status.update(label="Query Contextualized", state="complete")
+                else:
+                    status.update(label="Optimization unclear, using original.", state="error")
+
+            except Exception as e:
+                logging.error(f"Auto-rewrite failed: {e}")
+                status.update(label="Optimization skipped (Error)", state="error")
+
+    # --- 4. CONTEXT INJECTION ---
+    final_query_payload = effective_query
+    if session_data.get("temp_context"):
+        final_query_payload = (
+            f"Session Context:\n{session_data['temp_context']}\n\n"
+            f"Query: {effective_query}"
+        )
+
+    # --- 5. EXECUTION PIPELINE (Rendered inside Container) ---
+    # Use target_ui.chat_message to append to the history container specifically
+    with target_ui.chat_message("assistant"):
         start_time = time.time()
         response_placeholder = st.empty()
         
-        # Args preparation
         query_args = {
-            "query_text": final_query_text,
-            "llm_config": {
-                "provider": llm_cfg["provider"],
-                "modelName": llm_cfg["model_name"],
-                "apiKey": llm_cfg["api_key"],
-                "api_url": llm_cfg["local_url"],
-                "temperature": llm_cfg["temperature"],
-                "system_prompt": llm_cfg["system_prompt"],
-                "context_window": llm_cfg["context_window"]
-            },
+            "query_text": final_query_payload,
+            "llm_config": llm_cfg, 
             "conversation_history": optimized_history
         }
 
-        # Status Indicator
-        with st.status("🧠 Orchestrating...", expanded=True) as status:
+        status_label = "🧠 Analyzing..." if not rag_cfg.get("rag_rewrite") else "🧠 Processing Contextualized Query..."
+        
+        with st.status(status_label, expanded=True) as status:
             try:
                 rag_type = rag_cfg["rag_type"]
                 db_name = rag_cfg["db_name"]
                 response = {}
 
-                # A. Direct Chat
                 if rag_type == 'direct':
                     status.write("Direct LLM query...")
                     response = query_direct(**query_args, verify=rag_cfg["verify"])
 
-                # B. Standard RAG & LightRAG
                 elif db_name:
                     status.write(f"🔍 Retrieving from **{db_name}**...")
                     strategy_func = query_lightrag if rag_type == 'lightrag' else query_rag
@@ -111,9 +142,9 @@ def process_user_input(session_data, config, state_manager):
                 status.update(label="❌ Pipeline Error", state="error")
                 st.error(f"An error occurred: {str(e)}")
                 logging.error("Pipeline Failure", exc_info=True)
-                return # Exit to prevent saving broken state
+                return 
 
-        # --- 5. Output Parsing ---
+        # --- 6. OUTPUT PARSING ---
         raw_text = response.get("text", "")
         if not raw_text:
             st.error("Received empty response from LLM.")
@@ -122,14 +153,11 @@ def process_user_input(session_data, config, state_manager):
         sources = response.get("sources", [])
         est_tokens = response.get("estimated_context_tokens", 0)
         
-        # Update State immediately for UI responsiveness
         state_manager.set_last_retrieval_count(est_tokens)
 
-        # Parse Reasoning
         clean_text, reasoning = app_utils.parse_reasoning(raw_text)
 
-        # --- 6. Render Transient UI ---
-        # We render this here so the user sees it BEFORE the rerun triggers.
+        # --- 7. TRANSIENT UI ---
         if reasoning:
             with st.expander("💭 Internal Thought Process", expanded=False):
                 st.markdown(reasoning)
@@ -145,13 +173,9 @@ def process_user_input(session_data, config, state_manager):
                     col_ico.text("📄")
                     col_txt.caption(f"{os.path.basename(src)}")
 
-        # Stats Footer
         st.caption(f"⏱️ {time.time()-start_time:.2f}s | 🪙 ~{est_tokens} tokens")
 
-        # --- 7. Persist Data (FIXED) ---
-        # Removed the duplicate .append() call. 
-        # Added metadata 'usage' for the Token Estimator.
-        
+        # --- 8. PERSIST DATA ---
         new_message = {
             "role": "assistant",
             "content": clean_text,
@@ -163,26 +187,21 @@ def process_user_input(session_data, config, state_manager):
             }
         }
         
-        # Double-check against duplicate appends (Edge Case Protection)
         last_saved = session_data["messages"][-1]
         if last_saved["role"] != "assistant" or last_saved["content"] != clean_text:
             session_data["messages"].append(new_message)
 
-        # Auto-Rename (Only on first interaction)
         if len(session_data["messages"]) == 2:
             _auto_rename_session(session_data, clean_text, state_manager)
 
-        # Save to Disk
         session_manager.save_session(session_data)
         
-        # Force UI Refresh to sync sidebar and chat history cleanly
+        # Force refresh to sync UI
         st.rerun()
 
 def _auto_rename_session(session_data, response_text, state_manager):
     """Generates a short title based on the first response."""
-    # Remove markdown symbols for cleaner titles
     clean = response_text.replace("#", "").replace("*", "").replace("`", "").strip()
     new_title = (clean[:30] + "...") if len(clean) > 30 else clean
-    
     session_data["title"] = new_title
     state_manager.update_session_title(session_data["id"], new_title)

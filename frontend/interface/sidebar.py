@@ -321,13 +321,18 @@ def _render_rag_params(is_direct):
         top_k = st.slider("Top-K (Chunks)", 1, 100, 10, disabled=is_direct, key="rag_top_k")
         history_limit = st.slider("Chat History (Msgs)", 0, 30, 6, key="rag_history_limit")
         
-        hybrid = st.checkbox("Hybrid Search", value=True, disabled=is_direct, key="rag_hybrid")
-        verify = st.checkbox("Verify Answer", value=False, key="rag_verify")
+        hybrid = st.toggle("Hybrid Search", value=True, key="rag_hybrid",
+            disabled=is_direct, help="Allows LLM to deviate from source material.")
+        verify = st.toggle("Verify Answer", value=False, key="rag_verify", 
+            help="After initial LLM response, LLM will run again to verify and correct the response")
+        rewrite = st.toggle("Rewrite Queries", value=False, key="rag_rewrite",
+            help="Automatically uses the LLM to refine your prompt before searching.")
 
     return {
         "top_k": top_k,
         "history_limit": history_limit,
         "hybrid": hybrid,
+        "rewrite": rewrite,
         "verify": verify
     }
 

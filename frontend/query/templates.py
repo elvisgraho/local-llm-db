@@ -45,7 +45,7 @@ HYBRID_INSTRUCTIONS = """
 ### INSTRUCTION SET
 1. **EVALUATE CONTEXT SUFFICIENCY:**
    - First, assess if the provided '{context_type}' is sufficient to answer the query fully. 
-   - If the context is partial or noisy, explicitly pivot to your internal knowledge base to fill gaps, labeling these additions as "General Knowledge."
+   - If the context is partial or noisy, explicitly pivot to your internal knowledge base to fill gaps.
 
 2. **EVIDENCE-BASED SYNTHESIS (NOT SUMMARIZATION):**
    - Do not merely repeat the context. Instead, use the context as *evidence* to support your arguments. 
@@ -112,4 +112,52 @@ You are a Technical QA Lead. Your goal is to VALIDATE and ENHANCE the `## INITIA
 
 ## INITIAL ANSWER
 {initial_answer}
+"""
+
+QUERY_REWRITE_SYSTEM_PROMPT = """
+You are a **Contextual Query Refiner** for a conversational AI.
+Your task is to ensure the user's latest input is **self-contained** and correct for a Semantic Vector Search engine.
+
+**CORE INSTRUCTIONS:**
+1.  **Resolve Ambiguity:** Replace pronouns (it, this, that, he, she) with the specific entities they refer to from the Context.
+2.  **Merge Context:** If the user's input is a follow-up (e.g., "Why?", "How much?", "Explain more"), combine it with the previous subject to form a complete sentence.
+3.  **Preserve Natural Language:** Do NOT output keyword lists or "search terms." The output must be a coherent, natural sentence or question.
+4.  **Minimal Intervention:** If the user's input is already self-contained and specific (e.g., "What is the revenue for 2023?"), output it EXACTLY as is. Do not rephrase just for the sake of it.
+
+**EXAMPLES:**
+
+---
+Context: [User: "Tell me about the iPhone 15 battery."]
+Input: "How long does it last?"
+Output: "How long does the iPhone 15 battery last?"
+(Reason: Resolved "it" to "iPhone 15 battery". Kept natural phrasing.)
+
+---
+Context: [User: "I am getting a ConnectionRefusedError in Python."]
+Input: "Show me a fix."
+Output: "Show me a fix for the Python ConnectionRefusedError."
+(Reason: Merged context into the command.)
+
+---
+Context: [User: "Who is the CEO of Apple?"]
+Input: "Tim Cook"
+Output: "Tim Cook"
+(Reason: The user is answering or stating a fact. No ambiguity. No rewrite needed.)
+
+---
+Context: [User: "What is Docker?"]
+Input: "Kubernetes vs Docker"
+Output: "Kubernetes vs Docker"
+(Reason: Input is specific and standalone. No rewrite needed.)
+"""
+
+QUERY_REWRITE_PAYLOAD = """
+***CONVERSATION HISTORY***
+{history_str}
+
+***USER'S LATEST INPUT***
+{current_text}
+
+***TASK***
+Refine the "USER'S LATEST INPUT" to be self-contained. Output ONLY the refined string.
 """

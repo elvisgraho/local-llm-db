@@ -3,7 +3,7 @@ import sys
 import os
 import logging
 
-#Path Setup
+# Path Setup
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 from interface.state import StateManager
@@ -28,7 +28,6 @@ def main():
     apply_custom_styles()
 
     # 3. Load Session Data FIRST
-    # (We need this data to calculate tokens in the sidebar)
     active_id = state.get_active_session_id()
     current_session = None
     
@@ -41,7 +40,6 @@ def main():
             st.rerun()
 
     # 4. Render Sidebar
-    # Pass the loaded session so the Token Estimator works
     app_config = render_sidebar(state, session_data=current_session)
 
     # 5. Main Content Check
@@ -49,32 +47,37 @@ def main():
         st.warning("⚠️ No active session. Please create a new chat.")
         st.stop()
 
-    # 6. Render Chat Area
-    render_chat_area(current_session, state)
+    # 6. Render Chat Area (Includes the Custom Input)
+    # This function now handles the history AND the input box at the bottom.
+    chat_container = render_chat_area(current_session, state, app_config)
 
-    # 7. Input Loop
-    if prompt := st.chat_input("Ask about your data..."):
-        current_session["messages"].append({"role": "user", "content": prompt})
+    # --- 7. INPUT HANDLING ---
+    
+    # We check if our custom input injected a prompt into session state
+    if st.session_state.get("pending_injected_prompt"):
+        user_input = st.session_state.pop("pending_injected_prompt")
+        
+        # Add to history
+        current_session["messages"].append({"role": "user", "content": user_input})
         session_manager.save_session(current_session)
         
+        # Trigger Processing
         st.session_state.pending_processing = True 
         st.rerun()
 
     # 8. Processing Hook
     if st.session_state.get("pending_processing", False):
-        
-        # Safety check: Ensure the last message is actually from the user
         if current_session["messages"] and current_session["messages"][-1]["role"] == "user":
             process_user_input(
                 session_data=current_session,
                 config=app_config,
-                state_manager=state
+                state_manager=state,
+                container=chat_container  # <--- PASS THIS!
             )
         
-        # Reset flag so refreshing the page doesn't re-trigger the LLM
+        # Reset flag
         st.session_state.pending_processing = False
-        # Optional: One last rerun to clean the state logic, though process_user_input usually handles it
-        # st.rerun() 
+        st.rerun() 
 
 if __name__ == "__main__":
     main()
