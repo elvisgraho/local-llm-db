@@ -10,7 +10,7 @@ _base_url = os.getenv("LOCAL_LLM_API_URL", "http://localhost:1234").rstrip("/")
 LM_STUDIO_API_URL = f"{_base_url}/v1/embeddings"
 
 # Fetch model name from environment
-EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-embedder_collection")
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-embeddinggemma-300m-qat")
 
 # prevent accumulation of open sockets
 session = requests.Session()

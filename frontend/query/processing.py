@@ -14,8 +14,7 @@ from query.templates import (
     RAG_SYSTEM_CONSTRUCTION, RAG_USER_TEMPLATE,
     STRICT_CONTEXT_INSTRUCTIONS, HYBRID_INSTRUCTIONS,
     CONTEXT_BLOCK, SOURCES_BLOCK, RELATIONSHIPS_BLOCK, QUESTION_BLOCK,
-    KAG_CONTEXT_TYPE, STANDARD_CONTEXT_TYPE,
-    KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT, KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID,
+    STANDARD_CONTEXT_TYPE,
     EMPTY_STRING
 )
 
@@ -185,12 +184,6 @@ def _generate_response(
     formatted_relationships: Optional[List[str]] = None
 ) -> Dict[str, Union[str, List[str], int]]:
     
-    # 1. Validation
-    # If KAG is used, we might have relationships even if we have no docs
-    if not final_docs and not (rag_type == 'kag' and formatted_relationships):
-        no_info_msg = "No relevant information found in the database to answer your specific query."
-        return {"text": no_info_msg, "sources": [], "estimated_context_tokens": 0}
-
     # 2. Prepare Context Text (XML Style)
     reordered_docs = _reorder_documents_for_context(final_docs)
     context_parts = []
@@ -205,21 +198,16 @@ def _generate_response(
     
     context_text = "\n\n".join(context_parts)
 
-    # 3. Determine Context Labels
-    is_kag = (rag_type == 'kag')
-    context_type_label = KAG_CONTEXT_TYPE if is_kag else STANDARD_CONTEXT_TYPE
+    context_type_label = STANDARD_CONTEXT_TYPE
     
     # 4. Select Instructions
     if hybrid:
         instructions_base = HYBRID_INSTRUCTIONS
-        kag_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID if is_kag else EMPTY_STRING
     else:
         instructions_base = STRICT_CONTEXT_INSTRUCTIONS
-        kag_instruction = KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT if is_kag else EMPTY_STRING
     
     rag_rules = instructions_base.format(
-        context_type=context_type_label,
-        kag_specific_instruction_placeholder=kag_instruction
+        context_type=context_type_label
     )
 
     # 5. CONSTRUCT SYSTEM PROMPT
@@ -236,9 +224,6 @@ def _generate_response(
     sources_block = SOURCES_BLOCK.format(sources=sources)
     
     relationships_block = EMPTY_STRING
-    if is_kag and formatted_relationships:
-        rel_text = "\n\n".join(formatted_relationships)
-        relationships_block = RELATIONSHIPS_BLOCK.format(relationships=rel_text)
 
     final_user_prompt = RAG_USER_TEMPLATE.format(
         context_block_placeholder=context_block,

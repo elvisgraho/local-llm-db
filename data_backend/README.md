@@ -1,6 +1,6 @@
 # RAG Database Builder
 
-A utility for ingesting documents and generating RAG/KAG knowledge bases.
+A utility for ingesting documents and generating RAG knowledge bases.
 
 ## Prerequisites
 

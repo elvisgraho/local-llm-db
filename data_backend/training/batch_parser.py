@@ -39,7 +39,7 @@ class RedTeamFilter(BaseModel):
     reasoning: str = Field(..., description="Concise technical justification.")
 
 def get_filter_prompt() -> ChatPromptTemplate:
-    template_str = """You are a Senior Red Team Engineer and Knowledge Base Curator.
+    template_str = """You are a Senior IT Engineer and Knowledge Base Curator.
 Your task: Decide if the provided document text is valuable for a penetration testing library.
 
 ### CRITERIA TO 'KEEP' (Technical Value)

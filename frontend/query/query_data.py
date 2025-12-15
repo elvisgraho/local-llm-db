@@ -17,7 +17,6 @@ from query.query_helpers import calculate_available_context
 from query.retrieval import (
     _retrieve_semantic,
     _retrieve_keyword,
-    _retrieve_graph,
     MAX_INITIAL_RETRIEVAL_LIMIT
 )
 from query.processing import (
@@ -222,82 +221,12 @@ def query_lightrag(
         logger.error(f"Error in LightRAG query: {str(e)}", exc_info=True)
         raise
 
-def query_kag(
-    query_text: str,
-    top_k: int = 4,
-    hybrid: bool = False,
-    verify: Optional[bool] = False,
-    db_name: str = DEFAULT_DB_NAME,
-    llm_config: Optional[Dict] = None,
-    conversation_history: Optional[List[Dict[str, str]]] = None,
-    metadata_filter: Optional[Dict[str, Any]] = None
-) -> Dict[str, Union[str, List[str], int]]:
-    """
-    Query using KAG (Graph RAG).
-    """
-    try:
-        # 1. Prepare
-        retrieval_query, history, tokens = _prepare_retrieval_context(
-            query_text, llm_config, conversation_history
-        )
-
-        # 2. Get Resources
-        if not data_service.get_kag_graph('kag', db_name):
-             raise ValueError(f"Knowledge Graph 'kag/{db_name}' not loaded.")
-        
-        _ = _get_db_or_raise('kag', db_name)
-
-        # 3. Retrieve (Graph Search)
-        # Graph traversal can explode, so we limit initial node visits carefully
-        k_initial = min(top_k * 3, MAX_INITIAL_RETRIEVAL_LIMIT)
-        logger.info(f"KAG initial retrieval k = {k_initial}")
-        
-        initial_docs_scores, formatted_relationships = _retrieve_graph(
-            retrieval_query, 'kag', db_name, k_initial, metadata_filter
-        )
-
-        if not initial_docs_scores:
-            logger.warning("Graph retrieval yielded no documents for KAG.")
-            return _generate_response(
-                query_text=query_text,
-                final_docs=[],
-                sources=[],
-                rag_type='kag',
-                llm_config=llm_config,
-                truncated_history=history,
-                estimated_context_tokens=0,
-                hybrid=hybrid,
-                verify=verify,
-                formatted_relationships=[]
-            )
-
-        # 4. Rerank & Select
-        # Use top_k here
-        reranked_docs_scores = _rerank_results(retrieval_query, initial_docs_scores, top_k)
-        final_docs, sources, estimated_tokens = select_docs_for_context(reranked_docs_scores, tokens)
-
-        # 5. Generate
-        return _generate_response(
-            query_text=query_text,
-            final_docs=final_docs,
-            sources=sources,
-            rag_type='kag',
-            llm_config=llm_config,
-            truncated_history=history,
-            estimated_context_tokens=estimated_tokens,
-            hybrid=hybrid,
-            formatted_relationships=formatted_relationships
-        )
-    except Exception as e:
-        logger.error(f"Error in KAG query: {str(e)}", exc_info=True)
-        raise
-
 # --- Main Execution ---
 
 def main():
     parser = argparse.ArgumentParser(description="Run RAG queries using Modern LCEL stack.")
     parser.add_argument("query_text", type=str, help="The query text.")
-    parser.add_argument("--rag_type", type=str, choices=['rag', 'direct', 'lightrag', 'kag'], default='rag')
+    parser.add_argument("--rag_type", type=str, choices=['rag', 'direct', 'lightrag'], default='rag')
     parser.add_argument("--db_name", type=str, default=DEFAULT_DB_NAME)
     parser.add_argument("--optimize", action="store_true")
     parser.add_argument("--hybrid", action="store_true")
@@ -315,8 +244,7 @@ def main():
         query_func_map = {
             'direct': query_direct,
             'rag': query_rag,
-            'lightrag': query_lightrag,
-            'kag': query_kag
+            'lightrag': query_lightrag
         }
 
         query_func = query_func_map[args.rag_type]

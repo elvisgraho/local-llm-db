@@ -7,9 +7,6 @@ document retrieval. Key features:
 2. Fast similarity search
 3. Integration with LM Studio for local LLM inference
 4. Basic question-answering capabilities
-
-This is a simpler alternative to the graph-based approaches (GraphRAG and KAG) that focuses
-on speed and efficiency over complex relationship modeling.
 """
 import logging
 import sys

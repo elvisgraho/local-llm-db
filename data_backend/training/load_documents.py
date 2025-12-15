@@ -252,7 +252,6 @@ def try_load_pdf_chapters(doc: fitz.Document, filename: str, min_pages_for_split
             }
             
             documents.append(Document(page_content=chapter_text, metadata=meta))
-
         return documents
 
     except Exception as e:

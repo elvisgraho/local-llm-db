@@ -3,7 +3,7 @@ import re
 import sys
 import logging
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Literal, Optional, Tuple
 import requests
 
 # --- Modern LangChain Core Imports ---
@@ -44,20 +44,47 @@ TAGS_LINE_PATTERN = re.compile(r"^\s*Tags:\s*(\{.*\})\s*$", re.IGNORECASE | re.M
 class DocumentMetadata(BaseModel):
     """Schema for document metadata extracted by LLM (Pydantic V2)."""
     main_topic: Optional[str] = Field(None, description="Precise technical subject (e.g., 'DOM XSS', 'OAuth Flow')")
-    key_concepts: List[str] = Field(default_factory=list, description="Specific technical keywords (e.g., ['sink', 'source', 'iframe'])")
+    key_concepts: List[str] = Field(default_factory=list, description="Specific technical keywords (e.g., ['windows forensics', 'docker hardening', 'iframe'])")
     code_language: Optional[str] = Field(None, description="Programming language if code is present (e.g., 'python', 'bash')")
+    section_type: List[Literal[
+        'reconnaissance',
+        'resource_development',
+        'initial_access',
+        'execution',
+        'persistence',
+        'privilege_escalation',
+        'defense_evasion',
+        'credential_access',
+        'discovery',
+        'lateral_movement',
+        'collection',
+        'command_and_control',
+        'exfiltration',
+        'impact'
+    ]] = Field(None, description="Strict mapping to MITRE ATT&CK Enterprise Tactics.")
     has_instructions: bool = Field(False, description="True if text contains reproduction steps or commands")
-    section_type: Optional[str] = Field(None, description="Strict category: 'poc', 'mitigation', 'impact', 'recon', or 'theory'")
+    is_technical_content: bool = Field(True, description="TRUE if content is actionable/technical. FALSE if content is marketing, table of contents, legal disclaimers, or generic fluff.")
 def get_metadata_extraction_prompt() -> ChatPromptTemplate:
-    template_str = """You are a metadata extraction and document tagging specialist. Analyze the text and return a JSON object.
+    template_str = """You are a Senior IT Engineer and document tagging specialist. Analyze the text and return a JSON object with determining if the content is worth keeping.
 
 Text:
 {text}
 
+### CRITERIA TO 'DISCARD' (is_technical_content = false)
+- **Marketing**: Sales brochures, product advertisements without technical depth.
+- **Fluff**: High-level generic summaries, "Importance of Security" essays, or Copyright/Legal pages.
+- **Junk**: Unreadable OCR, Table of Contents, or Dedication pages.
+
+### CRITERIA TO 'KEEP' (is_technical_content = true)
+- Contains **actionable** content: code snippets, exploit payloads, command-line usage.
+- Explains specific vulnerabilities (CVEs), architectural internals, or bypass techniques.
+- Technical manuals, whitepapers, or detailed tutorials.
+
 Instructions:
 1. Return ONLY valid JSON.
 2. 'key_concepts' must be atomic technical terms suitable for database filtering and mixed with major themes.
-3. Use the following schema:
+3. If the text matches 'DISCARD' criteria, set "is_technical_content": false. 
+4. Use the following schema:
 {format_instructions}
 
 ### Example Output
@@ -72,8 +99,9 @@ Output:
     "main_topic": "IDOR",
     "key_concepts": ["broken access control", "parameter tampering", "api"],
     "code_language": "bash",
+    "section_type": ["initial_access","persistence"]
     "has_instructions": true,
-    "section_type": "poc"
+    "is_technical_content": true
 }}"""
     return ChatPromptTemplate.from_template(template_str)
 
@@ -224,8 +252,8 @@ def _extract_tags_from_content(content: str) -> Tuple[Optional[Dict[str, Any]], 
             pass
     return None, content
 
-def add_metadata_to_document(doc: Document, add_tags_llm: bool) -> Document:
-    # 1. Manual Extraction
+def add_metadata_to_document(doc: Document, add_tags_llm: bool) -> Optional[Document]:
+    # 1. Manual Extraction (unchanged)
     extracted_meta, new_content = _extract_tags_from_content(doc.page_content)
     if new_content != doc.page_content:
         doc.page_content = new_content
@@ -240,6 +268,12 @@ def add_metadata_to_document(doc: Document, add_tags_llm: bool) -> Document:
         llm_meta = extract_metadata_llm(doc.page_content)
         
         if llm_meta:
+            is_valid = llm_meta.pop('is_technical_content', True)
+            # 2. Decide to Drop
+            if is_valid is False:
+                print(f"🚫 Skipping Chunk: {doc.metadata.get('source')} (Flagged by LLM){f' in Chapter: {doc.metadata.get("chapter_title")}' if doc.metadata.get('chapter_title') else ''}", flush=True)
+                return None  # This signals split_document to drop it
+            
             clean_meta = {k: v for k, v in llm_meta.items() if v not in [None, ""]}
             doc.metadata.update(clean_meta)
             print(f"DEBUG: Successfully tagged {doc.metadata.get('source')}", flush=True)

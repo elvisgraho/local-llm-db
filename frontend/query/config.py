@@ -27,19 +27,12 @@ class RAGConfig:
     chunk_size: int = 512
     chunk_overlap: int = 100
 
-@dataclass
-class GraphConfig:
-    """Configuration for graph-related settings."""
-    max_depth: int = 2
-    max_nodes: int = 25
-    min_similarity: float = 0.5
 
 @dataclass
 class SystemConfig:
     """Main system configuration."""
     llm: LLMConfig = field(default_factory=LLMConfig)
     rag: RAGConfig = field(default_factory=RAGConfig)
-    graph: GraphConfig = field(default_factory=GraphConfig)
     
     @classmethod
     def from_env(cls) -> 'SystemConfig':
@@ -67,11 +60,6 @@ class SystemConfig:
                 max_documents=int(os.getenv('RAG_MAX_DOCUMENTS', RAGConfig.max_documents)),
                 chunk_size=int(os.getenv('RAG_CHUNK_SIZE', RAGConfig.chunk_size)),
                 chunk_overlap=int(os.getenv('RAG_CHUNK_OVERLAP', RAGConfig.chunk_overlap))
-            ),
-            graph=GraphConfig(
-                max_depth=int(os.getenv('GRAPH_MAX_DEPTH', GraphConfig.max_depth)),
-                max_nodes=int(os.getenv('GRAPH_MAX_NODES', GraphConfig.max_nodes)),
-                min_similarity=float(os.getenv('GRAPH_MIN_SIMILARITY', GraphConfig.min_similarity))
             )
         )
 

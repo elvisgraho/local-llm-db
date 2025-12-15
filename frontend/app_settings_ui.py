@@ -8,8 +8,7 @@ from app_utils import fetch_available_models, load_system_prompts
 STRATEGY_MAP = {
     "Direct Chat": "direct",
     "Standard RAG": "rag",
-    "LightRAG": "lightrag",
-    "KAG (Graph)": "kag"
+    "LightRAG": "lightrag"
 }
 
 # Default LLM only (Embedding defaults to empty/discovered)

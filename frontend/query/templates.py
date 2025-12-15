@@ -25,7 +25,6 @@ STRICT_CONTEXT_INSTRUCTIONS = """
 2. **CONTEXTUAL SYNTHESIS:** You are permitted to logically deduce conclusions if the premises are explicitly present in the source text. Connect disparate data points within the documents to answer complex queries.
 3. **DATA GAPS:** If the precise answer cannot be derived from the provided text, state: "The context lacks sufficient data to answer this specific query."
 4. **GRANULAR CITATION:** Every specific claim or data point must be immediately verified with a citation `[Source: filename]`.
-{kag_specific_instruction_placeholder}
 """
 
 HYBRID_INSTRUCTIONS = """
@@ -33,7 +32,6 @@ HYBRID_INSTRUCTIONS = """
 2. **FLUID INTEGRATION:** Seamlessly weave specific details from the context into your broader analysis. Do not segregate the answer; context should support the argument, not limit it.
 3. **KNOWLEDGE EXPANSION:** If the context is partial or missing, immediately apply your internal knowledge to fill gaps, correct misconceptions, or expand the scope for a smarter, more comprehensive output.
 4. **LIGHTWEIGHT CITATION:** Add `[Source: filename]` only for critical data points derived specifically from the documents to maintain traceability without clutter.
-{kag_specific_instruction_placeholder}
 """
 
 # --- 4. DATA BLOCKS ---
@@ -57,13 +55,7 @@ Question: {question}
 """
 
 # --- 5. HELPERS ---
-# (Keeping these for compatibility with processing logic)
-KAG_CONTEXT_TYPE = "Knowledge Context"
 STANDARD_CONTEXT_TYPE = "Context"
-KAG_RELATIONSHIP_QUALIFIER = ", 'Relationships'," 
-KAG_RELATIONSHIP_QUALIFIER_CITE = " or 'Relationships'"
-KAG_SPECIFIC_DETAIL_INSTRUCTION_STRICT = "5. Incorporate specific details from the Knowledge Context directly.\n"
-KAG_SPECIFIC_DETAIL_INSTRUCTION_HYBRID = "5. Incorporate specific details from the Knowledge Context directly.\n"
 EMPTY_STRING = ""
 DIRECT_TEMPLATE = "Answer based on general knowledge and chat context.\nQuestion: {question}"
 VERIFY_TEMPLATE = """

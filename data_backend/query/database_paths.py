@@ -5,7 +5,7 @@ from typing import Dict, List, Tuple
 
 # --- Constants ---
 
-VALID_RAG_TYPES: Tuple[str, ...] = ("rag", "kag", "lightrag")
+VALID_RAG_TYPES: Tuple[str, ...] = ("rag", "lightrag")
 DEFAULT_DB_NAME = "default"
 
 # --- Adaptive Root Determination ---
@@ -78,7 +78,6 @@ def get_db_paths(rag_type: str, db_name: str) -> Dict[str, Path]:
     return {
         "db_dir": db_instance_dir,
         "chroma_path": db_instance_dir / "chroma",
-        "graph_path": db_instance_dir / "graph.json",
         "vectorstore_path": db_instance_dir / "vectorstore",
         "config_path": db_instance_dir / "db_config.json"
     }
@@ -107,10 +106,6 @@ def db_exists(rag_type: str, db_name: str) -> bool:
         if not db_dir.exists():
             return False
 
-        # Specific checks based on architecture
-        if rag_type == "kag":
-            return paths["graph_path"].exists()
-        
         # Check for ChromaDB (Standard & LightRAG) or Legacy
         chroma_db_file = paths["chroma_path"] / "chroma.sqlite3"
         return chroma_db_file.exists() or paths["vectorstore_path"].exists()

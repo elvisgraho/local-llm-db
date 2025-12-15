@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 
 # --- Constants ---
 
-VALID_RAG_TYPES: Tuple[str, ...] = ("rag", "kag", "lightrag")
+VALID_RAG_TYPES: Tuple[str, ...] = ("rag", "lightrag")
 DEFAULT_DB_NAME = "default"
 
 # --- Root Path Determination ---
@@ -77,7 +77,6 @@ def get_db_paths(rag_type: str, db_name: str) -> Dict[str, Path]:
     paths = {
         "db_dir": db_instance_dir,
         "chroma_path": db_instance_dir / "chroma",
-        "graph_path": db_instance_dir / "graph.json",
         "vectorstore_path": db_instance_dir / "vectorstore"
     }
     return paths
@@ -106,9 +105,6 @@ def db_exists(rag_type: str, db_name: str) -> bool:
         
         if not db_dir.exists():
             return False
-
-        if rag_type == "kag":
-            return paths["graph_path"].exists()
         
         # Check for ChromaDB file or legacy vectorstore
         chroma_file = paths["chroma_path"] / "chroma.sqlite3"

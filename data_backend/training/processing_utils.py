@@ -12,8 +12,8 @@ from typing import List, Dict, Any, Optional
 # --- Modern LangChain Imports ---
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-from langchain_community.vectorstores import FAISS
 from langchain_chroma import Chroma
+from chromadb.config import Settings
 
 # --- Add project root to path for local imports ---
 project_root = Path(__file__).resolve().parent.parent
@@ -63,6 +63,11 @@ def split_document(
     if add_tags_llm:
         try:
             doc = add_metadata_to_document(doc, add_tags_llm=True)
+            
+            if doc is None:
+                # The LLM decided this document is junk
+                return [] 
+            
         except Exception as e:
             source = doc.metadata.get('source', 'unknown')
             logger.error(f"❌ CRITICAL: Tagging failed for '{source}'. Error: {e}")
@@ -138,6 +143,11 @@ def split_document(
         for i, chunk in enumerate(doc_chunks):
             merged_metadata = file_metadata.copy()
             merged_metadata.update(chunk.metadata)
+
+            for key, value in list(merged_metadata.items()):
+                if isinstance(value, list):
+                    merged_metadata[key] = ", ".join(map(str, value))
+
             merged_metadata.update({
                 "chunk_index": i,
                 "total_chunks": total_chunks,
@@ -183,7 +193,8 @@ def initialize_chroma_vectorstore(chroma_path: Path, reset: bool = False) -> Opt
         logger.info(f"Initializing ChromaDB at {path_str}")
         vectorstore = Chroma(
             persist_directory=path_str, 
-            embedding_function=embedding_function
+            embedding_function=embedding_function,
+            client_settings=Settings(anonymized_telemetry=False)
         )
         return vectorstore
 

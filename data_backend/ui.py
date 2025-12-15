@@ -198,8 +198,7 @@ with st.sidebar:
                     # 2. Set Architecture
                     type_map = {
                         "rag": "Standard RAG",
-                        "lightrag": "LightRAG",
-                        "kag": "KAG (Graph)"
+                        "lightrag": "LightRAG"
                     }
                     st.session_state.rag_flavor_selector = type_map.get(target_db["Type"], "Standard RAG")
                     

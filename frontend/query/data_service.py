@@ -87,7 +87,6 @@ class DataService:
         
         # Caches
         self._chroma_cache: Dict[Tuple[str, str], Chroma] = {}
-        self._kag_graph_cache: Dict[Tuple[str, str], nx.DiGraph] = {}
         # BM25 Cache: (Index, Corpus, DocIDs)
         self._bm25_cache: Dict[Tuple[str, str], Tuple[Optional[BM25Okapi], Optional[List[str]], Optional[List[str]]]] = {}
         
@@ -213,42 +212,6 @@ class DataService:
             logger.error(f"BM25 build failed for {cache_key}: {e}")
             self._bm25_cache[cache_key] = (None, None, None)
 
-    def get_kag_graph(self, rag_type: str, db_name: str) -> Optional[nx.DiGraph]:
-        """Load NetworkX graph for KAG."""
-        if rag_type != 'kag':
-            logger.warning("Graph requested for non-KAG type.")
-            return None
-
-        cache_key = (rag_type, db_name)
-        if cache_key in self._kag_graph_cache:
-            return self._kag_graph_cache[cache_key]
-
-        try:
-            db_paths = get_db_paths(rag_type, db_name)
-            graph_path = db_paths.get("graph_path")
-
-            if not graph_path or not graph_path.exists():
-                logger.warning(f"Graph file missing: {graph_path}")
-                return None
-
-            logger.info(f"Loading Graph from {graph_path}")
-            with open(graph_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-
-            graph = nx.DiGraph()
-            for n in data.get('nodes', []):
-                if 'id' in n:
-                    graph.add_node(n['id'], **n.get('data', {}))
-            for e in data.get('edges', []):
-                if 'source' in e and 'target' in e:
-                    graph.add_edge(e['source'], e['target'], **e.get('data', {}))
-
-            self._kag_graph_cache[cache_key] = graph
-            return graph
-        except Exception as e:
-            logger.error(f"Graph load failed {cache_key}: {e}")
-            return None
-
     # --- Legacy Data Loading (Wrapped in Modern Interface) ---
 
     @property
@@ -330,7 +293,6 @@ Question: {input}"""
         """Clear all cached data."""
         logger.warning("Clearing DataService cache...")
         self._chroma_cache.clear()
-        self._kag_graph_cache.clear()
         self._bm25_cache.clear()
         self._vectorstore = None
         self._qa_chain = None

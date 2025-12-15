@@ -92,7 +92,7 @@ def render_build_tab(env_vars):
             
         st.radio(
             "Architecture", 
-            ["Standard RAG", "LightRAG", "KAG (Graph)"], 
+            ["Standard RAG", "LightRAG"], 
             key="rag_flavor_selector",
             disabled=is_running
         )
@@ -116,8 +116,7 @@ def render_build_tab(env_vars):
         if st.button("Launch Population", type="primary", disabled=(not db_name)):
             script_map = {
                 "Standard RAG": "populate_rag.py",
-                "LightRAG": "populate_lightrag.py",
-                "KAG (Graph)": "populate_kag.py"
+                "LightRAG": "populate_lightrag.py"
             }
             script = script_map[rag_flavor]
             

@@ -1,6 +1,6 @@
 # RAG Architect Frontend
 
-A Dockerized interface for interacting with local knowledge bases via RAG, LightRAG, and KAG strategies.
+A Dockerized interface for interacting with local knowledge bases via RAG and LightRAG strategies.
 
 ## Prerequisites
 

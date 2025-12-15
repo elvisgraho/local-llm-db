@@ -57,7 +57,7 @@ def scan_databases(db_root=DATABASE_DIR):
     inventory = []
     if not db_root.exists(): return inventory
     
-    for r_type in ["rag", "lightrag", "kag"]:
+    for r_type in ["rag", "lightrag"]:
         type_dir = db_root / r_type
         if type_dir.exists():
             for db_instance in type_dir.iterdir():

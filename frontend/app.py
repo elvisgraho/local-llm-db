@@ -8,7 +8,7 @@ import logging
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 # --- Internal Imports ---
-from query.query_data import query_direct, query_rag, query_lightrag, query_kag
+from query.query_data import query_direct, query_rag, query_lightrag
 from query.session_manager import session_manager
 
 # --- New Utils Import ---
@@ -279,7 +279,7 @@ def main():
                         
                     elif db_name:
                         status.write(f"🔍 Retrieving from **{db_name}** ({rag_type.upper()})...")
-                        strategies = {'rag': query_rag, 'lightrag': query_lightrag, 'kag': query_kag}
+                        strategies = {'rag': query_rag, 'lightrag': query_lightrag}
                         
                         # Validate strategy exists
                         if rag_type not in strategies:

@@ -22,7 +22,7 @@ def scan_available_dbs():
     if not DATABASE_DIR.exists():
         return []
 
-    for rag_type in ['rag', 'lightrag', 'kag']:
+    for rag_type in ['rag', 'lightrag']:
         type_dir = DATABASE_DIR / rag_type
         if type_dir.exists():
             for item in type_dir.iterdir():
