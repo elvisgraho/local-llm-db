@@ -326,7 +326,7 @@ def _render_rag_params(is_direct):
         verify = st.toggle("Verify Answer", value=False, key="rag_verify", 
             help="After initial LLM response, LLM will run again to verify and correct the response")
         rewrite = st.toggle("Rewrite Queries", value=False, key="rag_rewrite",
-            help="Automatically uses the LLM to refine your prompt before searching.")
+            help="Automatically uses the LLM to refine your prompt.")
 
     return {
         "top_k": top_k,

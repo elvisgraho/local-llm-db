@@ -23,7 +23,7 @@ DEFAULT_RESPONSE_RESERVE = 1500  # Tokens reserved for the LLM's generated answe
 
 # --- Helper Functions ---
 
-def _estimate_tokens(text: str, model_encoding: str = "cl100k_base") -> int:
+def estimate_tokens(text: str, model_encoding: str = "cl100k_base") -> int:
     """
     Estimates tokens. Prioritizes safety (overestimation) in heuristic fallback.
     """
@@ -57,13 +57,13 @@ def _reorder_documents_for_context(docs: List[Document]) -> List[Document]:
         return [most_relevant] + middle_docs + [second_most_relevant]
     return docs
 
-def _apply_metadata_filter(
+def apply_metadata_filter(
     docs_with_scores: List[Tuple[Document, float]], 
     metadata_filter: Optional[Dict[str, Any]]
 ) -> List[Tuple[Document, float]]:
     """
     Applies logic-aware filtering. 
-    Handles flattened strings (e.g. "recon, poc") by splitting and checking membership.
+    Handles flattened strings (e.g. "recon, poc") and Entity formats "Name (Category)".
     """
     if not metadata_filter:
         return docs_with_scores
@@ -72,30 +72,46 @@ def _apply_metadata_filter(
     for doc, score in docs_with_scores:
         match = True
         for key, target_val in metadata_filter.items():
-            # 1. Get actual value (default to empty string to prevent NoneType error)
+            # 1. Get actual value (default to empty string)
             actual_val = doc.metadata.get(key, "")
             
-            # 2. Normalize to string for comparison
-            actual_str = str(actual_val)
-            target_str = str(target_val)
+            # 2. Normalize to strings
+            actual_str = str(actual_val).lower()
+            target_str = str(target_val).lower()
 
-            # 3. Check Membership (Split by comma if it looks like a list)
-            # This handles "recon, poc" containing "poc"
+            # 3. Check Membership
+            # We flattened lists into strings: "item1, item2 (CAT), item3"
             if "," in actual_str:
                 actual_list = [item.strip() for item in actual_str.split(",")]
-                if target_str not in actual_list:
+                
+                # Check if target is in the list (Relaxed for Entities)
+                found = False
+                for item in actual_list:
+                    # Case A: Exact Match (e.g. "T1059")
+                    if target_str == item:
+                        found = True
+                        break
+                    # Case B: Entity Match "Mimikatz" matches "mimikatz (tool)"
+                    # We check if target is the "prefix" of the item
+                    if item.startswith(target_str) and "(" in item:
+                        found = True
+                        break
+                
+                if not found:
                     match = False
                     break
             else:
-                # Fallback to direct equality or substring if strict matching isn't required
+                # 4. Fallback for single values (Exact or Substring)
+                # For safety with loose tags, we prefer exact match if it's not a list
                 if actual_str != target_str:
+                    # Optional: Allow substring if you want looser filtering
+                    # if target_str not in actual_str: 
                     match = False
                     break
         
         if match:
             filtered.append((doc, score))
             
-    logger.debug(f"Metadata filter: {len(docs_with_scores)} -> {len(filtered)} docs.")
     return filtered
 
 def calculate_available_context(
@@ -111,21 +127,21 @@ def calculate_available_context(
 
     # 2. Get User's System Prompt Size
     user_system_prompt = llm_config.get('system_prompt', "")
-    fixed_tokens += _estimate_tokens(user_system_prompt)
+    fixed_tokens += estimate_tokens(user_system_prompt)
 
     # 3. Add Overhead for RAG Instructions (Estimate)
     # We use the larger of the two instruction sets to be safe
-    instruction_overhead = _estimate_tokens(STRICT_CONTEXT_INSTRUCTIONS) + 50 
+    instruction_overhead = estimate_tokens(STRICT_CONTEXT_INSTRUCTIONS) + 50 
     fixed_tokens += instruction_overhead
 
     # 4. Add Overhead for User Template Wrapper
     # (Context placeholders, sources placeholders, etc)
-    user_wrapper_overhead = _estimate_tokens(RAG_USER_TEMPLATE)
+    user_wrapper_overhead = estimate_tokens(RAG_USER_TEMPLATE)
     fixed_tokens += user_wrapper_overhead
 
     # 5. Add Query and Block Overheads
-    fixed_tokens += _estimate_tokens(query_text)
-    fixed_tokens += _estimate_tokens(QUESTION_BLOCK)
+    fixed_tokens += estimate_tokens(query_text)
+    fixed_tokens += estimate_tokens(QUESTION_BLOCK)
     # Add a buffer for the context headers ("Context:", "Sources:")
     fixed_tokens += 50 
 

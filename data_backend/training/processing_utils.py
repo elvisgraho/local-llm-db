@@ -34,19 +34,19 @@ RE_FILENAME_SANITIZE = re.compile(r'[^a-z0-9_]')
 
 def validate_metadata(metadata: Dict[str, Any]) -> bool:
     """
-    Validate document metadata for required fields efficiently (Single Pass).
+    Validate document metadata for required fields efficiently.
     """
     if not isinstance(metadata, dict):
         return False
 
-    required_fields = ["source", "file_name", "file_type"]
-    
+    required_fields = ["source", "file_name"]
     for field in required_fields:
         val = metadata.get(field)
         if not val or not isinstance(val, str):
-            logger.debug(f"Metadata invalid/missing field '{field}': {val}")
+            # Allow file_name to be missing if source is present (will be extracted later)
+            if field == "file_name" and metadata.get("source"):
+                continue
             return False
-
     return True
 
 def split_document(
@@ -57,23 +57,25 @@ def split_document(
     chunk_size: Optional[int] = None
 ) -> List[Document]:
     """
-    Split a document into semantic chunks with NOISE FILTERING.
+    Split a document into semantic chunks with NOISE FILTERING and FLATTENING for Chroma.
     """
-    # 2. Generate Metadata (ONCE per file)
+    
+    # 1. Generate Metadata (LLM or Manual Tags)
     if add_tags_llm:
         try:
+            # This now handles Manual Tags + LLM internally
             doc = add_metadata_to_document(doc, add_tags_llm=True)
             
             if doc is None:
-                # The LLM decided this document is junk
-                return [] 
+                return [] # Dropped as non-technical/junk
             
         except Exception as e:
             source = doc.metadata.get('source', 'unknown')
             logger.error(f"❌ CRITICAL: Tagging failed for '{source}'. Error: {e}")
-            return [] 
+            # Continue even if tagging fails, we just lose rich metadata
+            pass 
 
-    # 3. Configure Splitter
+    # 2. Configure Splitter
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -84,77 +86,89 @@ def split_document(
     )
 
     try:
-        # 4. Pre-process Content (Fast Regex)
+        # 3. Pre-process Content (Fast Regex)
         content = doc.page_content or ""
         content = RE_BULLET.sub('• ', content)
         content = RE_NUMBERED_LIST.sub(r'\1 ', content)
         content = RE_CODE_BLOCK.sub(r'```\n', content)
         doc.page_content = content
 
-        # 5. Split
+        # 4. Split
         raw_chunks = text_splitter.split_documents([doc])
 
         valid_chunks = []
         for chunk in raw_chunks:
             text = chunk.page_content.strip()
             
-            # A. Skip Empty
-            if not text:
+            # A. Skip Empty/Noise
+            if not text or len(text) < 50:
                 continue
                 
-            # B. Skip "Header Orphans" (The specific cause of your issue)
-            # If chunk starts with '#' (Header), is short, and has few newlines, it's a detached title.
+            # B. Skip "Header Orphans"
             if text.startswith('#') and len(text) < 150 and text.count('\n') < 2:
-                continue
-                
-            # C. Skip Noise
-            if len(text) < 50:
                 continue
                 
             valid_chunks.append(chunk)
 
-        # 3. Fallback: If strict filtering removed everything, keep original if it had substance
-        if not valid_chunks and len(doc.page_content) > 100:
-             valid_chunks = raw_chunks
-
-        doc_chunks = valid_chunks
-
-        
-        if not doc_chunks:
-            # If everything was filtered (rare), keep the original valid chunks to avoid total data loss
-            # or return empty if the doc was just garbage.
-            if len(doc.page_content) > 50:
-                 doc_chunks = raw_chunks
+        # Fallback: If strict filtering removed everything, keep raw
+        doc_chunks = valid_chunks if valid_chunks else (raw_chunks if len(doc.page_content) > 50 else [])
 
         # Limit Chunks
         if len(doc_chunks) > max_total_chunks:
-            source_name = doc.metadata.get('source', 'unknown')
-            logger.warning(f"Limiting {source_name} to {max_total_chunks} chunks.")
             doc_chunks = doc_chunks[:max_total_chunks]
 
-        # 6. Finalize Metadata
+        # 5. Finalize Metadata (FLATTENING STEP)
         processed_chunks = []
         total_chunks = len(doc_chunks)
-        source = doc.metadata.get("source", "unknown")
         
+        # Base metadata from file path
+        source = doc.metadata.get("source", "unknown")
         file_metadata = extract_metadata(source)
         base_timestamp = datetime.now().isoformat()
 
         for i, chunk in enumerate(doc_chunks):
+            # Start with file info
             merged_metadata = file_metadata.copy()
+            # Update with doc-level metadata (LLM tags, manual tags)
+            merged_metadata.update(doc.metadata) 
+            # Update with chunk-specifics (if any exist)
             merged_metadata.update(chunk.metadata)
 
-            for key, value in list(merged_metadata.items()):
-                if isinstance(value, list):
-                    merged_metadata[key] = ", ".join(map(str, value))
+            # --- CRITICAL: FLATTEN FOR CHROMA ---
+            # ChromaDB crashes if metadata values are Lists or Dictionaries.
+            # We must convert them to strings.
+            clean_metadata = {}
+            
+            for key, value in merged_metadata.items():
+                if value is None:
+                    clean_metadata[key] = ""
+                    
+                # Handle Entities List [{'name': 'X', 'category': 'Y'}]
+                elif key == "entities" and isinstance(value, list):
+                    # Format: "Mimikatz (TOOL), CVE-2023-1 (VULN)"
+                    formatted_entities = []
+                    for item in value:
+                        if isinstance(item, dict):
+                            formatted_entities.append(f"{item.get('name')} ({item.get('category', 'UNK')})")
+                        else:
+                            formatted_entities.append(str(item))
+                    clean_metadata[key] = ", ".join(formatted_entities)
 
-            merged_metadata.update({
+                # Handle Standard Lists (tactics, code_languages)
+                elif isinstance(value, list):
+                    clean_metadata[key] = ", ".join(map(str, value))
+                    
+                # Handle Booleans/Numbers/Strings
+                else:
+                    clean_metadata[key] = value
+
+            clean_metadata.update({
                 "chunk_index": i,
                 "total_chunks": total_chunks,
                 "processed_at": base_timestamp
             })
             
-            chunk.metadata = merged_metadata
+            chunk.metadata = clean_metadata
             processed_chunks.append(chunk)
 
         return processed_chunks
@@ -164,31 +178,13 @@ def split_document(
         logger.error(f"Failed to split document {source}: {e}")
         return []
 
-
 def initialize_chroma_vectorstore(chroma_path: Path, reset: bool = False) -> Optional[Chroma]:
     try:
         embedding_function = get_embedding_function()
         path_str = str(chroma_path)
 
         if reset:
-            logger.info(f"Resetting ChromaDB at {path_str}...")
-            # Unload any existing instances
-            gc.collect()
-            
-            if chroma_path.exists():
-                # specific retry for the chroma folder
-                try:
-                    shutil.rmtree(chroma_path)
-                except PermissionError:
-                    logger.warning("ChromaDB folder locked. Attempting forced cleanup...")
-                    time.sleep(1)
-                    try:
-                        shutil.rmtree(chroma_path)
-                    except Exception as e:
-                        logger.error(f"Could not delete locked DB: {e}")
-                        return None
-                        
-            chroma_path.parent.mkdir(parents=True, exist_ok=True)
+            clear_db_directory(chroma_path)
 
         logger.info(f"Initializing ChromaDB at {path_str}")
         vectorstore = Chroma(
@@ -204,12 +200,15 @@ def initialize_chroma_vectorstore(chroma_path: Path, reset: bool = False) -> Opt
 
 def manage_db_configuration(db_dir: Path, rag_type: str, args) -> None:
     config_path = db_dir / "db_config.json"
+    
+    # Validation Logic
     if config_path.exists() and not args.reset:
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 existing = json.load(f)
             old_chunk = existing.get("chunk_size")
             old_overlap = existing.get("chunk_overlap")
+            
             if old_chunk is not None:
                 if old_chunk != args.chunk_size or old_overlap != args.chunk_overlap:
                     logger.error(f"⛔ CONFIGURATION MISMATCH for '{args.db_name}'")
@@ -220,9 +219,8 @@ def manage_db_configuration(db_dir: Path, rag_type: str, args) -> None:
         except Exception as e:
             logger.warning(f"Could not read existing config: {e}")
 
+    # Creation Logic
     if args.reset or not config_path.exists():
-        if not args.reset and db_dir.exists() and any(db_dir.iterdir()):
-             logger.warning("Adopting existing legacy database: creating configuration file.")
         db_dir.mkdir(parents=True, exist_ok=True)
         try:
             with open(config_path, "w", encoding="utf-8") as f:
@@ -232,7 +230,7 @@ def manage_db_configuration(db_dir: Path, rag_type: str, args) -> None:
                     "chunk_overlap": args.chunk_overlap,
                     "created_at": str(datetime.now()),
                     "db_name": args.db_name
-                }, f, indent=2)
+                }, f, indent=2, ensure_ascii=False)
             logger.info(f"Saved database configuration to {config_path}")
         except Exception as e:
             logger.error(f"Failed to save DB config: {e}")
@@ -245,23 +243,25 @@ def clear_db_directory(db_dir: Path) -> None:
 
     logger.info(f"Clearing directory: {db_dir}")
     
-    # Force Garbage Collection to release file handles
+    # Force Garbage Collection to release file handles (Crucial for Chroma on Windows)
     gc.collect() 
     
     # Retry loop for Windows permissions
-    for _ in range(3):
+    for attempt in range(3):
         try:
             if db_dir.exists():
                 shutil.rmtree(db_dir)
             break
         except PermissionError:
-            logger.warning("File locked. Waiting 1s before retry...")
+            logger.warning(f"File locked (Attempt {attempt+1}/3). Waiting 1s...")
             time.sleep(1)
         except Exception as e:
             logger.error(f"Error clearing {db_dir}: {e}")
             break
-            
-    logger.info("Directory cleared.")
+    
+    # Ensure it's recreated
+    db_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Directory cleared and ready.")
 
 def get_unique_path(out_dir: Path, filename: str) -> Path:
     """Guarantees no overwrites by appending a counter."""

@@ -9,7 +9,7 @@ from langchain_core.documents import Document
 # Internal Imports
 from query.data_service import data_service
 from query.llm_service import get_llm_response
-from query.query_helpers import _estimate_tokens, _reorder_documents_for_context
+from query.query_helpers import estimate_tokens, _reorder_documents_for_context
 from query.templates import (
     RAG_SYSTEM_CONSTRUCTION, RAG_USER_TEMPLATE,
     STRICT_CONTEXT_INSTRUCTIONS, HYBRID_INSTRUCTIONS,
@@ -96,7 +96,7 @@ def select_docs_for_context(
     selected_docs = []
     selected_sources = set()
     current_tokens = 0
-    separator_tokens = _estimate_tokens(DOC_SEPARATOR)
+    separator_tokens = estimate_tokens(DOC_SEPARATOR)
     seen_content_hashes: Set[str] = set()
 
     logger.info(f"Selecting documents from {len(docs_with_scores)} candidates (Limit: {available_tokens} tokens).")
@@ -131,7 +131,7 @@ def select_docs_for_context(
         seen_content_hashes.add(content_hash)
 
         # --- TOKEN CHECK ---
-        est_tokens = _estimate_tokens(doc_content)
+        est_tokens = estimate_tokens(doc_content)
         
         # Check if adding this doc exceeds the budget
         if current_tokens + est_tokens + separator_tokens <= available_tokens:
@@ -156,7 +156,7 @@ def select_docs_for_context(
         top_doc = docs_with_scores[0][0]
         if top_doc.page_content and top_doc.page_content.strip():
             selected_docs.append(top_doc)
-            current_tokens = _estimate_tokens(top_doc.page_content)
+            current_tokens = estimate_tokens(top_doc.page_content)
             
             src = top_doc.metadata.get("source")
             if src: selected_sources.add(os.path.basename(src))

@@ -14,8 +14,8 @@ if project_root not in sys.path:
 from training.load_documents import load_documents
 from training.history_manager import ProcessingHistory
 from training.extract_metadata_llm import (
-    _get_llm_response,
-    _clean_and_parse_json,
+    get_llm_response,
+    clean_and_parse_json,
     extract_text_parts,      
     PydanticOutputParser,
     Field,
@@ -71,7 +71,7 @@ def evaluate_document_content(text: str) -> Dict[str, Any]:
     parser = PydanticOutputParser(pydantic_object=RedTeamFilter)
     
     # Extract representative parts to avoid token limits while maintaining context
-    sampled_text = extract_text_parts(text, part_size=2400, part_count=12)
+    sampled_text = extract_text_parts(text)
     
     try:
         prompt = get_filter_prompt()
@@ -80,8 +80,8 @@ def evaluate_document_content(text: str) -> Dict[str, Any]:
             "format_instructions": parser.get_format_instructions()
         })
         
-        raw_response = _get_llm_response(prompt_val.to_string())
-        result = _clean_and_parse_json(raw_response)
+        raw_response = get_llm_response(prompt_val.to_string())
+        result = clean_and_parse_json(raw_response)
         
         if not result or 'decision' not in result:
             return {"decision": "KEEP", "reasoning": "LLM returned invalid format"}

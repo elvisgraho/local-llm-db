@@ -7,12 +7,12 @@ from langchain_core.vectorstores import VectorStore
 
 # Local Imports
 from query.data_service import data_service
-# Ensure query_helpers has the NEW logic-aware _apply_metadata_filter
-from query.query_helpers import _apply_metadata_filter
+# Ensure query_helpers has the NEW logic-aware apply_metadata_filter
+from query.query_helpers import apply_metadata_filter
 
 logger = logging.getLogger(__name__)
 
-def _retrieve_semantic(
+def retrieve_semantic(
     query_text: str, 
     db: VectorStore, 
     k: int, 
@@ -40,7 +40,7 @@ def _retrieve_semantic(
         )
 
         # 2. Apply Logic Filter in Python
-        filtered_results = _apply_metadata_filter(raw_results, metadata_filter)
+        filtered_results = apply_metadata_filter(raw_results, metadata_filter)
 
         # 3. Return top k
         return filtered_results[:k]
@@ -53,7 +53,7 @@ def _retrieve_semantic(
              logger.error(f"Error during semantic search: {e}", exc_info=True)
         return []
 
-def _retrieve_keyword(
+def retrieve_keyword(
     query_text: str, 
     db: VectorStore, 
     rag_type: str, 
@@ -109,7 +109,7 @@ def _retrieve_keyword(
                     score = id_to_score.get(doc_id, 0.0)
                     results.append((doc, score))
 
-        return _apply_metadata_filter(results, metadata_filter)[:k]
+        return apply_metadata_filter(results, metadata_filter)[:k]
         
     except Exception as e:
         logger.error(f"Error during BM25 search: {e}", exc_info=True)

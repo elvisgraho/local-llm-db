@@ -13,8 +13,8 @@ from query.llm_service import get_llm_response
 from query.global_vars import RAG_SIMILARITY_THRESHOLD
 from query.query_helpers import calculate_available_context
 from query.retrieval import (
-    _retrieve_semantic,
-    _retrieve_keyword
+    retrieve_semantic,
+    retrieve_keyword
 )
 from query.processing import (
     _rerank_results,
@@ -103,15 +103,15 @@ def query_rag(
         db = _get_db_or_raise('rag', db_name)
         
         # 3. Retrieve
-        # ADJUSTMENT: _retrieve_semantic now multiplies by 4 internally.
+        # ADJUSTMENT: retrieve_semantic now multiplies by 4 internally.
         # We only need a slight buffer here to merge with keyword results.
         k_initial = min(int(top_k * 1.5), 100)
         if k_initial < top_k: k_initial = top_k
         
         logger.info(f"RAG initial retrieval k = {k_initial}")
 
-        semantic_results = _retrieve_semantic(retrieval_query, db, k_initial, metadata_filter)
-        keyword_results = _retrieve_keyword(retrieval_query, db, 'rag', db_name, k_initial, metadata_filter)
+        semantic_results = retrieve_semantic(retrieval_query, db, k_initial, metadata_filter)
+        keyword_results = retrieve_keyword(retrieval_query, db, 'rag', db_name, k_initial, metadata_filter)
 
         # 4. Merge & Deduplicate
         combined_dict = {doc.page_content: (doc, score) for doc, score in semantic_results}
@@ -164,7 +164,7 @@ def query_lightrag(
         k_initial = min(int(top_k * 1.5), 100)
         logger.info(f"LightRAG initial retrieval k = {k_initial}")
         
-        semantic_results = _retrieve_semantic(retrieval_query, db, k_initial, metadata_filter)
+        semantic_results = retrieve_semantic(retrieval_query, db, k_initial, metadata_filter)
 
         # 4. Filter
         threshold_filtered_docs = [

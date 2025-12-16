@@ -1,12 +1,11 @@
 """
 LightRAG (Lightweight Retrieval Augmented Generation) Implementation
 
-This module implements a lightweight approach to RAG using ChromaDB for efficient
-document retrieval. Key features:
-1. Simple document chunking and embedding
-2. Fast similarity search
-3. Integration with LM Studio for local LLM inference
-4. Basic question-answering capabilities
+This module orchestrates the database population pipeline:
+1. Load Documents (Hybrid PDF/Text loader)
+2. Extract Metadata (Manual Tags + LLM Fallback)
+3. Split & Flatten (Graph entities -> Strings)
+4. Index to ChromaDB
 """
 import logging
 import sys
@@ -26,7 +25,12 @@ from langchain_core.documents import Document
 # --- Internal Imports ---
 from query.database_paths import get_db_paths
 from training.load_documents import load_documents
-from training.processing_utils import manage_db_configuration, split_document, initialize_chroma_vectorstore, validate_metadata
+from training.processing_utils import (
+    manage_db_configuration, 
+    split_document, 
+    initialize_chroma_vectorstore, 
+    validate_metadata
+)
 
 # Configure logging
 logging.basicConfig(
@@ -39,12 +43,16 @@ def process_document(doc: Document, add_tags_llm: bool, chunk_size: int, chunk_o
     """
     Process a single document: validate, split, and ensure metadata.
     """
-    # 1. Validate Metadata
+    # 1. Validate Metadata (Basic checks)
     if not validate_metadata(doc.metadata):
-         logger.warning(f"Skipping document with invalid metadata: {doc.metadata.get('source', 'unknown')}")
-         return []
+        logger.warning(f"Skipping document with invalid metadata: {doc.metadata.get('source', 'unknown')}")
+        return []
 
-    # 2. Split Document (pass chunking params)
+    # 2. Split Document 
+    # This calls the ROBUST split_document from processing_utils.py which handles:
+    # - Manual Tag Extraction (stripping "Tags:" header)
+    # - LLM Tag Generation (if add_tags_llm=True)
+    # - Entity Flattening (List -> String for Chroma)
     try:
         source = doc.metadata.get("source")
 
@@ -56,10 +64,11 @@ def process_document(doc: Document, add_tags_llm: bool, chunk_size: int, chunk_o
         )
 
         if not chunks:
-            logger.warning(f"Splitting document {source} resulted in no chunks.")
+            # If chunks is empty, it might be because the LLM flagged it as non-technical/junk
+            # Logger warning is handled inside split_document usually, but good to have here too
             return []
         
-        # 3. Ensure essential metadata in chunks
+        # 3. Final Safety Check on Metadata
         for chunk in chunks:
             if "source" not in chunk.metadata:
                  chunk.metadata["source"] = source
@@ -67,7 +76,7 @@ def process_document(doc: Document, add_tags_llm: bool, chunk_size: int, chunk_o
         return chunks
 
     except Exception as e:
-        logger.error(f"Error splitting document {source}: {e}")
+        logger.error(f"Error processing document {source}: {e}")
         return []
 
 def main():
@@ -75,7 +84,7 @@ def main():
     parser = argparse.ArgumentParser(description="Populate a LightRAG (Chroma) database instance.")
     parser.add_argument("--db_name", type=str, default="default", help="Name of the DB instance (e.g., 'default', 'medical').")
     parser.add_argument("--reset", action="store_true", help="Delete existing DB and start fresh.")
-    parser.add_argument("--add-tags", action="store_true", help="Use LLM to generate metadata tags.")
+    parser.add_argument("--add-tags", action="store_true", help="Use LLM to enrich metadata (Entities/Summaries).")
     parser.add_argument("--resume", action="store_true", help="Skip already processed files.")
     parser.add_argument("--chunk_size", type=int, default=1000, help="Chars per chunk.")
     parser.add_argument("--chunk_overlap", type=int, default=200, help="Overlap chars.")
@@ -95,10 +104,10 @@ def main():
          logger.error(f"Configuration Error: {e}")
          sys.exit(1)
 
-    # Prioritize 'chroma_path', fallback for older configs if needed
     chroma_path = db_paths.get("chroma_path") or db_paths.get("vectorstore_path")
     db_dir = db_paths["db_dir"]
     
+    # Check/Create DB Config
     manage_db_configuration(db_paths["db_dir"], "lightrag", args)
 
     if not chroma_path:
@@ -114,6 +123,7 @@ def main():
         if not vectorstore:
              logger.error("Failed to initialize Chroma vectorstore.")
              sys.exit(1)
+             
         # 2. Load Documents
         ignore_registry = (not args.resume) or args.reset
         loaded_docs = load_documents(
@@ -149,16 +159,19 @@ def main():
             total_chunks = len(all_processed_chunks)
             logger.info(f"Indexing {total_chunks} chunks into ChromaDB (Batch Size: {args.chunk_size})...")
 
+            # We reuse chunk_size arg as batch size for insertion, or hardcode 100
+            BATCH_SIZE = 100 
+            
             with tqdm(total=total_chunks, desc="Indexing", unit="chunk") as pbar:
-                for i in range(0, total_chunks, args.chunk_size):
-                    batch = all_processed_chunks[i : i + args.chunk_size]
+                for i in range(0, total_chunks, BATCH_SIZE):
+                    batch = all_processed_chunks[i : i + BATCH_SIZE]
                     try:
                         vectorstore.add_documents(batch)
                         pbar.update(len(batch))
                     except Exception as e:
-                        logger.error(f"Batch indexing failed at {i}. Retrying individually... Error: {e}")
+                        logger.error(f"Batch indexing failed at index {i}. Retrying individually... Error: {e}")
                         
-                        # FIX: Fallback to individual insertion so valid docs aren't lost
+                        # Fallback to individual insertion
                         for doc in batch:
                             try:
                                 vectorstore.add_documents([doc])

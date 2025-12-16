@@ -15,8 +15,8 @@ from training.processing_utils import get_unique_path
 from training.load_documents import load_documents
 from training.history_manager import ProcessingHistory
 from training.extract_metadata_llm import (
-    _get_llm_response,
-    _clean_and_parse_json,
+    get_llm_response,
+    clean_and_parse_json,
     extract_text_parts, 
     get_metadata_extraction_prompt,
     PydanticOutputParser,
@@ -48,15 +48,15 @@ def process_content_llm(text: str) -> Dict[str, Any]:
         
         # Extract representative parts to stay within context window
         # (Assuming extract_text_parts handles large files intelligently)
-        sampled_text = extract_text_parts(text, part_size=2000, part_count=4)
+        sampled_text = extract_text_parts(text)
 
         prompt_val = prompt.invoke({
             "text": sampled_text, 
             "format_instructions": fmt_instructions
         })
         
-        raw_response = _get_llm_response(prompt_val.to_string())
-        return _clean_and_parse_json(raw_response)
+        raw_response = get_llm_response(prompt_val.to_string())
+        return clean_and_parse_json(raw_response)
     except Exception as e:
         logger.error(f"LLM Processing Error: {e}")
         return {}
@@ -145,6 +145,7 @@ def main():
                 logger.warning(f"  [Empty] Content empty after cleaning: {file_path.name}")
                 stats["errors"] += 1
                 continue
+            
 
             # --- LLM Extraction ---
             meta = process_content_llm(content)
@@ -157,6 +158,15 @@ def main():
             # --- Prepare Output Data ---
             fname = meta.pop('suggested_filename', 'untitled_doc')
             llm_date = meta.pop('release_date', None)
+
+            meta.pop('reasoning', "")
+
+            is_valid = meta.pop('is_technical_content', True)
+            if is_valid is False:
+                chapter = doc.metadata.get('chapter_title', '')
+                src = doc.metadata.get('source')
+                print(f"🚫 Skipping Chunk: {src} {f'[{chapter}]' if chapter else ''} (Flagged as non-technical)", flush=True)
+                return None
 
             # Determine date logic
             if existing_date:
@@ -187,6 +197,7 @@ def main():
                 stats["errors"] += 1
             
             # Clean console line
+            history.save()
             sys.stdout.write("\033[K")
 
     except KeyboardInterrupt:

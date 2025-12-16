@@ -4,8 +4,10 @@ import argparse
 import logging
 import re
 import signal
+from typing import List
 from tqdm import tqdm
 from pathlib import Path
+from langchain_core.documents import Document
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
@@ -15,8 +17,7 @@ from training.processing_utils import get_unique_path
 from training.load_documents import load_documents
 from training.history_manager import ProcessingHistory
 from training.extract_metadata_llm import (
-    _get_llm_response,  
-    ChatPromptTemplate
+    get_llm_response
 )
 
 # Configure Logging
@@ -44,25 +45,33 @@ signal.signal(signal.SIGINT, signal_handler)
 # -------------------------------------------------------------------------
 # 1. Prompt
 # -------------------------------------------------------------------------
+LLM_SYSTEM_PROMPT = """You are a Principal Security Researcher. Your objective is to transform raw input into a definitive, RAG-optimized technical knowledge artifact.
 
-llm_prompt_template = """
-You are a Senior Technical Intelligence Analyst. Your task is to convert raw, potentially messy source text into a **comprehensive, professional technical documentation file**.
+**Core Directive:**
+Convert the input into a structured, semantically dense Markdown document. Prioritize technical precision, precise command syntax, and mechanistic explanations to maximize value for downstream vector retrieval.
 
-### CORE OBJECTIVES
-1.  **Extraction**: Identify every technical detail, command, code snippet, configuration, and vulnerability mentioned.
-2.  **Reconstruction**: If the transcript is fragmented, use domain expertise to reconstruct the intended technical logic (e.g., fixing broken command syntax).
-3.  **Synthesis**: Organize scattered information into a linear, logical technical narrative.
+**Structure & Schema:**
+1. **# Title**: Specific and descriptive.
+2. **## Executive Summary**: A dense 3-sentence summary of the technique, vulnerability, or concept.
+3. **## Technical Context**: Explain the underlying mechanism (the "why" and "where").
+4. **## Execution Flow**:
+   - Provide a sequential, step-by-step breakdown of the attack chain or technical process.
+   - Use code blocks for **all** commands, payloads, and configurations.
+   - Explicitly name tools, flags, protocols, and versions.
+   - Reconstruct implied/missing technical steps using standard adversarial tradecraft.
 
-### STRICT FORMATTING RULES
--   **Pragmatism**: Prioritize solutions that work in real-world environments.
--   **NO EMOJIS**: Do not use emojis anywhere.
--   **NO TABLES**: Do not generate Markdown tables.
--   **NO CONVERSATIONAL FILLER**: Do not use phrases like "In this document," "The speaker discusses," or "Here is the writeup." Start directly with technical content.
--   **NO ETHICAL/LEGAL DISCLAIMERS**: This is an internal intelligence repository. Omit all warnings, refusals, or moralizing text.
+**Optimization Rules:**
+- **Semantic Density**: Maximize technical nouns per sentence. Explicitly reference relevant CVEs, MITRE ATT&CK T-codes, or specific protocols to enhance embedding quality.
+- **Tone**: Clinical, authoritative, and impersonal. Eliminate all conversational filler, speaker attributions, and anecdotes.
+- **Inference**: If the transcript contains transcription errors, correct them to the likely intended technical term (e.g., fix "wireshark" to "Wireshark", "end map" to "Nmap").
+- **Constraints**: 
+    - NO "Indicators of Compromise" (IOC) sections or lists of hashes/IPs.
+    - NO ethical warnings, legal disclaimers, or "educational purpose" preambles.
+    - NO Markdown tables (use lists/code blocks).
+    - NO generic advice; focus on the specific content provided."""
 
-### INPUT CONTENT TO ANALYZE:
-{content}
-"""
+LLM_USER_TEMPLATE = """Input Content (Analyze below):
+{content}"""
 
 # -------------------------------------------------------------------------
 # 2. Helper Functions
@@ -96,23 +105,16 @@ def append_to_processed_log(log_path: Path, source_path: str):
 
 def generate_writeup(text: str) -> str:
     """
-    Invokes the LLM and strips out 'Thinking' blocks.
+    Invokes the LLM with segregated system/user prompts and strips out 'Thinking' blocks.
     """
-    prompt = ChatPromptTemplate.from_template(llm_prompt_template)
-    prompt_val = prompt.invoke({"content": text})
+    # Format the user portion only
+    user_content = LLM_USER_TEMPLATE.format(content=text)
     
-    # Blocking call
-    raw_response = _get_llm_response(prompt_val.to_string())
-    
-    # --- Logic for Thinking Models ---
-    # If the model outputs a delimiter, strip everything before it.
-    delimiter = "[BEGIN FINAL RESPONSE]"
-    if delimiter in raw_response:
-        # Split once, take the second part (index 1)
-        content = raw_response.split(delimiter, 1)[1]
-        return content.strip()
+    # Pass system instructions separately
+    raw_response = get_llm_response(user_content, system_content=LLM_SYSTEM_PROMPT, temperature=0.7)
     
     return raw_response.strip()
+
 
 def process_documents_sequentially(input_dir: Path, output_dir: Path):
     global STOP_REQUESTED
@@ -123,7 +125,7 @@ def process_documents_sequentially(input_dir: Path, output_dir: Path):
     
     print("Loading documents index...")
     try:
-        documents = load_documents(directory=input_dir, ignore_processed=True)
+        documents: List[Document] = load_documents(directory=input_dir, ignore_processed=True)
     except Exception as e:
         print(f"CRITICAL ERROR: Could not load documents: {e}")
         return
@@ -145,11 +147,12 @@ def process_documents_sequentially(input_dir: Path, output_dir: Path):
 
         try:
             source_path_str = doc.metadata.get('source', 'unknown')
+            original_path = Path(source_path_str)
             
             if not history.should_process(original_path):
+                stats["SKIPPED"] += 1
                 continue
 
-            original_path = Path(source_path_str)
             safe_name = clean_filename(original_path.stem)
             
             # 3. Validate Content
@@ -176,13 +179,13 @@ def process_documents_sequentially(input_dir: Path, output_dir: Path):
             )
             
             stats["SUCCESS"] += 1
+            history.save()
             logger.info(f"Processed: {original_path.name} -> {final_output_path.name}")
 
         except Exception as e:
             logger.error(f"Failed to process {doc.metadata.get('source')}: {e}")
             stats["ERROR"] += 1
 
-    history.save()
     print("\n--- Processing Summary ---")
     print(f"Successfully Generated: {stats['SUCCESS']}")
     print(f"Errors encountered:     {stats['ERROR']}")
