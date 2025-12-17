@@ -37,14 +37,6 @@ JSON_BLOCK_PATTERN = re.compile(r'```(?:json)?\s*(\{.*?\})\s*```', re.DOTALL)
 MANUAL_TAGS_PATTERN = re.compile(r'^Tags:\s*(.+)$', re.MULTILINE | re.IGNORECASE)
 MITRE_ID_PATTERN = re.compile(r'^T\d{4}(\.\d{3})?$') 
 
-'''
-# CURL FULL MITRE
-curl -s https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json \
-     https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json \
-     https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json \
-| jq -r '.objects[] | select(.type=="x-mitre-tactic") | .name' | sort | uniq | sed 's/.*/        "&",/'
-'''
-
 class DocumentMetadata(BaseModel):
     """
     Schema for Knowledge Graph extraction.
@@ -79,19 +71,39 @@ class DocumentMetadata(BaseModel):
         "Remote Service Effects",
         "Resource Development"
     ]] = Field(default_factory=list, description="List of tactics found (e.g., 'initial_access', 'execution').")
-    mitre_technique_primary_ids: List[str] = Field(None, description="Primary T MITRE IDs (e.g., 'T1059' without a dot) NEVER Sub-technique")
-
-    @model_validator(mode='after')
-    def validate_content(self):
-        # If not technical, wipe the graph data to save space/tokens
-        if not self.is_technical_content:
-            self.mitre_tactics = []
-            self.mitre_technique_primary_ids = []
-        return self
+    mitre_technique_primary_ids: List[str] = Field(None, description="Primary T MITRE IDs for technique (e.g., 'T1059' without a dot) NEVER Sub-technique")
 
 def get_metadata_extraction_prompt() -> ChatPromptTemplate:
     template_str = """You are a Principal Security Research Assistant building a cybersecurity knowledge database.
 Extract structured metadata from the provided text.
+
+If applicable, classify activity using the following verified MITRE ATT&CK Tactic definitions. 
+Prioritize the Tactic ID (TAxxxx) to ensure domain-specific accuracy (Enterprise vs. Mobile vs. ICS).
+
+### Current MITRE classification
+- TA0001 (Initial Access/ENT): Entry vectors (phishing, public exploit) to gain a network foothold.
+- TA0002 (Execution/ENT): Running adversary-controlled code (scripts, binaries) on local/remote systems.
+- TA0003 (Persistence/ENT): Maintaining access across restarts/interruptions (registry keys, startup code).
+- TA0004 (Privilege Escalation/ENT): Gaining higher-level permissions (SYSTEM/root, admin) via weaknesses.
+- TA0005 (Defense Evasion/ENT): Actions to avoid detection (obfuscation, disabling security tools).
+- TA0006 (Credential Access/ENT): Stealing account names/passwords (dumping, keylogging).
+- TA0007 (Discovery/ENT): Gaining knowledge of the internal network and system environment.
+- TA0008 (Lateral Movement/ENT): Pivoting between remote systems on a network.
+- TA0009 (Collection/ENT): Gathering data (files, screenshots) relevant to the objective.
+- TA0010 (Exfiltration/ENT): Removing data from the network (C2 channel, alternate paths).
+- TA0011 (Command and Control/ENT): Communicating with compromised systems to direct actions.
+- TA0043 (Reconnaissance/ENT): Information gathering (org, staff, infra) to support targeting.
+- TA0042 (Resource Development/ENT): Establishing infrastructure (domains, accounts) for operations.
+- TA0040 (Impact/ENT): Disrupting availability or compromising integrity of business processes.
+
+- TA0027 (Initial Access/MOB): Entry vectors specifically targeting mobile device footholds.
+- TA0038 (Network Effects/MOB): Intercepting/manipulating traffic without device access.
+- TA0039 (Remote Service Effects/MOB): Using cloud/MDM services to monitor/control devices.
+
+- TA0108 (Initial Access/ICS): Footholds in OT/ICS environments (PLCs, engineering workstations).
+- TA0103 (Evasion/ICS): ICS-specific technical defense avoidance (distinct from TA0005).
+- TA0106 (Impair Process Control/ICS): Manipulating physical control logic or parameters.
+- TA0107 (Inhibit Response Function/ICS): Disabling safety/protection functions (alarms, safeguards).
 
 ### GLOBAL EXCLUSION RULES (STRICT)
 1. **NO GENERIC COMMANDS:** strictly IGNORE standard shell operations: `cd`, `ls`, `mv`, `cp`, `mkdir`, `cat`, `echo`, `chmod`, `chown`.
@@ -102,6 +114,7 @@ Extract structured metadata from the provided text.
 - **Marketing**: Sales brochures, product advertisements without technical depth.
 - **Fluff**: High-level generic summaries, "Importance of Security" essays, or Copyright/Legal pages.
 - **Junk**: Unreadable OCR, Table of Contents, or Dedication pages.
+- **CVE without POC**: Description of a vulnerability where explotation steps are not documented or inferred.
 
 ### CRITERIA TO 'KEEP' (is_technical_content = true)
 - Contains **actionable** content: code snippets, exploit payloads, command-line usage.

@@ -68,7 +68,15 @@ Convert the input into a structured, semantically dense Markdown document. Prior
     - NO "Indicators of Compromise" (IOC) sections or lists of hashes/IPs.
     - NO ethical warnings, legal disclaimers, or "educational purpose" preambles.
     - NO Markdown tables (use lists/code blocks).
-    - NO generic advice; focus on the specific content provided."""
+    - NO generic advice; focus on the specific content provided.
+
+### CRITERIA TO DISCARD (Noise/Junk)
+When the content meets following criteria, only return "Discard" in your response:
+- **Marketing**: Sales brochures, product advertisements without technical depth.
+- **Fluff**: High-level generic summaries, "Importance of Security" essays.
+- **Junk**: Unreadable OCR, corrupted text, or placeholder data.
+- **CVE without POC**: Description of a vulnerability where explotation steps are not documented or inferred.
+"""
 
 LLM_USER_TEMPLATE = """Input Content (Analyze below):
 {content}"""
@@ -164,6 +172,14 @@ def process_documents_sequentially(input_dir: Path, output_dir: Path):
 
             # 4. Generate Writeup
             writeup_body = generate_writeup(content)
+
+            if len(writeup_body) < 100:
+                logger.warning(f"Answer too short {original_path.name}: {writeup_body}")
+                history.record_processing(
+                    original_path, 
+                    output_file=str(final_output_path)
+                )
+                continue
 
             # 5. Save to File (Collision Safe)
             base_filename = f"{safe_name}.md"

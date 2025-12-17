@@ -164,7 +164,7 @@ def main():
                 chapter = doc.metadata.get('chapter_title', '')
                 src = doc.metadata.get('source')
                 print(f"🚫 Skipping Chunk: {src} {f'[{chapter}]' if chapter else ''} (Flagged as non-technical)", flush=True)
-                return None
+                continue
 
             # Determine date logic
             if existing_date:

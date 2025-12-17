@@ -51,6 +51,7 @@ Your task: Decide if the provided document text is valuable for a penetration te
 - **Marketing**: Sales brochures, product advertisements without technical depth.
 - **Fluff**: High-level generic summaries, "Importance of Security" essays.
 - **Junk**: Unreadable OCR, corrupted text, or placeholder data.
+- **CVE without POC**: Description of a vulnerability where explotation steps are not documented or inferred.
 
 ### INPUT TEXT (Sample):
 {text}
