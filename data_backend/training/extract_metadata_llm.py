@@ -37,92 +37,76 @@ JSON_BLOCK_PATTERN = re.compile(r'```(?:json)?\s*(\{.*?\})\s*```', re.DOTALL)
 MANUAL_TAGS_PATTERN = re.compile(r'^Tags:\s*(.+)$', re.MULTILINE | re.IGNORECASE)
 MITRE_ID_PATTERN = re.compile(r'^T\d{4}(\.\d{3})?$') 
 
-class Entity(BaseModel):
-    """
-    Atomic entity for graph node population.
-    Only extracts UNIQUE, SEARCHABLE identifiers.
-    """
-    name: str = Field(..., description="Canonical name. normalize casing (e.g., 'powershell' -> 'PowerShell').")
-    
-    category: Literal[
-        'TOOL',             # Burp Suite, Cobalt Strike, Metasploit, nmap
-        'VULNERABILITY',    # CVE-2023-1234, Log4Shell, EternalBlue
-        'THREAT_ACTOR',     # Lazarus, APT29, Fancy Bear
-        'FILE_PATH',        # /etc/shadow, C:\Windows\System32\drivers
-        'NET_IOC',          # IP addresses (public only), Domains, unique API endpoints.
-        'OFFENSIVE_CMD',    # SPECIFIC malicious arguments or complex one-liners.
-        'TECHNIQUE',        # SQL Injection, DLL Sideloading, Kerberoasting
-        'CONFIG_KEY',       # Registry keys, unique env vars
-        'API_HEADER'        # X-Forwarded-For, Authorization
-    ] = Field(..., description="The precise category of the entity.")
+'''
+# CURL FULL MITRE
+curl -s https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json \
+     https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json \
+     https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json \
+| jq -r '.objects[] | select(.type=="x-mitre-tactic") | .name' | sort | uniq | sed 's/.*/        "&",/'
+'''
 
 class DocumentMetadata(BaseModel):
     """
     Schema for Knowledge Graph extraction.
     """
-    # 1. Chain of Thought (Helps JSON stability and logic)
-    reasoning: str = Field(..., description="Analyze the text. Why is this technical? Identify specific entities vs noise.")
-
-    # 2. Classification
+    # 1. Classification
     is_technical_content: bool = Field(..., description="True if text contains actionable exploits, code analysis, or threat intel. False for news/marketing.")
 
-    # 3. Core Metadata
+    # 2. Core Metadata
     main_topic: Optional[str] = Field(None, description="Subject (e.g., 'Active Directory Security')")
     summary_dense: Optional[str] = Field(None, description="One dense sentence with keywords.")
-    
-    # 4. Graph Data
-    entities: List[Entity] = Field(default_factory=list, description="List of unique entities.")
+    code_languages: List[str] = Field(None, description="Programming languages used in the script.")
 
-    # 5. MITRE
-    mitre_tactics: List[str] = Field(default_factory=list, description="List of tactics found (e.g., 'initial_access', 'execution').")
-    mitre_technique_id: Optional[str] = Field(None, description="Primary MITRE ID (e.g., 'T1059').")
+    # 3. MITRE
+    mitre_tactics: List[Literal[
+        "Collection",
+        "Command and Control",
+        "Credential Access",
+        "Defense Evasion",
+        "Discovery",
+        "Evasion",
+        "Execution",
+        "Exfiltration",
+        "Impact",
+        "Impair Process Control",
+        "Inhibit Response Function",
+        "Initial Access",
+        "Lateral Movement",
+        "Network Effects",
+        "Persistence",
+        "Privilege Escalation",
+        "Reconnaissance",
+        "Remote Service Effects",
+        "Resource Development"
+    ]] = Field(default_factory=list, description="List of tactics found (e.g., 'initial_access', 'execution').")
+    mitre_technique_primary_ids: List[str] = Field(None, description="Primary T MITRE IDs (e.g., 'T1059' without a dot) NEVER Sub-technique")
 
     @model_validator(mode='after')
     def validate_content(self):
         # If not technical, wipe the graph data to save space/tokens
         if not self.is_technical_content:
-            self.entities = []
             self.mitre_tactics = []
-            self.mitre_technique_id = None
+            self.mitre_technique_primary_ids = []
         return self
 
 def get_metadata_extraction_prompt() -> ChatPromptTemplate:
-    template_str = """You are a Principal Security Research Assistant building a cybersecurity knowledge graph.
+    template_str = """You are a Principal Security Research Assistant building a cybersecurity knowledge database.
 Extract structured metadata from the provided text.
 
 ### GLOBAL EXCLUSION RULES (STRICT)
 1. **NO GENERIC COMMANDS:** strictly IGNORE standard shell operations: `cd`, `ls`, `mv`, `cp`, `mkdir`, `cat`, `echo`, `chmod`, `chown`.
 2. **NO GENERIC PATHS:** IGNORE `/tmp`, `/home`, `C:\\Users`, `Program Files` unless part of a specific exploit chain.
 3. **NO LOCAL INFRA:** IGNORE `localhost`, `127.0.0.1`, `0.0.0.0`, `192.168.x.x`.
-4. **NO COMMON TERMS:** IGNORE `Internet`, `Computer`, `Malware` (too generic), `Hacker`, `Server`.
 
-### CATEGORY DEFINITIONS
-- **TOOL**: Specific software (e.g., `Mimikatz`, `Burp Suite`).
-- **VULNERABILITY**: CVE IDs or named bugs (e.g., `CVE-2021-44228`, `PrintNightmare`).
-- **THREAT_ACTOR**: Hacking groups (e.g., `APT28`, `Fin7`).
-- **FILE_PATH**: Critical system paths (e.g., `/etc/passwd`, `ntds.dit`).
-- **NET_IOC**: Public IPs, Malicious Domains, or unique API URIs (e.g., `/api/admin/upload`).
-- **OFFENSIVE_CMD**: Unique attack strings or payload signatures (e.g., `Invoke-WebRequest -Uri...`, `ReflectivePEInjection`). **NEVER** simple file moves.
-- **TECHNIQUE**: Attack concepts (e.g., `Pass-the-Hash`, `SQL Injection`).
-- **CONFIG_KEY**: Registry keys or configuration flags.
+### CRITERIA TO 'DISCARD' (is_technical_content = false)
+- **Marketing**: Sales brochures, product advertisements without technical depth.
+- **Fluff**: High-level generic summaries, "Importance of Security" essays, or Copyright/Legal pages.
+- **Junk**: Unreadable OCR, Table of Contents, or Dedication pages.
 
-#### FEW-SHOT EXAMPLE (Follow this logic):
-**Input:** "The attacker used Lazarus Group tactics. They executed 'mv payload.exe /tmp' and then ran 'rundll32.exe user32.dll,LockWorkStation'. The exploit targets CVE-2023-9999."
-
-**Output:**
-{{
-  "reasoning": "Text describes an actor (Lazarus), a specific CVE, and a suspicious rundll32 command. 'mv' command is ignored as noise.",
-  "is_technical_content": true,
-  "main_topic": "System Execution",
-  "summary_dense": "Lazarus Group exploited CVE-2023-9999 using rundll32 for execution.",
-  "entities": [
-    {{"name": "Lazarus Group", "category": "THREAT_ACTOR"}},
-    {{"name": "rundll32.exe user32.dll,LockWorkStation", "category": "OFFENSIVE_CMD"}},
-    {{"name": "CVE-2023-9999", "category": "VULNERABILITY"}}
-  ],
-  "mitre_tactics": ["execution"],
-  "mitre_technique_id": "T1218"
-}}
+### CRITERIA TO 'KEEP' (is_technical_content = true)
+- Contains **actionable** content: code snippets, exploit payloads, command-line usage.
+- Explains specific vulnerabilities (CVEs), architectural internals, or bypass techniques.
+- Technical manuals, whitepapers, or detailed tutorials.
 
 ### ACTUAL INPUT TEXT
 {text}
@@ -171,45 +155,57 @@ def get_llm_response(prompt_text: str, system_content: Optional[str] = None, tem
     
 
 def clean_and_parse_json(text: str) -> Dict[str, Any]:
-    if not text: return {}
+    if not text:
+        return {}
 
-    # 1. Remove "Thinking" blocks
-    text = THINKING_PATTERN.sub('', text).strip()
-    
-    # 2. Extract JSON from Markdown
-    match = JSON_BLOCK_PATTERN.search(text)
-    if match:
-        text = match.group(1)
-    else:
-        start, end = text.find('{'), text.rfind('}')
-        if start != -1 and end != -1:
-            text = text[start : end + 1]
-
-    # 3. Clean trailing commas
-    text = re.sub(r',(\s*[\]}])', r'\1', text)
-    
-    # 4. [NEW] Normalize Unicode & Fix weird formatting
-    # NFKC normalizes:
-    #   \u2011 (Non-breaking hyphen) -> -
-    #   \u2013 (En dash)             -> -
-    #   \u201c (Left Double Quote)   -> "
-    #   ½                            -> 1/2
+    # 1. Normalize unicode (NFKC) to convert non-standard chars (like \u2010)
     text = unicodedata.normalize('NFKC', text)
+    
+    # 2. Explicitly fix common LLM-escaped unicode that NFKC might miss
+    text = text.replace("\\u2010", "-").replace("\\u2011", "-") \
+               .replace("\\u2013", "-").replace("\\u2014", "-") \
+               .replace("\\u00a0", " ") 
+    
+    # 3. Remove "Thinking" blocks
+    if 'THINKING_PATTERN' in globals():
+        text = THINKING_PATTERN.sub('', text).strip()
+    
+    json_str = ""
+    # 4. Extract JSON from Markdown block
+    if 'JSON_BLOCK_PATTERN' in globals():
+        match = JSON_BLOCK_PATTERN.search(text)
+        if match:
+            json_str = match.group(1)
 
-    # 5. [NEW] Explicit safety replace for JSON-breaking escapes
-    # Sometimes LLMs escape the unicode like "\\u2011" which normalization misses
-    text = text.replace("\\u2011", "-") \
-               .replace("\\u2013", "-") \
-               .replace("\\u2014", "-") \
-               .replace("\\u2010", "-") \
-               .replace("\\u00a0", " ") # Non-breaking space
+    if not json_str:
+        # Fallback: Find the outermost JSON structure (object or array)
+        start_match = re.search(r'({|\[)', text)
+        end_match = re.search(r'(}|\])', text[::-1]) # Search reversed for last match
 
+        if start_match and end_match:
+            start_pos = start_match.start(1)
+            # end_match.end(1) is the position from the *end* of the reversed string
+            # Convert to forward index: len(text) - reversed_end_pos
+            end_pos = len(text) - end_match.end(1)
+            
+            # Use max(end_pos, start_pos + 1) to ensure at least one char is included
+            # and to handle cases where the text is very short
+            if end_pos > start_pos:
+                json_str = text[start_pos : end_pos + 1]
+            else:
+                return {}
+        else:
+            return {}
+            
+    # 5. Clean trailing commas (e.g., {"key": "value",})
+    json_str = re.sub(r',\s*([\]}])', r'\1', json_str)
+    
     try:
-        return json.loads(text)
+        return json.loads(json_str)
     except Exception:
         return {}
     
-def extract_text_parts(text: str, part_size: int = 2400, part_count: int = 20) -> str:
+def extract_text_parts(text: str, part_size: int = 2000, part_count: int = 20) -> str:
     """
     Picks n uniformly spaced parts of size part_size from the text.
     Optimized to prevent ZeroDivisionError and logical indexing errors.
@@ -234,44 +230,16 @@ def extract_text_parts(text: str, part_size: int = 2400, part_count: int = 20) -
 
     return "".join(parts)
 
-# --- 5. Logic: Manual Tag Parsing ---
-def _parse_manual_tags(tag_string: str) -> Dict[str, Any]:
-    """Converts 'Tags: T1059, Python' into schema dict."""
-    raw_tags = [t.strip() for t in tag_string.split(',') if t.strip()]
-    
-    meta = {
-        "reasoning": "",
-        "is_technical_content": True,
-        "entities": [],
-        "mitre_technique_id": None
-    }
-
-    for tag in raw_tags:
-        # MITRE ID
-        if MITRE_ID_PATTERN.match(tag):
-            meta["mitre_technique_id"] = tag
-            meta["entities"].append({"name": tag, "category": "CONCEPT"})
-        # Code Languages (Basic Heuristic)
-        elif tag.lower() in ['python', 'bash', 'powershell', 'c++', 'go', 'javascript']:
-            meta.setdefault("code_languages", []).append(tag.lower())
-            meta["entities"].append({"name": tag, "category": "TOOL"})
-        # Default Entity
-        else:
-            meta["entities"].append({"name": tag, "category": "CONCEPT"})
-            
-    return meta
-
 def _extract_tags_from_content(content: str) -> Tuple[Optional[Dict[str, Any]], str]:
     """Finds 'Tags: ...', parses, and STRIPS it from content."""
     match = MANUAL_TAGS_PATTERN.search(content)
     if match:
         tag_str = match.group(1)
         try:
-            partial_meta = _parse_manual_tags(tag_str)
             # Remove the line from content
             start, end = match.span()
             new_content = content[:start] + content[end:].lstrip()
-            return partial_meta, new_content
+            return tag_str, new_content
         except Exception:
             pass
     return None, content
@@ -311,16 +279,13 @@ def add_metadata_to_document(doc: Document, add_tags_llm: bool) -> Optional[Docu
                 validated = DocumentMetadata.model_validate(parsed_json)
                 llm_meta = validated.model_dump(exclude_none=True)
                 
-                llm_meta.pop('reasoning', "")
                 is_valid = llm_meta.pop('is_technical_content', True)
                 if is_valid is False:
                     chapter = doc.metadata.get('chapter_title', '')
                     src = doc.metadata.get('source')
                     print(f"🚫 Skipping Chunk: {src} {f'[{chapter}]' if chapter else ''} (Flagged as non-technical)", flush=True)
                     return None
-                
-                # Cleanup internal 'reasoning' field so it doesn't pollute DB
-                llm_meta.pop('reasoning', None)
+
                 
         except Exception as e:
             logger.error(f"LLM Extraction failed for {doc.metadata.get('source')}: {e}")
@@ -334,13 +299,6 @@ def add_metadata_to_document(doc: Document, add_tags_llm: bool) -> Optional[Docu
         # Override specific fields
         if manual_meta.get("mitre_technique_id"):
             final_meta["mitre_technique_id"] = manual_meta["mitre_technique_id"]
-            
-        # Merge Entities (Deduplicate by name)
-        existing_names = {e['name'] for e in final_meta.get('entities', [])}
-        for entity in manual_meta.get('entities', []):
-            if entity['name'] not in existing_names:
-                final_meta.setdefault('entities', []).append(entity)
-                
         # Merge Code Languages
         if manual_meta.get("code_languages"):
             final_meta.setdefault("code_languages", []).extend(manual_meta["code_languages"])

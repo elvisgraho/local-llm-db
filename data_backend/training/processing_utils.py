@@ -143,17 +143,6 @@ def split_document(
                 if value is None:
                     clean_metadata[key] = ""
                     
-                # Handle Entities List [{'name': 'X', 'category': 'Y'}]
-                elif key == "entities" and isinstance(value, list):
-                    # Format: "Mimikatz (TOOL), CVE-2023-1 (VULN)"
-                    formatted_entities = []
-                    for item in value:
-                        if isinstance(item, dict):
-                            formatted_entities.append(f"{item.get('name')} ({item.get('category', 'UNK')})")
-                        else:
-                            formatted_entities.append(str(item))
-                    clean_metadata[key] = ", ".join(formatted_entities)
-
                 # Handle Standard Lists (tactics, code_languages)
                 elif isinstance(value, list):
                     clean_metadata[key] = ", ".join(map(str, value))

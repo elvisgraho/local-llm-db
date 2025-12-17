@@ -224,7 +224,7 @@ def save_job_state(pid, start_time, db_name, flavor):
         "flavor": flavor
     }
     with open(STATE_FILE, "w") as f:
-        json.dump(data, f)
+        json.dump(data, f, ensure_ascii=False)
 
 def load_job_state():
     """Loads active job from disk."""

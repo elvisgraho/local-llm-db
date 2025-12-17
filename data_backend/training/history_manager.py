@@ -36,7 +36,7 @@ class ProcessingHistory:
         try:
             temp_file = self.history_file.with_suffix('.tmp')
             with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump(self.data, f, indent=2)
+                json.dump(self.data, f, indent=2, ensure_ascii=False)
             
             # Atomic move
             shutil.move(str(temp_file), str(self.history_file))

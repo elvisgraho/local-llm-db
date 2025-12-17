@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 class FileGenMetadata(DocumentMetadata):
-    suggested_filename: str = Field(..., description="Snake_case filename (no extension, e.g., 'auth_bypass_v2').")
+    suggested_filename: str = Field(..., description="Snake_case filename (no extension, e.g., 'auth_bypass_v2'). Char limit: 50")
     release_date: str = Field(..., description="Release date in YYYY-MM-DD. Use 'Unknown' if not found.")
 
 def process_content_llm(text: str) -> Dict[str, Any]:
@@ -159,8 +159,6 @@ def main():
             fname = meta.pop('suggested_filename', 'untitled_doc')
             llm_date = meta.pop('release_date', None)
 
-            meta.pop('reasoning', "")
-
             is_valid = meta.pop('is_technical_content', True)
             if is_valid is False:
                 chapter = doc.metadata.get('chapter_title', '')
@@ -180,7 +178,7 @@ def main():
             
             final_data = (
                 f"{date_line}"
-                f"Tags: {json.dumps(meta)}\n\n"
+                f"Tags: {json.dumps(meta, ensure_ascii=False)}\n\n"
                 f"{content}"
             )
 
