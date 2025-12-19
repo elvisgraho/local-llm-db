@@ -132,7 +132,7 @@ def process_documents_sequentially(input_dir: Path, output_dir: Path):
     
     # 2. Dry Scan (Paths Only - No Memory Load)
     print("Scanning directory for pending files...")
-    supported_ext = {'.pdf', '.txt', '.md', '.markdown', '.log', '.json', '.py'}
+    supported_ext = {'.pdf', '.txt', '.md', '.markdown'}
     
     # Generate resolved absolute paths for comparison
     all_paths = (p.resolve() for p in input_dir.rglob("*") if p.is_file())
@@ -180,7 +180,7 @@ def process_documents_sequentially(input_dir: Path, output_dir: Path):
 
             if not writeup_body or len(writeup_body) < 100:
                 stats["ERROR"] += 1
-                print(f"\Small Response: '${writeup_body}' for ${source_path}.")
+                print(f"\nSmall Response: '${writeup_body}' for ${source_path}.")
                 continue
 
             # File Persistence

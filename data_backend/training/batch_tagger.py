@@ -88,7 +88,7 @@ def main():
 
     # 3. Dry Scan: Identify pending files without loading content
     print("Scanning directory for pending files...")
-    supported_ext = {'.pdf', '.txt', '.md', '.markdown', '.log', '.json', '.py'}
+    supported_ext = {'.pdf', '.txt', '.md', '.markdown'}
     
     # Generate resolved absolute paths to prevent Windows pathing mismatches
     all_paths = (p.resolve() for p in args.input_dir.rglob("*") if p.is_file())

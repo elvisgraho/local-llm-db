@@ -142,7 +142,7 @@ def main():
 
     # 3. Dry Scan: Filter paths without loading content
     print("\nScanning directory for pending files...")
-    supported_ext = {'.pdf', '.txt', '.md', '.markdown', '.log', '.json', '.py'}
+    supported_ext = {'.pdf', '.txt', '.md', '.markdown'}
     
     # Generator to minimize memory pressure during rglob
     all_paths = (p.resolve() for p in args.input_dir.rglob("*") if p.is_file())

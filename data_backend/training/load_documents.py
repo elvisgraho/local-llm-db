@@ -296,7 +296,7 @@ def load_documents(
             return []
         
         logger.info(f"Scanning for documents in: {target_dir}")
-        supported_extensions = {'.pdf', '.txt', '.md', '.markdown', '.log', '.json', '.py'}
+        supported_extensions = {'.pdf', '.txt', '.md', '.markdown'}
         all_files = [
             p for p in target_dir.rglob("*") 
             if p.is_file() and p.suffix.lower() in supported_extensions
