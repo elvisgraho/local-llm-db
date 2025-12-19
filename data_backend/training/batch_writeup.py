@@ -22,9 +22,12 @@ from training.extract_metadata_llm import (
 
 # Configure Logging
 logging.basicConfig(
-    filename='writeup_generation.log',
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("writeup_generation.log"),
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -180,7 +183,7 @@ def process_documents_sequentially(input_dir: Path, output_dir: Path):
 
             if not writeup_body or len(writeup_body) < 100:
                 stats["ERROR"] += 1
-                print(f"\nSmall Response: '${writeup_body}' for ${source_path}.")
+                print(f"\nSmall Response: '{writeup_body}' for {source_path}.")
                 continue
 
             # File Persistence

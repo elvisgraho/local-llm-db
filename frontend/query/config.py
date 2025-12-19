@@ -42,7 +42,7 @@ class SystemConfig:
             SystemConfig: The configuration object.
         """
         # Define fallback defaults here if environment variables are not set
-        default_model_name = "reka-flash-3-21b-reasoning-uncensored-max-neo-imatrix"
+        default_model_name = "gpt-oss-20b-derestricted"
         default_api_url = "http://10.2.0.2:1234"
 
         return cls(

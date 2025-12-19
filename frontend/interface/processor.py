@@ -5,6 +5,7 @@ import os
 
 # --- Internal Imports ---
 import app_utils
+from query.templates import REFINE_QUERY_PROMPT
 from query.query_data import query_direct, query_rag, query_lightrag
 from query.session_manager import session_manager
 
@@ -52,18 +53,8 @@ def process_user_input(session_data, config, state_manager, container=None):
         # Use target_ui.status to ensure it stays in the scrollable area
         with target_ui.status("✨ Contextualizing Query...", expanded=False) as status:
             try:
-                disambiguation_prompt = (
-                    "You are a Query Resolution Engine. Your goal is to convert the User's Latest Input "
-                    "into a stand-alone, context-rich search query that can be understood without history.\n\n"
-                    "RULES:\n"
-                    "1. RESOLVE PRONOUNS: If user says 'it', 'they', or 'that', replace them with the actual entities from Chat History.\n"
-                    "2. MERGE CONTEXT: If user asks a follow-up (e.g., 'Why?'), combine it with the previous topic to form a full question.\n"
-                    "3. OPTIMIZE FOR SEARCH: Use precise keywords suitable for vector retrieval.\n"
-                    "4. NO ANSWERING: Do NOT answer the question. Output ONLY the rewritten query string."
-                )
-
                 rewrite_cfg = llm_cfg.copy()
-                rewrite_cfg["system_prompt"] = disambiguation_prompt
+                rewrite_cfg["system_prompt"] = REFINE_QUERY_PROMPT
                 rewrite_cfg["temperature"] = 0.3
 
                 rewrite_response = query_direct(

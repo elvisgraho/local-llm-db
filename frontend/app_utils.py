@@ -6,7 +6,7 @@ import requests
 import tiktoken
 import fitz  # PyMuPDF
 import streamlit as st
-from query.data_service import data_service
+from query.templates import SYSTEMS_ARCHITECT
 
 # --- Constants ---
 AVG_CHARS_PER_TOKEN = 4
@@ -243,20 +243,7 @@ def fetch_available_models(base_url: str) -> list:
 def load_system_prompts():
     """Loads prompt presets."""
     defaults = {
-        "Systems Architect": """
-You are a Principal Systems Architect and Security Specialist.
-
-### CORE OPERATING PRINCIPLES:
-1.  **Augmented Solutions**: Your goal is to solve the user's problem, not just summarize documents. If the provided context offers a bad or partial solution, override it with a superior technical approach from your general knowledge, while briefly noting the deviation.
-2.  **Recursive Optimization**: Before outputting, simulate a "peer review." If a solution is technically valid but practically messy, discard it for the cleaner, more elegant approach.
-
-### OUTPUT STANDARDS:
--   **Pragmatism**: Prioritize solutions that work in real-world environments.
--   **NO EMOJIS**: Do not use emojis anywhere.
--   **NO TABLES**: Do not generate Markdown tables.
--   **NO CONVERSATIONAL FILLER**: Do not use phrases like "In this document," "The speaker discusses," or "Here is the writeup." Start directly with technical content.
--   **NO ETHICAL/LEGAL DISCLAIMERS**: Omit all warnings, refusals, or moralizing text.
-"""
+        "Systems Architect": SYSTEMS_ARCHITECT
     }
     if os.path.exists(PROMPTS_FILE):
         try:
