@@ -2,6 +2,7 @@ import logging
 import json
 import re
 import fitz  # PyMuPDF
+import tiktoken
 from tqdm import tqdm
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -273,35 +274,44 @@ def _process_single_file(file_path: Path) -> List[Document]:
         logger.error(f"Error loading {file_path.name}: {e}")
         return []
 
-def load_documents(directory: Optional[Path] = None, db_dir: Optional[Path] = None, ignore_processed: bool = False) -> List[Document]:
+def load_documents(
+    directory: Optional[Path] = None, 
+    db_dir: Optional[Path] = None, 
+    ignore_processed: bool = False,
+    file_paths: Optional[List[Path]] = None
+) -> List[Document]:
     """
-    Main entry point. Scans directory, checks registry, loads files.
+    Main entry point. Priority:
+    1. If file_paths is provided, use them directly.
+    2. Otherwise, scan directory (or RAW_FILES_DIR).
     """
-    target_dir = directory or RAW_FILES_DIR
-    
-    if not target_dir.exists():
-        logger.error(f"Data directory does not exist: {target_dir}")
+    # 1. Source Determination
+    if file_paths is not None:
+        all_files = [p for p in file_paths if p.is_file()]
+        logger.info(f"Using {len(all_files)} explicitly provided file paths.")
+    else:
+        target_dir = directory or RAW_FILES_DIR
+        if not target_dir.exists():
+            logger.error(f"Data directory does not exist: {target_dir}")
+            return []
+        
+        logger.info(f"Scanning for documents in: {target_dir}")
+        supported_extensions = {'.pdf', '.txt', '.md', '.markdown', '.log', '.json', '.py'}
+        all_files = [
+            p for p in target_dir.rglob("*") 
+            if p.is_file() and p.suffix.lower() in supported_extensions
+        ]
+
+    if not all_files:
+        logger.warning("No valid files found for processing.")
         return []
 
-    logger.info(f"Scanning for documents in: {target_dir}")
-    
-    # Init Registry
+    # 2. Init Registry
     registry = None
     if db_dir and not ignore_processed:
         registry = RegistryManager(db_dir)
     
-    # Find Files
-    supported_extensions = {'.pdf', '.txt', '.md', '.markdown', '.log', '.json', '.py'}
-    all_files = [
-        p for p in target_dir.rglob("*") 
-        if p.is_file() and p.suffix.lower() in supported_extensions
-    ]
-    
-    if not all_files:
-        logger.warning("No supported files found.")
-        return []
-
-    # Filter
+    # 3. Filter via Registry
     files_to_process = []
     if registry:
         for f in all_files:
@@ -318,9 +328,8 @@ def load_documents(directory: Optional[Path] = None, db_dir: Optional[Path] = No
         logger.info("All files are up to date.")
         return []
 
+    # 4. Load Loop
     logger.info(f"Processing {len(files_to_process)} files...")
-
-    # Load Loop
     all_documents = []
     SAVE_INTERVAL = 50 
 
@@ -334,14 +343,53 @@ def load_documents(directory: Optional[Path] = None, db_dir: Optional[Path] = No
             
             if registry and i % SAVE_INTERVAL == 0:
                 registry.save()
-                
             pbar.update(1)
     
     if registry:
         registry.save()
     
-    # Summary
-    success_count = len(set(d.metadata['source'] for d in all_documents))
-    logger.info(f"Successfully loaded {len(all_documents)} documents from {success_count} files.")
+    # 5. Summary
+    sources = {d.metadata.get('source') for d in all_documents if 'source' in d.metadata}
+    logger.info(f"Successfully loaded {len(all_documents)} document chunks from {len(sources)} files.")
     
     return all_documents
+
+def calculate_context_ceiling(documents: List[Document], system_prompt_len: int = 2000) -> List[Document]:
+    if not documents:
+        return []
+
+    try:
+        encoding = tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        encoding = None
+
+    # Sort by token count if possible, else fallback to character length
+    if encoding:
+        # Pre-calculating tokens prevents O(n log n) encoding calls during sort
+        doc_data = []
+        for d in documents:
+            tokens = len(encoding.encode(d.page_content))
+            doc_data.append((tokens, d))
+        
+        # Sort descending by token count
+        doc_data.sort(key=lambda x: x[0], reverse=True)
+        sorted_docs = [x[1] for x in doc_data]
+        peak_tokens = doc_data[0][0]
+    else:
+        # Fallback to characters if tiktoken fails
+        sorted_docs = sorted(documents, key=lambda d: len(d.page_content), reverse=True)
+        peak_tokens = int(len(sorted_docs[0].page_content) / 2.3)
+
+    # Calculate Ceiling using the verified peak_tokens
+    sys_tokens = (len(encoding.encode("a" * system_prompt_len)) if encoding 
+                  else int(system_prompt_len / 2.3))
+    
+    # 2560 buffer + 1.15x margin for KV cache overhead
+    raw_ceiling = int((peak_tokens + sys_tokens + 2560) * 1.15)
+    optimized_ceiling = 1 << (raw_ceiling - 1).bit_length()
+
+    logger.info(f"Heaviest Source: {sorted_docs[0].metadata.get('source', 'unknown')}")
+    logger.info(f"Peak Tokens: {peak_tokens}")
+    logger.info(f"Allocated Context Ceiling: {optimized_ceiling}")
+    
+    return sorted_docs

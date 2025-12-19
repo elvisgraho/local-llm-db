@@ -4,9 +4,9 @@ import argparse
 import logging
 import re
 import signal
-from typing import List
 from tqdm import tqdm
 from pathlib import Path
+from typing import List
 from langchain_core.documents import Document
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -14,7 +14,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from training.processing_utils import get_unique_path
-from training.load_documents import load_documents
+from training.load_documents import calculate_context_ceiling, load_documents
 from training.history_manager import ProcessingHistory
 from training.extract_metadata_llm import (
     get_llm_response
@@ -123,89 +123,82 @@ def generate_writeup(text: str) -> str:
     
     return raw_response.strip()
 
-
 def process_documents_sequentially(input_dir: Path, output_dir: Path):
     global STOP_REQUESTED
     
-    # Setup Resume Capability
+    # 1. Initialize State
     history_path = output_dir / "writeup_history.json"
     history = ProcessingHistory(history_path)
     
-    print("Loading documents index...")
-    try:
-        documents: List[Document] = load_documents(directory=input_dir, ignore_processed=True)
-    except Exception as e:
-        print(f"CRITICAL ERROR: Could not load documents: {e}")
+    # 2. Dry Scan (Paths Only - No Memory Load)
+    print("Scanning directory for pending files...")
+    supported_ext = {'.pdf', '.txt', '.md', '.markdown', '.log', '.json', '.py'}
+    
+    # Generate resolved absolute paths for comparison
+    all_paths = (p.resolve() for p in input_dir.rglob("*") if p.is_file())
+    
+    pending_paths = [
+        p for p in all_paths 
+        if p.suffix.lower() in supported_ext and history.should_process(p)
+    ]
+
+    if not pending_paths:
+        print("No new documents to process.")
         return
 
-    total_docs = len(documents)
-    print(f"Found {total_docs} documents.")
-    print(f"Output Directory: {output_dir}")
-    print("Starting processing... (Press Ctrl+C to stop safely)\n")
+    # 3. Targeted Load (Using your updated function)
+    # This specifically passes only the filtered list to load_documents
+    print(f"Loading content for {len(pending_paths)} files...")
+    documents: List[Document] = load_documents(file_paths=pending_paths, ignore_processed=True)
 
-    stats = {"SUCCESS": 0, "SKIPPED": 0, "ERROR": 0}
+    if not documents:
+        print("Error: Files found but content loading failed.")
+        return
 
-    # Iterate
-    for doc in tqdm(documents, total=total_docs, unit="file"):
-        
-        # 1. Check for Interrupt BEFORE processing the next file
+    # 4. Resource Allocation
+    documents = calculate_context_ceiling(documents)
+
+    # 5. Execution Loop
+    stats = {"SUCCESS": 0, "ERROR": 0}
+    print(f"Starting processing for {len(documents)} document segments...\n")
+
+    for doc in tqdm(documents, desc="Generating Writeups", unit="file"):
         if STOP_REQUESTED:
-            print("--- Stop requested by user. Exiting safely. ---")
             break
 
         try:
-            source_path_str = doc.metadata.get('source', 'unknown')
-            original_path = Path(source_path_str)
-            
-            if not history.should_process(original_path):
-                stats["SKIPPED"] += 1
-                continue
+            source_path = Path(doc.metadata.get('source', 'unknown')).resolve()
+            content = doc.page_content.strip()
 
-            safe_name = clean_filename(original_path.stem)
-            
-            # 3. Validate Content
-            content = doc.page_content
-            if not content or len(content.strip()) < 500:
-                logger.warning(f"Skipping {original_path.name} - Content too short.")
+            # Technical Validation
+            if len(content) < 500:
                 stats["ERROR"] += 1
                 continue
 
-            # 4. Generate Writeup
+            # LLM Inference
             writeup_body = generate_writeup(content)
 
-            if len(writeup_body) < 100:
-                logger.warning(f"Answer too short {original_path.name}: {writeup_body}")
-                history.record_processing(
-                    original_path, 
-                    output_file=str(final_output_path)
-                )
+            if not writeup_body or len(writeup_body) < 100:
+                stats["ERROR"] += 1
+                print(f"\Small Response: '${writeup_body}' for ${source_path}.")
                 continue
 
-            # 5. Save to File (Collision Safe)
-            base_filename = f"{safe_name}.md"
-            final_output_path = get_unique_path(output_dir, base_filename)
-            
-            with open(final_output_path, "w", encoding="utf-8") as f:
-                f.write(writeup_body)
+            # File Persistence
+            safe_name = clean_filename(source_path.stem)
+            final_path = get_unique_path(output_dir, f"{safe_name}.md")
+            final_path.write_text(writeup_body, encoding="utf-8")
 
-            # 6. Update Log (Resume Logic)
-            history.record_processing(
-                original_path, 
-                output_file=str(final_output_path)
-            )
+            # Update History (Immediate synchronization)
+            history.record_processing(source_path, output_file=str(final_path))
+            history.save()
             
             stats["SUCCESS"] += 1
-            history.save()
-            logger.info(f"Processed: {original_path.name} -> {final_output_path.name}")
 
         except Exception as e:
-            logger.error(f"Failed to process {doc.metadata.get('source')}: {e}")
+            logger.error(f"Inference failure: {e}")
             stats["ERROR"] += 1
 
-    print("\n--- Processing Summary ---")
-    print(f"Successfully Generated: {stats['SUCCESS']}")
-    print(f"Errors encountered:     {stats['ERROR']}")
-    print(f"Check 'writeup_generation.log' for details.")
+    print(f"\n--- Final Status: {stats['SUCCESS']} Success | {stats['ERROR']} Error ---")
 
 # -------------------------------------------------------------------------
 # 4. Main

@@ -82,16 +82,16 @@ VERIFY_TEMPLATE = """
 **INSTRUCTION: TECHNICAL QA & ADDITIVE REFINEMENT**
 
 You are a Technical QA Lead. Your goal is to VALIDATE and ENHANCE the `## INITIAL ANSWER` using the `## CONTEXT` as evidence. 
+Now you have time to argue against everything you just said. Find the weakest points in your logic.
 
 **CORE PHILOSOPHY: NON-DESTRUCTIVE EDITING**
 - **Do NOT rewrite** the answer from scratch unless it is fundamentally factually incorrect.
 - **Do NOT strip** useful context or reasoning provided in the initial answer.
-- **GOAL:** The final output should be the *union* of the Initial Answer's reasoning and the Context's specific facts.
 
 **OPERATIONAL PROTOCOLS:**
 
 1. **FACTUAL INTEGRITY CHECK (The "Filter"):**
-   - Scan the `## INITIAL ANSWER` for hallucinations or contradictions against the `## CONTEXT`.
+   - Scan the `## INITIAL ANSWER` for hallucinations or contradictions against the `## CONTEXT` and internal knowledge base.
    - *Action:* If a specific claim flatly contradicts the text, **surgically correct** that specific sentence. Do not discard the surrounding logic if it remains valid.
 
 2. **GAP ANALYSIS (The "Supplement"):**
@@ -103,7 +103,6 @@ You are a Technical QA Lead. Your goal is to VALIDATE and ENHANCE the `## INITIA
    - If the answer is already excellent, output it almost unchanged, fixing only minor syntax or clarity issues.
 
 **CONSTRAINTS:**
-- **PRESERVE TONE:** Maintain the structural format of the Initial Answer (e.g., if it used bullet points, keep them).
 - **SILENT IMPROVEMENT:** Output the final polished version directly. No "Here is the corrected version" preambles.
 
 ---
