@@ -47,7 +47,7 @@ class DocumentMetadata(BaseModel):
     # 2. Core Metadata
     main_topic: Optional[str] = Field(None, description="Subject (e.g., 'Active Directory Security')")
     summary_dense: Optional[str] = Field(None, description="One dense sentence with keywords.")
-    code_languages: List[str] = Field(None, description="Programming languages used in the script.")
+    code_languages: List[str] = Field([], description="Programming languages used in the script.")
 
     # 3. MITRE
     mitre_tactics: List[Literal[
@@ -71,7 +71,7 @@ class DocumentMetadata(BaseModel):
         "Remote Service Effects",
         "Resource Development"
     ]] = Field(default_factory=list, description="List of tactics found (e.g., 'initial_access', 'execution').")
-    mitre_technique_primary_ids: List[str] = Field(None, description="Primary T MITRE IDs for technique (e.g., 'T1059' without a dot) NEVER Sub-technique")
+    mitre_technique_primary_ids: List[str] = Field([], description="Primary T MITRE IDs for technique (e.g., 'T1059' without a dot) NEVER Sub-technique")
 
 def get_metadata_extraction_prompt() -> ChatPromptTemplate:
     template_str = """You are a Principal Security Research Assistant building a cybersecurity knowledge database.
@@ -135,7 +135,7 @@ Prioritize the Tactic ID (TAxxxx) to ensure domain-specific accuracy (Enterprise
 # Use session to prevent open socket accumulation
 session = requests.Session()
 
-def get_llm_response(prompt_text: str, system_content: Optional[str] = None, temperature: int = 0.3) -> str:
+def get_llm_response(prompt_text: str, system_content: Optional[str] = None, temperature: float = 0.3) -> str:
     headers = {"Content-Type": "application/json"}
     
     # Handle different API base formatting
@@ -243,7 +243,7 @@ def extract_text_parts(text: str, part_size: int = 2000, part_count: int = 20) -
 
     return "".join(parts)
 
-def _extract_tags_from_content(content: str) -> Tuple[Optional[Dict[str, Any]], str]:
+def _extract_tags_from_content(content: str) -> Tuple[str | Any, str]:
     """Finds 'Tags: ...', parses, and STRIPS it from content."""
     match = MANUAL_TAGS_PATTERN.search(content)
     if match:

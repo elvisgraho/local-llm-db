@@ -3,6 +3,7 @@ import json
 import re
 import fitz  # PyMuPDF
 import tiktoken
+import base64
 from tqdm import tqdm
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -47,8 +48,9 @@ def extract_metadata(file_path: str) -> Dict[str, Any]:
 
 def preprocess_text(text: str) -> str:
     """
-    Clean and normalize text while preserving code blocks (```...```).
-    Crucial for ensuring the 'Tags:' regex matches correctly later.
+    Clean and normalize text while preserving:
+    1. Code blocks (```...```)
+    2. Image OCR Data Tags (<<IMAGE_OCR_DATA:...>>)
     """
     if not text:
         return ""
@@ -56,11 +58,13 @@ def preprocess_text(text: str) -> str:
     # Remove Null Bytes (Crucial for ChromaDB/SQLite stability)
     text = text.replace('\x00', '')
 
-    # Split text by code blocks. Odd indices will be the code content.
-    parts = re.split(r'(```.*?```)', text, flags=re.DOTALL) 
+    # Split text by code blocks OR our specific image tags. 
+    # This prevents the cleanup logic from mangling the Base64 strings.
+    # We use non-greedy matching (.*?) to handle multiple tags/blocks.
+    parts = re.split(r'(```.*?```|<<IMAGE_OCR_DATA:.*?>>)', text, flags=re.DOTALL) 
 
     for i in range(len(parts)):
-        # Only normalize parts that are NOT code blocks (even indices)
+        # Only normalize parts that are NOT special blocks (even indices)
         if i % 2 == 0:
             s = parts[i]
             # Normalize Windows/Mac line endings
@@ -70,6 +74,13 @@ def preprocess_text(text: str) -> str:
             # Collapse excessive newlines (3+) into 2 (paragraph break)
             s = re.sub(r'\n\s*\n', '\n\n', s)
             parts[i] = s
+        else:
+            # OPTIONAL: Ensure special blocks have breathing room (newlines)
+            # This helps the LLM/OCR pipeline distinguish the start/end clearly
+            if not parts[i].startswith("\n"):
+                parts[i] = "\n" + parts[i]
+            if not parts[i].endswith("\n"):
+                parts[i] = parts[i] + "\n"
 
     return "".join(parts).strip()
 
@@ -81,6 +92,10 @@ def validate_document(doc: Document) -> bool:
     if not doc.page_content:
         return False
         
+    # [CRITICAL UPDATE] If doc contains Image Data, it is valid even if text is short
+    if "<<IMAGE_OCR_DATA:" in doc.page_content:
+        return True
+
     # Filter out files that are just noise (less than 10 chars)
     if len(doc.page_content.strip()) < 10:
         return False
@@ -137,8 +152,125 @@ class RegistryManager:
             pass
 
 # ==========================================
-# 3. PDF LOGIC (Chapter Splitting)
+# 3. PDF LOGIC (Layout Aware + In-Memory Image Optimization)
 # ==========================================
+
+def _optimize_and_encode_image(pix: fitz.Pixmap) -> Optional[str]:
+    """
+    Converts a PyMuPDF Pixmap into a Base64 encoded PNG string.
+    Performs OCR optimization:
+    1. Converts CMYK/Gray to RGB.
+    2. Flattens Alpha channels (transparency) to White background.
+    """
+    try:
+        # 1. OCR Optimization: Handle Color Spaces & Transparency
+        # If CMYK (n=4) or Gray (n=1) or has Alpha (transparency)
+        if pix.n >= 4 or pix.n == 1 or pix.alpha:
+            # Create a white background canvas
+            # This prevents transparent text from becoming black-on-black
+            if pix.alpha:
+                # Create RGB pixmap
+                pix_rgb = fitz.Pixmap(fitz.csRGB, pix)
+                # Composite onto white background (default is white for clear_with)
+                # But PyMuPDF < 1.19 requires explicit background handling or simple drop
+                # Simple approach: Drop alpha, but convert to RGB first
+                pix = fitz.Pixmap(fitz.csRGB, pix) 
+                pix.set_rect(pix.irect) # Fixes potential geometry issues after conversion
+            else:
+                # Just convert CMYK/Gray to RGB
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+
+        # 2. Get bytes as PNG
+        image_bytes = pix.tobytes("png")
+
+        # 3. Filter Noise (REMOVED Byte-size check)
+        # We now rely solely on the dimension check in the extraction function.
+        # Allowing small file sizes handles simple charts/graphs correctly.
+        
+        # 4. Encode to Base64
+        base64_str = base64.b64encode(image_bytes).decode('utf-8')
+        return base64_str
+
+    except Exception as e:
+        logger.warning(f"Image optimization failed: {e}")
+        return None
+
+def _extract_page_content_interleaved(page: fitz.Page) -> str:
+    """
+    Extracts text and images by manually discovering image locations 
+    and merging them with text blocks based on vertical position.
+    This fixes issues where get_text("blocks") misses images in complex PDFs.
+    """
+    # 1. Get Text Blocks ONLY
+    # We use raw=False, sort=False because we will sort manually later.
+    raw_blocks = page.get_text("blocks")
+    
+    # Filter to keep ONLY Text blocks (type=0)
+    # We discard PyMuPDF's auto-detected images (type=1) because they are often incomplete.
+    final_blocks = [list(b) for b in raw_blocks if b[6] == 0]
+
+    # 2. Manual Image Discovery (The Root Cause Fix)
+    # This finds images even if they are inside Form XObjects or masked containers
+    image_list = page.get_images(full=True)
+    
+    for img in image_list:
+        xref = img[0]
+        try:
+            # Find every location where this image appears on the page
+            rects = page.get_image_rects(xref)
+        except Exception:
+            continue
+
+        for bbox in rects:
+            # --- NOISE FILTER ---
+            # Filter out tiny elements (icons, lines, invisible spacers)
+            if bbox.width < 50 or bbox.height < 50:
+                continue
+                
+            try:
+                # --- ZOOM FOR OCR (Critical for Code/Terminal) ---
+                # 4x Zoom = ~288 DPI. Essential for distinguishing '.' from ','
+                zoom_matrix = fitz.Matrix(4, 4)
+                pix = page.get_pixmap(clip=bbox, matrix=zoom_matrix)
+                
+                # Secondary Size Check (post-zoom)
+                # A 50x50 icon becomes 200x200. If it's still small, it's definitely noise.
+                if pix.width < 100 or pix.height < 100:
+                    continue
+
+                # Optimize & Encode
+                base64_img = _optimize_and_encode_image(pix)
+                if not base64_img: 
+                    continue
+                
+                # Create a "Block" that matches PyMuPDF's structure
+                # Format: [x0, y0, x1, y1, CONTENT, block_no, type]
+                # We use type=1 to indicate Image
+                image_block = [bbox.x0, bbox.y0, bbox.x1, bbox.y1, base64_img, None, 1]
+                final_blocks.append(image_block)
+
+            except Exception as e:
+                logger.warning(f"Image extraction failed on page {page.number}: {e}")
+
+    # 3. Sort by Reading Order
+    # Sort primarily by Top position (y0), then Left position (x0)
+    # This interleaves the images correctly into the text flow.
+    final_blocks.sort(key=lambda b: (b[1], b[0]))
+
+    # 4. Generate Output
+    page_content = []
+    for b in final_blocks:
+        if b[6] == 0: # Text Block
+            text = b[4]
+            if text.strip():
+                page_content.append(text)
+        elif b[6] == 1: # Image Block
+            base64_str = b[4]
+            # Add newlines to ensure the tag is distinct for the OCR pipeline
+            tag = f"\n<<IMAGE_OCR_DATA: {base64_str}>>\n"
+            page_content.append(tag)
+
+    return "\n".join(page_content)
 
 def try_load_pdf_chapters(doc: fitz.Document, filename: str, min_pages_for_split: int = 15) -> Optional[List[Document]]:
     """
@@ -149,7 +281,6 @@ def try_load_pdf_chapters(doc: fitz.Document, filename: str, min_pages_for_split
         if doc.page_count < min_pages_for_split:
             return None
 
-        # [level, title, page_num]
         toc = doc.get_toc(simple=True) 
         if not toc:
             return None
@@ -161,22 +292,19 @@ def try_load_pdf_chapters(doc: fitz.Document, filename: str, min_pages_for_split
         # Deduplicate and flatten
         for entry in toc:
             lvl, title, page_num = entry[0], entry[1], entry[2]
-            # PyMuPDF pages are 1-based in TOC
             if 0 < page_num <= total_pages:
-                # If this chapter starts on the same page as the previous one, append title
                 if cleaned_chapters and cleaned_chapters[-1]['page'] == (page_num - 1):
                     cleaned_chapters[-1]['title'] += f" > {title}"
                 else:
                     cleaned_chapters.append({
-                        "page": page_num - 1, # Convert to 0-based
+                        "page": page_num - 1, 
                         "title": title.strip()
                     })
 
-        # Heuristic: If TOC is useless (e.g., 1 chapter), abort
         if len(cleaned_chapters) < 2:
             return None
 
-        # Extract Text per Chapter
+        # Extract Text + Images per Chapter
         for i, chapter in enumerate(cleaned_chapters):
             start_page = chapter["page"]
             title = chapter["title"]
@@ -188,11 +316,11 @@ def try_load_pdf_chapters(doc: fitz.Document, filename: str, min_pages_for_split
 
             if start_page >= end_page: continue
 
-            # Extract text from page range
-            # Use sort=True to ensure multi-column PDFs (research papers) are read correctly
-            chapter_text = ""
-            for p in range(start_page, end_page):
-                chapter_text += doc[p].get_text(sort=True) + "\n\n"
+            # Extract content (Text + Base64 Images)
+            chapter_content = ""
+            for p_idx in range(start_page, end_page):
+                page_text = _extract_page_content_interleaved(doc[p_idx])
+                chapter_content += page_text + "\n\n"
 
             meta = {
                 "chapter_title": title,
@@ -200,7 +328,7 @@ def try_load_pdf_chapters(doc: fitz.Document, filename: str, min_pages_for_split
                 "page_count": end_page - start_page,
                 "source": filename
             }
-            documents.append(Document(page_content=chapter_text, metadata=meta))
+            documents.append(Document(page_content=chapter_content, metadata=meta))
             
         return documents
 
@@ -226,23 +354,23 @@ def _process_single_file(file_path: Path) -> List[Document]:
         # --- A. PDF Strategy ---
         if ext == '.pdf':
             with fitz.open(file_path) as doc:
-                # Try sophisticated chapter split
+                # 1. Try Chapter Split (with Image Embedding)
                 documents = try_load_pdf_chapters(doc, file_path.name)
                 
-                # Fallback: Linear text extraction
+                # 2. Fallback: Linear text extraction (with Image Embedding)
                 if not documents:
-                    # [OPTIMIZATION] sort=True handles multi-column layouts (Research Papers)
-                    text = "".join(page.get_text(sort=True) for page in doc)
+                    full_content = ""
+                    for page in doc:
+                        full_content += _extract_page_content_interleaved(page) + "\n\n"
                     
-                    if text:
-                        # Merge PDF metadata (Producer, Title) with caution
-                        # We prefer our calculated file_meta for source/filename
+                    # Check if we got anything (Text OR Image Tags)
+                    if full_content.strip() or "<<IMAGE_OCR_DATA" in full_content:
                         pdf_meta = doc.metadata
-                        documents = [Document(page_content=text, metadata=pdf_meta)]
+                        documents = [Document(page_content=full_content, metadata=pdf_meta)]
                     else:
-                        # [EDGE CASE] Scanned PDF Detection
+                        # Scanned PDF with no OCR-able text and images failed filter
                         if doc.page_count > 0:
-                            logger.warning(f"⚠️  Empty text in {file_path.name}. This might be a SCANNED PDF (images only).")
+                            logger.warning(f"⚠️  Empty content in {file_path.name}. (Possibly Scanned PDF with poor quality images)")
 
         # --- B. Text/Code Strategy ---
         elif ext in ['.txt', '.md', '.markdown', '.log', '.json', '.py', '.js']:
@@ -256,10 +384,11 @@ def _process_single_file(file_path: Path) -> List[Document]:
         valid_docs = []
         for doc in documents:
             # 1. Preprocess Text (Clean newlines, spaces, null bytes)
+            # Safe for Base64 tags due to updated Regex
             doc.page_content = preprocess_text(doc.page_content)
             
             if validate_document(doc):
-                # 2. Enforce File Metadata (Overwrite PDF specific/random metadata keys)
+                # 2. Enforce File Metadata 
                 doc.metadata.update(file_meta)
                 
                 # 3. Clean Garbage Keys
@@ -368,6 +497,9 @@ def calculate_context_ceiling(documents: List[Document], system_prompt_len: int 
         # Pre-calculating tokens prevents O(n log n) encoding calls during sort
         doc_data = []
         for d in documents:
+            # IMPORTANT: For calculation, we likely don't want to count the raw Base64 
+            # as massive tokens if we plan to strip it before LLM context context. 
+            # However, for now, we count it as is.
             tokens = len(encoding.encode(d.page_content))
             doc_data.append((tokens, d))
         
