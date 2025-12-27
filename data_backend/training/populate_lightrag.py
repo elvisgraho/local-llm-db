@@ -128,7 +128,8 @@ def main():
         ignore_registry = (not args.resume) or args.reset
         loaded_docs = load_documents(
             db_dir=db_dir, 
-            ignore_processed=ignore_registry
+            ignore_processed=ignore_registry,
+            is_ocr_enabled=True
         )
         
         total_docs = len(loaded_docs)
@@ -140,6 +141,9 @@ def main():
 
         # 3. Process & Chunk Documents
         all_processed_chunks = []
+
+        print(loaded_docs)
+        exit(0)
         
         with tqdm(total=total_docs, desc="Processing Docs", unit="doc") as pbar:
             for doc in loaded_docs:

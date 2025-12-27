@@ -13,6 +13,7 @@ from typing import Optional
 class LLMConfig:
     """Configuration for LLM-related settings."""
     model_name: Optional[str] = None
+    ocr_model_name: Optional[str] = None
     api_url: Optional[str] = None
     temperature: float = 0.7 # Keep other defaults for now
     max_retries: int = 3
@@ -43,12 +44,14 @@ class SystemConfig:
         """
         # Define fallback defaults here if environment variables are not set
         default_model_name = "gpt-oss-20b-derestricted"
+        default_ocr_model_name = "gliese-ocr-7b-post2.0-final-i1"
         default_api_url = "http://10.2.0.2:1234"
 
         return cls(
             llm=LLMConfig(
                 # Use explicit string defaults in getenv if env var is missing
                 model_name=os.getenv('LLM_MODEL_NAME', default_model_name),
+                ocr_model_name=os.getenv('LLM_OCR_MODEL_NAME', default_ocr_model_name),
                 api_url=os.getenv('LLM_API_URL', default_api_url),
                 temperature=float(os.getenv('LLM_TEMPERATURE', LLMConfig.temperature)),
                 max_retries=int(os.getenv('LLM_MAX_RETRIES', LLMConfig.max_retries)),

@@ -13,6 +13,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from training.templates import LLM_WRITEUP_SYSTEM_PROMPT, LLM_WRITEUP_USER_TEMPLATE
 from training.processing_utils import get_unique_path
 from training.load_documents import calculate_context_ceiling, load_documents
 from training.history_manager import ProcessingHistory
@@ -44,45 +45,6 @@ def signal_handler(sig, frame):
 
 # Register the signal
 signal.signal(signal.SIGINT, signal_handler)
-
-# -------------------------------------------------------------------------
-# 1. Prompt
-# -------------------------------------------------------------------------
-LLM_SYSTEM_PROMPT = """You are a Principal Security Researcher. Your objective is to transform raw input into a definitive, RAG-optimized technical knowledge artifact.
-
-**Core Directive:**
-Convert the input into a structured, semantically dense Markdown document. Prioritize technical precision, precise command syntax, and mechanistic explanations to maximize value for downstream vector retrieval.
-
-**Structure & Schema:**
-1. **# Title**: Specific and descriptive.
-2. **## Executive Summary**: A dense 3-sentence summary of the technique, vulnerability, or concept.
-3. **## Technical Context**: Explain the underlying mechanism (the "why" and "where").
-4. **## Execution Flow**:
-   - Provide a sequential, step-by-step breakdown of the attack chain or technical process.
-   - Use code blocks for **all** commands, payloads, and configurations.
-   - Explicitly name tools, flags, protocols, and versions.
-   - Reconstruct implied/missing technical steps using standard adversarial tradecraft.
-
-**Optimization Rules:**
-- **Semantic Density**: Maximize technical nouns per sentence. Explicitly reference relevant CVEs, MITRE ATT&CK T-codes, or specific protocols to enhance embedding quality.
-- **Tone**: Clinical, authoritative, and impersonal. Eliminate all conversational filler, speaker attributions, and anecdotes.
-- **Inference**: If the transcript contains transcription errors, correct them to the likely intended technical term (e.g., fix "wireshark" to "Wireshark", "end map" to "Nmap").
-- **Constraints**: 
-    - NO "Indicators of Compromise" (IOC) sections or lists of hashes/IPs.
-    - NO ethical warnings, legal disclaimers, or "educational purpose" preambles.
-    - NO Markdown tables (use lists/code blocks).
-    - NO generic advice; focus on the specific content provided.
-
-### CRITERIA TO DISCARD (Noise/Junk)
-When the content meets following criteria, only return "Discard" in your response:
-- **Marketing**: Sales brochures, product advertisements without technical depth.
-- **Fluff**: High-level generic summaries, "Importance of Security" essays.
-- **Junk**: Unreadable OCR, corrupted text, or placeholder data.
-- **CVE without POC**: Description of a vulnerability where explotation steps are not documented or inferred.
-"""
-
-LLM_USER_TEMPLATE = """Input Content (Analyze below):
-{content}"""
 
 # -------------------------------------------------------------------------
 # 2. Helper Functions
@@ -119,10 +81,10 @@ def generate_writeup(text: str) -> str:
     Invokes the LLM with segregated system/user prompts and strips out 'Thinking' blocks.
     """
     # Format the user portion only
-    user_content = LLM_USER_TEMPLATE.format(content=text)
+    user_content = LLM_WRITEUP_USER_TEMPLATE.format(content=text)
     
     # Pass system instructions separately
-    raw_response = get_llm_response(user_content, system_content=LLM_SYSTEM_PROMPT, temperature=0.7)
+    raw_response = get_llm_response(user_content, system_content=LLM_WRITEUP_SYSTEM_PROMPT, temperature=0.7)
     
     return raw_response.strip()
 

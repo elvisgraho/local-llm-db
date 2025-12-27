@@ -115,6 +115,7 @@ with st.sidebar:
             
             env_vars["LOCAL_LLM_API_URL"] = st.session_state.llm_url
             env_vars["LOCAL_MAIN_MODEL"] = st.session_state.chat_model
+            env_vars["LOCAL_OCR_MODEL"] = st.session_state.ocr_model
 
         # B. Embedding Model
         with st.expander("🧠 Embedding Model", expanded=True):

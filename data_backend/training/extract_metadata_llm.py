@@ -2,19 +2,18 @@ import json
 import re
 import sys
 import logging
-from typing import Dict, Any, List, Literal, Optional, Tuple
 import unicodedata
 import requests
+from typing import Dict, Any, Optional, Tuple
 
 # --- Modern LangChain & Pydantic Imports ---
 from langchain_core.documents import Document
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from pydantic import BaseModel, Field, model_validator
 
 # --- Local Imports ---
 # Ensure query.global_vars exists in your project structure
-from query.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL
+from training.templates import OCR_SYSTEM_PROMPT, DocumentMetadata, get_metadata_extraction_prompt
+from query.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL, LOCAL_OCR_MODEL
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -37,105 +36,12 @@ JSON_BLOCK_PATTERN = re.compile(r'```(?:json)?\s*(\{.*?\})\s*```', re.DOTALL)
 MANUAL_TAGS_PATTERN = re.compile(r'^Tags:\s*(.+)$', re.MULTILINE | re.IGNORECASE)
 MITRE_ID_PATTERN = re.compile(r'^T\d{4}(\.\d{3})?$') 
 
-class DocumentMetadata(BaseModel):
-    """
-    Schema for Knowledge Graph extraction.
-    """
-    # 1. Classification
-    is_technical_content: bool = Field(..., description="True if text contains actionable exploits, code analysis, or threat intel. False for news/marketing.")
-
-    # 2. Core Metadata
-    main_topic: Optional[str] = Field(None, description="Subject (e.g., 'Active Directory Security')")
-    summary_dense: Optional[str] = Field(None, description="One dense sentence with keywords.")
-    code_languages: List[str] = Field([], description="Programming languages used in the script.")
-
-    # 3. MITRE
-    mitre_tactics: List[Literal[
-        "Collection",
-        "Command and Control",
-        "Credential Access",
-        "Defense Evasion",
-        "Discovery",
-        "Evasion",
-        "Execution",
-        "Exfiltration",
-        "Impact",
-        "Impair Process Control",
-        "Inhibit Response Function",
-        "Initial Access",
-        "Lateral Movement",
-        "Network Effects",
-        "Persistence",
-        "Privilege Escalation",
-        "Reconnaissance",
-        "Remote Service Effects",
-        "Resource Development"
-    ]] = Field(default_factory=list, description="List of tactics found (e.g., 'initial_access', 'execution').")
-    mitre_technique_primary_ids: List[str] = Field([], description="Primary T MITRE IDs for technique (e.g., 'T1059' without a dot) NEVER Sub-technique")
-
-def get_metadata_extraction_prompt() -> ChatPromptTemplate:
-    template_str = """You are a Principal Security Research Assistant building a cybersecurity knowledge database.
-Extract structured metadata from the provided text.
-
-If applicable, classify activity using the following verified MITRE ATT&CK Tactic definitions. 
-Prioritize the Tactic ID (TAxxxx) to ensure domain-specific accuracy (Enterprise vs. Mobile vs. ICS).
-
-### Current MITRE classification
-- TA0001 (Initial Access/ENT): Entry vectors (phishing, public exploit) to gain a network foothold.
-- TA0002 (Execution/ENT): Running adversary-controlled code (scripts, binaries) on local/remote systems.
-- TA0003 (Persistence/ENT): Maintaining access across restarts/interruptions (registry keys, startup code).
-- TA0004 (Privilege Escalation/ENT): Gaining higher-level permissions (SYSTEM/root, admin) via weaknesses.
-- TA0005 (Defense Evasion/ENT): Actions to avoid detection (obfuscation, disabling security tools).
-- TA0006 (Credential Access/ENT): Stealing account names/passwords (dumping, keylogging).
-- TA0007 (Discovery/ENT): Gaining knowledge of the internal network and system environment.
-- TA0008 (Lateral Movement/ENT): Pivoting between remote systems on a network.
-- TA0009 (Collection/ENT): Gathering data (files, screenshots) relevant to the objective.
-- TA0010 (Exfiltration/ENT): Removing data from the network (C2 channel, alternate paths).
-- TA0011 (Command and Control/ENT): Communicating with compromised systems to direct actions.
-- TA0043 (Reconnaissance/ENT): Information gathering (org, staff, infra) to support targeting.
-- TA0042 (Resource Development/ENT): Establishing infrastructure (domains, accounts) for operations.
-- TA0040 (Impact/ENT): Disrupting availability or compromising integrity of business processes.
-
-- TA0027 (Initial Access/MOB): Entry vectors specifically targeting mobile device footholds.
-- TA0038 (Network Effects/MOB): Intercepting/manipulating traffic without device access.
-- TA0039 (Remote Service Effects/MOB): Using cloud/MDM services to monitor/control devices.
-
-- TA0108 (Initial Access/ICS): Footholds in OT/ICS environments (PLCs, engineering workstations).
-- TA0103 (Evasion/ICS): ICS-specific technical defense avoidance (distinct from TA0005).
-- TA0106 (Impair Process Control/ICS): Manipulating physical control logic or parameters.
-- TA0107 (Inhibit Response Function/ICS): Disabling safety/protection functions (alarms, safeguards).
-
-### GLOBAL EXCLUSION RULES (STRICT)
-1. **NO GENERIC COMMANDS:** strictly IGNORE standard shell operations: `cd`, `ls`, `mv`, `cp`, `mkdir`, `cat`, `echo`, `chmod`, `chown`.
-2. **NO GENERIC PATHS:** IGNORE `/tmp`, `/home`, `C:\\Users`, `Program Files` unless part of a specific exploit chain.
-3. **NO LOCAL INFRA:** IGNORE `localhost`, `127.0.0.1`, `0.0.0.0`, `192.168.x.x`.
-
-### CRITERIA TO 'DISCARD' (is_technical_content = false)
-- **Marketing**: Sales brochures, product advertisements without technical depth.
-- **Fluff**: High-level generic summaries, "Importance of Security" essays, or Copyright/Legal pages.
-- **Junk**: Unreadable OCR, Table of Contents, or Dedication pages.
-- **CVE without POC**: Description of a vulnerability where explotation steps are not documented or inferred.
-
-### CRITERIA TO 'KEEP' (is_technical_content = true)
-- Contains **actionable** content: code snippets, exploit payloads, command-line usage.
-- Explains specific vulnerabilities (CVEs), architectural internals, or bypass techniques.
-- Technical manuals, whitepapers, or detailed tutorials.
-
-### ACTUAL INPUT TEXT
-{text}
-
-### 4. OUTPUT INSTRUCTIONS
-- Return valid JSON matching the schema below.
-- {format_instructions}
-"""
-    return ChatPromptTemplate.from_template(template_str)
-
 # --- 4. Helper Functions ---
 
 # Use session to prevent open socket accumulation
 session = requests.Session()
 
-def get_llm_response(prompt_text: str, system_content: Optional[str] = None, temperature: float = 0.3) -> str:
+def get_llm_response(prompt_text: str, system_content: Optional[str] = None, temperature: float = 0.3, model_name: str = LOCAL_MAIN_MODEL) -> str:
     headers = {"Content-Type": "application/json"}
     
     # Handle different API base formatting
@@ -152,7 +58,7 @@ def get_llm_response(prompt_text: str, system_content: Optional[str] = None, tem
     messages.append({"role": "user", "content": prompt_text})
 
     payload = {
-        "model": LOCAL_MAIN_MODEL,
+        "model": model_name,
         "messages": messages,
         "temperature": temperature,
     }
@@ -276,7 +182,7 @@ def add_metadata_to_document(doc: Document, add_tags_llm: bool) -> Optional[Docu
     llm_meta = {}
     if add_tags_llm:
         try:
-            print(f"DEBUG: Triggering LLM extraction for {doc.metadata.get('source')}...", flush=True)
+            logger.debug(f"DEBUG: Triggering LLM extraction for {doc.metadata.get('source')}...")
             prompt = get_metadata_extraction_prompt()
             parser = PydanticOutputParser(pydantic_object=DocumentMetadata)
             
@@ -296,7 +202,7 @@ def add_metadata_to_document(doc: Document, add_tags_llm: bool) -> Optional[Docu
                 if is_valid is False:
                     chapter = doc.metadata.get('chapter_title', '')
                     src = doc.metadata.get('source')
-                    print(f"🚫 Skipping Chunk: {src} {f'[{chapter}]' if chapter else ''} (Flagged as non-technical)", flush=True)
+                    logger.info(f"🚫 Skipping Chunk: {src} {f'[{chapter}]' if chapter else ''} (Flagged as non-technical)")
                     return None
 
                 
@@ -305,20 +211,51 @@ def add_metadata_to_document(doc: Document, add_tags_llm: bool) -> Optional[Docu
 
     # 3. Merge Strategy (Manual > LLM)
     final_meta = llm_meta.copy()
-    
-    if manual_meta:
-        # If manual tags exist, we force technical=True
-        
-        # Override specific fields
-        if manual_meta.get("mitre_technique_id"):
-            final_meta["mitre_technique_id"] = manual_meta["mitre_technique_id"]
-        # Merge Code Languages
-        if manual_meta.get("code_languages"):
-            final_meta.setdefault("code_languages", []).extend(manual_meta["code_languages"])
 
     # 4. Update Document
     if final_meta:
         doc.metadata.update(final_meta)
-        print(f"DEBUG: Successfully tagged {doc.metadata.get('source')}", flush=True)
+        logger.debug(f"DEBUG: Successfully tagged {doc.metadata.get('source')}")
         
     return doc
+
+def process_image_tag(match: re.Match) -> str:
+    """
+    Standalone callback for re.sub. 
+    Takes a regex match, extracts Base64, calls Vision LLM via get_llm_response, 
+    and returns a formatted text description.
+    """
+    base64_data = match.group(1).strip()
+    if not base64_data:
+        return ""
+    
+    try:
+        # Construct a prompt that includes the image data.
+        user_prompt = f"data:image/png;base64,{base64_data}\n\nTranscribe the text and layout from this image exactly."
+
+        # Call the LLM with OCR-optimized settings
+        # Temperature 0.1 reduces hallucinations, essential for OCR.
+        response = get_llm_response(
+            prompt_text=user_prompt,
+            system_content=OCR_SYSTEM_PROMPT,
+            temperature=0.1,
+            model_name=LOCAL_OCR_MODEL
+        )
+
+        if not response:
+            return ""
+
+        # Clean up response (some models might wrap output in markdown blocks)
+        cleaned_response = response.strip()
+        if cleaned_response.startswith("```markdown"):
+            cleaned_response = cleaned_response.replace("```markdown", "").replace("```", "")
+        elif cleaned_response.startswith("```"):
+            cleaned_response = cleaned_response.replace("```", "")
+
+        # Return format: brackets help the embedding model / chunker distinguish it
+        return f"\n[IMAGE CONTENT START]\n{cleaned_response.strip()}\n[IMAGE CONTENT END]\n"
+        
+    except Exception as e:
+        logger.error(f"Vision LLM (Gliese-OCR) failed: {e}")
+        # Return a neutral placeholder so the pipeline doesn't break
+        return "\n[IMAGE PROCESSING ERROR: Content could not be extracted]\n"

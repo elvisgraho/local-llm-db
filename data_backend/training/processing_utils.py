@@ -22,7 +22,7 @@ if str(project_root) not in sys.path:
 
 # --- Local Imports ---
 from training.get_embedding_function import get_embedding_function
-from training.extract_metadata_llm import add_metadata_to_document
+from training.extract_metadata_llm import add_metadata_to_document, process_image_tag
 from training.load_documents import extract_metadata
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ RE_BULLET = re.compile(r'^\s*[-•]\s*', flags=re.MULTILINE)
 RE_NUMBERED_LIST = re.compile(r'^\s*(\d+\.)(?! )', flags=re.MULTILINE)
 RE_CODE_BLOCK = re.compile(r'```(\w+)?\n')
 RE_FILENAME_SANITIZE = re.compile(r'[^a-z0-9_]')
+RE_OCR_TAG = re.compile(r'<<IMAGE_OCR_DATA:\s*(.*?)>>', re.DOTALL)
 
 def validate_metadata(metadata: Dict[str, Any]) -> bool:
     """
@@ -59,6 +60,10 @@ def split_document(
     """
     Split a document into semantic chunks with NOISE FILTERING and FLATTENING for Chroma.
     """
+    # --- STEP 0: Resolve OCR Images (The Snippet) ---
+    if "<<IMAGE_OCR_DATA:" in doc.page_content:
+        # This replaces the Base64 tag with the description returned by _process_image_tag
+        doc.page_content = RE_OCR_TAG.sub(process_image_tag, doc.page_content)
     
     # 1. Generate Metadata (LLM or Manual Tags)
     if add_tags_llm:
@@ -73,7 +78,7 @@ def split_document(
             source = doc.metadata.get('source', 'unknown')
             logger.error(f"❌ CRITICAL: Tagging failed for '{source}'. Error: {e}")
             # Continue even if tagging fails, we just lose rich metadata
-            pass 
+            pass
 
     # 2. Configure Splitter
     text_splitter = RecursiveCharacterTextSplitter(

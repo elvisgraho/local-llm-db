@@ -7,7 +7,7 @@ import google.generativeai as genai
 
 # Local Imports
 from query.templates import VERIFY_TEMPLATE
-from query.global_vars import LOCAL_LLM_API_URL, LOCAL_MAIN_MODEL
+from query.global_vars import LOCAL_LLM_API_URL, LOCAL_MAIN_MODEL, LOCAL_OCR_MODEL
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,6 +53,7 @@ def get_llm_response(
     
     provider = config.get('provider', 'local')
     model_name = config.get('modelName') or LOCAL_MAIN_MODEL
+    ocr_model_name = config.get('ocrModelName') or LOCAL_OCR_MODEL
     
     api_url = config.get('api_url') or LOCAL_LLM_API_URL
     clean_url = api_url.rstrip('/')

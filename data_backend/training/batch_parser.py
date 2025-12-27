@@ -12,6 +12,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from training.templates import RedTeamFilter, get_filter_prompt
 from training.load_documents import calculate_context_ceiling, load_documents
 from training.history_manager import ProcessingHistory
 from training.extract_metadata_llm import (
@@ -19,9 +20,6 @@ from training.extract_metadata_llm import (
     clean_and_parse_json,
     extract_text_parts,      
     PydanticOutputParser,
-    Field,
-    BaseModel, 
-    ChatPromptTemplate
 )
 
 # Configure Logging
@@ -35,35 +33,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class RedTeamFilter(BaseModel):
-    decision: str = Field(..., description="Must be strictly 'KEEP' or 'DELETE'.")
-    reasoning: str = Field(..., description="Concise technical justification.")
-
-def get_filter_prompt() -> ChatPromptTemplate:
-    template_str = """You are a Senior IT Engineer and Knowledge Base Curator.
-Your task: Decide if the provided document text is valuable for a penetration testing library.
-
-### CRITERIA TO 'KEEP' (Technical Value)
-- Contains **actionable** content: code snippets, exploit payloads, command-line usage.
-- Explains specific vulnerabilities (CVEs), architectural internals, or bypass techniques.
-- Technical manuals, whitepapers, or detailed tutorials.
-
-### CRITERIA TO 'DELETE' (Noise/Junk)
-- **Marketing**: Sales brochures, product advertisements without technical depth.
-- **Fluff**: High-level generic summaries, "Importance of Security" essays.
-- **Junk**: Unreadable OCR, corrupted text, or placeholder data.
-- **CVE without POC**: Description of a vulnerability where explotation steps are not documented or inferred.
-
-### INPUT TEXT (Sample):
-{text}
-
-### INSTRUCTIONS
-1. If in doubt, **KEEP** it. Only Delete if it is clearly marketing or junk.
-2. Return ONLY valid JSON matching the schema below.
-
-{format_instructions}
-"""
-    return ChatPromptTemplate.from_template(template_str)
 
 # -------------------------------------------------------------------------
 # 3. Logic & Operations
