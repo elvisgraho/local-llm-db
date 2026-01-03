@@ -16,6 +16,23 @@ from query.templates import (
     CONTEXT_BLOCK, SOURCES_BLOCK, QUESTION_BLOCK,
     STANDARD_CONTEXT_TYPE
 )
+from query.metadata_enhancement import (
+    rerank_with_metadata_awareness,
+    augment_context_with_metadata,
+    select_diverse_results
+)
+from query.config import config
+
+# Lazy import for intent detection
+_query_intent_detector = None
+
+def get_query_intent_detector():
+    """Lazy import to avoid circular dependencies."""
+    global _query_intent_detector
+    if _query_intent_detector is None:
+        from query.query_intent_detector import detect_query_intent
+        _query_intent_detector = detect_query_intent
+    return _query_intent_detector
 
 logger = logging.getLogger(__name__)
 
@@ -25,60 +42,107 @@ MIN_DOC_LENGTH = 50           # Minimum characters for a chunk to be considered 
 HEADER_ONLY_THRESHOLD = 150   # Max length for a chunk starting with '#' to be considered a "header orphan"
 
 def _rerank_results(
-    query_text: str, 
-    results: List[Tuple[Document, float]], 
-    k: int
+    query_text: str,
+    results: List[Tuple[Document, float]],
+    k: int,
+    use_metadata_boost: Optional[bool] = None
 ) -> List[Tuple[Document, float]]:
     """
-    Reranks retrieval results using the CrossEncoder model.
+    Reranks retrieval results using CrossEncoder + metadata awareness.
+
+    Three-stage process:
+    1. CrossEncoder semantic reranking (if available)
+    2. Metadata-aware boosting (MITRE tactics, code languages, topics)
+    3. Diversity-based selection (MMR with metadata)
+
     Includes robust error handling and input validation.
     """
+    # Use config value if not explicitly set
+    if use_metadata_boost is None:
+        use_metadata_boost = config.rag.use_metadata_boost
+
     reranker = data_service.reranker
-    
+
     # Fast exit conditions
     if not results:
         return []
-    if not reranker:
-        # Fallback to original vector/bm25 scores
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[:k]
 
-    try:
-        logger.info(f"Reranking {len(results)} results.")
-        
-        # Prepare pairs: [Query, Document Content]
-        # Validate content exists to prevent model crashes
-        pairs = []
-        valid_indices = []
-        
-        for i, (doc, _) in enumerate(results):
-            content = doc.page_content
-            if content and isinstance(content, str) and content.strip():
-                pairs.append([query_text, content])
-                valid_indices.append(i)
-        
-        if not pairs:
-            logger.warning("No valid text content found for reranking.")
-            return results[:k]
+    # Stage 1: CrossEncoder Reranking
+    crossencoder_results = results
+    if reranker:
+        try:
+            logger.info(f"Stage 1: CrossEncoder reranking {len(results)} results.")
 
-        # Predict scores
-        rerank_scores = reranker.predict(pairs)
-        
-        # Reconstruct list with new scores
-        reranked_results = []
-        for idx, new_score in zip(valid_indices, rerank_scores):
-            reranked_results.append((results[idx][0], float(new_score)))
-        
-        # Sort descending
-        reranked_results.sort(key=lambda x: x[1], reverse=True)
-        
-        logger.info(f"Selected top {k} results after reranking.")
-        return reranked_results[:k]
+            # Prepare pairs: [Query, Document Content]
+            # Validate content exists to prevent model crashes
+            pairs = []
+            valid_indices = []
 
-    except Exception as e:
-        logger.error(f"Error during reranking: {e}. Falling back to original scores.", exc_info=True)
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[:k]
+            for i, (doc, _) in enumerate(results):
+                content = doc.page_content
+                if content and isinstance(content, str) and content.strip():
+                    pairs.append([query_text, content])
+                    valid_indices.append(i)
+
+            if not pairs:
+                logger.warning("No valid text content found for CrossEncoder reranking.")
+            else:
+                # Predict scores
+                rerank_scores = reranker.predict(pairs)
+
+                # Reconstruct list with new scores
+                crossencoder_results = []
+                for idx, new_score in zip(valid_indices, rerank_scores):
+                    crossencoder_results.append((results[idx][0], float(new_score)))
+
+                # Sort descending
+                crossencoder_results.sort(key=lambda x: x[1], reverse=True)
+                logger.info(f"CrossEncoder reranking complete. Top score: {crossencoder_results[0][1]:.3f}")
+
+        except Exception as e:
+            logger.error(f"Error during CrossEncoder reranking: {e}. Using original scores.", exc_info=True)
+            crossencoder_results = results
+    else:
+        # No CrossEncoder available, sort by original scores
+        crossencoder_results = sorted(results, key=lambda x: x[1], reverse=True)
+
+    # Stage 2: Metadata-Aware Boosting (with intent detection)
+    if use_metadata_boost and crossencoder_results:
+        try:
+            # Detect query intent for MITRE-aware boosting
+            query_intent = None
+            try:
+                detect_fn = get_query_intent_detector()
+                query_intent = detect_fn(query_text)
+            except Exception as e:
+                logger.debug(f"Intent detection skipped: {e}")
+
+            logger.info("Stage 2: Metadata-aware boosting" + (" with intent" if query_intent else "") + ".")
+
+            # Apply metadata boosting using config alpha value
+            final_results = rerank_with_metadata_awareness(
+                query_text,
+                crossencoder_results,
+                k=k * 2,  # Get 2x for diversity selection
+                alpha=config.rag.metadata_boost_alpha,
+                query_intent=query_intent
+            )
+
+            # Stage 3: Diversity Selection
+            logger.info("Stage 3: Diversity-based selection.")
+            final_results = select_diverse_results(
+                final_results,
+                k=k,
+                diversity_weight=config.rag.diversity_weight
+            )
+
+            return final_results
+
+        except Exception as e:
+            logger.error(f"Error during metadata enhancement: {e}. Using CrossEncoder results.", exc_info=True)
+            return crossencoder_results[:k]
+
+    return crossencoder_results[:k]
 
 def select_docs_for_context(
     docs_with_scores: List[Tuple[Document, float]], 
@@ -180,21 +244,32 @@ def _generate_response(
     estimated_context_tokens: int,
     hybrid: bool = False,
     verify: Optional[bool] = False,
-    formatted_relationships: Optional[List[str]] = None
+    formatted_relationships: Optional[List[str]] = None,
+    use_metadata_augmentation: Optional[bool] = None
 ) -> Dict[str, Union[str, List[str], int]]:
-    
-    # 2. Prepare Context Text (XML Style)
+
+    # Use config value if not explicitly set
+    if use_metadata_augmentation is None:
+        use_metadata_augmentation = config.rag.use_metadata_augmentation
+
+    # 2. Prepare Context Text (XML Style with Metadata Augmentation)
     reordered_docs = _reorder_documents_for_context(final_docs)
     context_parts = []
-    
+
     for doc in reordered_docs:
         # Clean source for context tag
         raw_source = doc.metadata.get("source", "unknown")
         clean_source = os.path.basename(raw_source) if raw_source else "unknown"
-        
+
+        # Optionally augment content with metadata
+        if use_metadata_augmentation:
+            augmented_content = augment_context_with_metadata(doc)
+        else:
+            augmented_content = doc.page_content
+
         # XML wrapping helps models distinguish separate documents
-        context_parts.append(f"<document source='{clean_source}'>\n{doc.page_content}\n</document>")
-    
+        context_parts.append(f"<document source='{clean_source}'>\n{augmented_content}\n</document>")
+
     context_text = "\n\n".join(context_parts)
 
     context_type_label = STANDARD_CONTEXT_TYPE

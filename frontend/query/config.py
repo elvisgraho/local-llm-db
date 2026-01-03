@@ -27,6 +27,11 @@ class RAGConfig:
     max_documents: int = 15
     chunk_size: int = 512
     chunk_overlap: int = 100
+    # Metadata-enhanced RAG features (automatically enabled)
+    use_metadata_boost: bool = True  # Enable metadata-aware reranking
+    use_metadata_augmentation: bool = True  # Prepend metadata to context
+    metadata_boost_alpha: float = 0.7  # 70% original score, 30% metadata boost
+    diversity_weight: float = 0.25  # Weight for diversity in result selection
 
 
 @dataclass
@@ -62,7 +67,11 @@ class SystemConfig:
                 similarity_threshold=float(os.getenv('RAG_SIMILARITY_THRESHOLD', RAGConfig.similarity_threshold)),
                 max_documents=int(os.getenv('RAG_MAX_DOCUMENTS', RAGConfig.max_documents)),
                 chunk_size=int(os.getenv('RAG_CHUNK_SIZE', RAGConfig.chunk_size)),
-                chunk_overlap=int(os.getenv('RAG_CHUNK_OVERLAP', RAGConfig.chunk_overlap))
+                chunk_overlap=int(os.getenv('RAG_CHUNK_OVERLAP', RAGConfig.chunk_overlap)),
+                use_metadata_boost=os.getenv('RAG_USE_METADATA_BOOST', 'true').lower() == 'true',
+                use_metadata_augmentation=os.getenv('RAG_USE_METADATA_AUGMENTATION', 'true').lower() == 'true',
+                metadata_boost_alpha=float(os.getenv('RAG_METADATA_BOOST_ALPHA', RAGConfig.metadata_boost_alpha)),
+                diversity_weight=float(os.getenv('RAG_DIVERSITY_WEIGHT', RAGConfig.diversity_weight))
             )
         )
 
