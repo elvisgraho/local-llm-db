@@ -104,11 +104,20 @@ def query_rag(
         
         # 3. Retrieve
         # ADJUSTMENT: retrieve_semantic now multiplies by 4 internally.
-        # We only need a slight buffer here to merge with keyword results.
-        k_initial = min(int(top_k * 1.5), 100)
-        if k_initial < top_k: k_initial = top_k
-        
-        logger.info(f"RAG initial retrieval k = {k_initial}")
+        # Smart scaling: Use higher multiplier for large top_k to feed diversity stage
+        # - Small queries (≤50): 1.5x multiplier (efficient)
+        # - Large queries (>50): 2.0x multiplier (better diversity pool)
+        if top_k <= 50:
+            k_initial = min(int(top_k * 1.5), 100)
+        else:
+            # Large top_k: need 2x buffer since diversity stage expects k*2 candidates
+            k_initial = min(int(top_k * 2.0), 250)
+
+        # Safety: ensure k_initial >= top_k
+        if k_initial < top_k:
+            k_initial = top_k
+
+        logger.info(f"RAG initial retrieval k = {k_initial} (top_k={top_k})")
 
         semantic_results = retrieve_semantic(retrieval_query, db, k_initial, metadata_filter)
         keyword_results = retrieve_keyword(retrieval_query, db, 'rag', db_name, k_initial, metadata_filter)
@@ -161,8 +170,16 @@ def query_lightrag(
         db = _get_db_or_raise('lightrag', db_name)
 
         # 3. Retrieve
-        k_initial = min(int(top_k * 1.5), 100)
-        logger.info(f"LightRAG initial retrieval k = {k_initial}")
+        # Smart scaling for LightRAG (same logic as RAG)
+        if top_k <= 50:
+            k_initial = min(int(top_k * 1.5), 100)
+        else:
+            k_initial = min(int(top_k * 2.0), 250)
+
+        if k_initial < top_k:
+            k_initial = top_k
+
+        logger.info(f"LightRAG initial retrieval k = {k_initial} (top_k={top_k})")
         
         semantic_results = retrieve_semantic(retrieval_query, db, k_initial, metadata_filter)
 
