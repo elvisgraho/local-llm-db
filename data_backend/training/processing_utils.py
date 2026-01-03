@@ -65,21 +65,23 @@ def split_document(
     if "<<IMAGE_OCR_DATA:" in doc.page_content:
         # This replaces the Base64 tag with the description returned by _process_image_tag
         doc.page_content = RE_OCR_TAG.sub(process_image_tag, doc.page_content)
-    
-    # 1. Generate Metadata (LLM or Manual Tags)
-    if add_tags_llm:
-        try:
-            # This now handles Manual Tags + LLM internally
-            doc = add_metadata_to_document(doc, add_tags_llm=add_tags_llm)
-            
-            if doc is None:
-                return [] # Dropped as non-technical/junk
-            
-        except Exception as e:
-            source = doc.metadata.get('source', 'unknown')
-            logger.error(f"❌ CRITICAL: Tagging failed for '{source}'. Error: {e}")
-            # Continue even if tagging fails, we just lose rich metadata
-            pass
+
+    # 1. Generate Metadata (Always extract manual tags, optionally add LLM tags)
+    try:
+        # This now ALWAYS extracts manual tags from content, even if add_tags_llm=False
+        # It will also run LLM extraction if add_tags_llm=True
+        processed_doc = add_metadata_to_document(doc, add_tags_llm=add_tags_llm)
+
+        if processed_doc is None:
+            return [] # Dropped as non-technical/junk
+
+        doc = processed_doc
+
+    except Exception as e:
+        source = doc.metadata.get('source', 'unknown')
+        logger.error(f"❌ CRITICAL: Tagging failed for '{source}'. Error: {e}")
+        # Continue even if tagging fails, we just lose rich metadata
+        pass
 
     # 2. Configure Splitter
     text_splitter = RecursiveCharacterTextSplitter(
@@ -286,7 +288,7 @@ def calculate_context_ceiling(documents: List[Document], system_prompt_len: int 
         # Calculate tokens once per doc
         # Tuple: (token_count, document)
         doc_data = [
-            (len(encoding.encode(d.page_content)), d) 
+            (len(encoding.encode(d.page_content, disallowed_special=())), d) 
             for d in documents
         ]
         
@@ -296,7 +298,7 @@ def calculate_context_ceiling(documents: List[Document], system_prompt_len: int 
         peak_tokens = doc_data[0][0]
         
         # Calculate system tokens once
-        sys_tokens = len(encoding.encode("a" * system_prompt_len))
+        sys_tokens = len(encoding.encode("a" * system_prompt_len, disallowed_special=()))
     else:
         # Fallback
         sorted_docs = sorted(documents, key=lambda d: len(d.page_content), reverse=True)

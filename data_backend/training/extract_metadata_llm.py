@@ -1,6 +1,7 @@
 import re
 import sys
 import logging
+import json
 from typing import Dict, Any, Optional, Tuple
 
 # --- Modern LangChain & Pydantic Imports ---
@@ -28,18 +29,54 @@ logger = logging.getLogger(__name__)
 MANUAL_TAGS_PATTERN = re.compile(r'^Tags:\s*(.+)$', re.MULTILINE | re.IGNORECASE)
 MITRE_ID_PATTERN = re.compile(r'^T\d{4}(\.\d{3})?$')
 
-def _extract_tags_from_content(content: str) -> Tuple[str | Any, str]:
-    """Finds 'Tags: ...', parses, and STRIPS it from content."""
+def _extract_tags_from_content(content: str) -> Tuple[Dict[str, Any] | None, str]:
+    """
+    Finds 'Tags: ...' in the first 5 lines, parses (handles both JSON and simple formats),
+    and STRIPS it from content.
+
+    Returns: (parsed_metadata_dict, cleaned_content)
+    """
+    # Search for Tags in the full content (regex searches first 5 lines via MULTILINE mode)
     match = MANUAL_TAGS_PATTERN.search(content)
-    if match:
-        tag_str = match.group(1)
-        try:
-            # Remove the line from content
-            start, end = match.span()
-            new_content = content[:start] + content[end:].lstrip()
-            return tag_str, new_content
-        except Exception:
-            pass
+    if not match:
+        return None, content
+
+    # Check if match is within first 5 lines (safety check)
+    match_start_line = content[:match.start()].count('\n')
+    if match_start_line >= 5:
+        return None, content
+
+    tag_str = match.group(1).strip()
+    try:
+        # Try to parse as JSON first
+        if tag_str.startswith('{'):
+            parsed_tags = json.loads(tag_str)
+            if isinstance(parsed_tags, dict):
+                # Validate and normalize list fields (ensure they're lists not strings)
+                if 'mitre_tactics' in parsed_tags and isinstance(parsed_tags['mitre_tactics'], str):
+                    parsed_tags['mitre_tactics'] = [parsed_tags['mitre_tactics']]
+                if 'code_languages' in parsed_tags and isinstance(parsed_tags['code_languages'], str):
+                    parsed_tags['code_languages'] = [parsed_tags['code_languages']]
+                if 'mitre_technique_primary_ids' in parsed_tags and isinstance(parsed_tags['mitre_technique_primary_ids'], str):
+                    parsed_tags['mitre_technique_primary_ids'] = [parsed_tags['mitre_technique_primary_ids']]
+
+                # Remove the Tags line from content using correct indices
+                start, end = match.span()
+                # Also strip any trailing newline after the Tags line
+                new_content = content[:start] + content[end:].lstrip('\n')
+                logger.info(f"✓ Extracted manual tags: {list(parsed_tags.keys())}")
+                return parsed_tags, new_content
+        else:
+            # Handle simple comma-separated tags (legacy format)
+            # Not currently used but kept for backwards compatibility
+            logger.debug(f"Found simple tags: {tag_str}")
+            return {"tags_legacy": tag_str}, content
+
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse Tags JSON: {e}. Tag string: {tag_str[:100]}")
+    except Exception as e:
+        logger.warning(f"Error extracting tags: {e}")
+
     return None, content
 
 # --- 6. Main Exported Function ---
@@ -49,10 +86,10 @@ def add_metadata_to_document(doc: Document, add_tags_llm: bool) -> Optional[Docu
     Hybrid Strategy:
     1. Extract Manual Tags (if present) & strip header.
     2. If LLM requested, run extraction.
-    3. Merge results.
+    3. Merge results (Manual tags take priority over LLM tags).
     """
-    
-    # 1. Manual Extraction
+
+    # 1. Manual Extraction (always try to extract, regardless of add_tags_llm)
     manual_meta, new_content = _extract_tags_from_content(doc.page_content)
     if new_content != doc.page_content:
         doc.page_content = new_content
@@ -64,19 +101,19 @@ def add_metadata_to_document(doc: Document, add_tags_llm: bool) -> Optional[Docu
             logger.debug(f"DEBUG: Triggering LLM extraction for {doc.metadata.get('source')}...")
             prompt = get_metadata_extraction_prompt()
             parser = PydanticOutputParser(pydantic_object=DocumentMetadata)
-            
+
             prompt_val = prompt.invoke({
                 "text": extract_text_parts(doc.page_content),
                 "format_instructions": parser.get_format_instructions()
             })
-            
+
             raw = get_llm_response(prompt_val.to_string())
             parsed_json = clean_and_parse_json(raw)
 
             if parsed_json:
                 validated = DocumentMetadata.model_validate(parsed_json)
                 llm_meta = validated.model_dump(exclude_none=True)
-                
+
                 is_valid = llm_meta.pop('is_technical_content', True)
                 if is_valid is False:
                     chapter = doc.metadata.get('chapter_title', '')
@@ -84,18 +121,29 @@ def add_metadata_to_document(doc: Document, add_tags_llm: bool) -> Optional[Docu
                     logger.info(f"🚫 Skipping Chunk: {src} {f'[{chapter}]' if chapter else ''} (Flagged as non-technical)")
                     return None
 
-                
+
         except Exception as e:
             logger.error(f"LLM Extraction failed for {doc.metadata.get('source')}: {e}")
 
     # 3. Merge Strategy (Manual > LLM)
+    # Start with LLM metadata, then override with manual tags (manual takes priority)
     final_meta = llm_meta.copy()
+    if manual_meta:
+        final_meta.update(manual_meta)
+        source = doc.metadata.get('source', 'unknown')
+        logger.info(f"📋 Manual tags applied to {source}: {list(manual_meta.keys())}")
 
     # 4. Update Document
     if final_meta:
         doc.metadata.update(final_meta)
-        logger.debug(f"DEBUG: Successfully tagged {doc.metadata.get('source')}")
-        
+        source = doc.metadata.get('source', 'unknown')
+        tag_summary = []
+        if manual_meta:
+            tag_summary.append(f"{len(manual_meta)} manual")
+        if llm_meta:
+            tag_summary.append(f"{len(llm_meta)} LLM")
+        logger.debug(f"✓ Tagged {source} with {', '.join(tag_summary)} metadata fields")
+
     return doc
 
 def process_image_tag(match: re.Match) -> str:
