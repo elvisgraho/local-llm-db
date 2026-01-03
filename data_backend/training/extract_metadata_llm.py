@@ -11,9 +11,13 @@ from langchain_core.documents import Document
 from langchain_core.output_parsers import PydanticOutputParser
 
 # --- Local Imports ---
-# Ensure query.global_vars exists in your project structure
 from training.templates import OCR_SYSTEM_PROMPT, DocumentMetadata, get_metadata_extraction_prompt
-from query.global_vars import LOCAL_MAIN_MODEL, LOCAL_LLM_API_URL, LOCAL_OCR_MODEL
+from common.config import config
+
+# For backward compatibility
+LOCAL_MAIN_MODEL = config.llm.model_name
+LOCAL_LLM_API_URL = config.llm.api_url
+LOCAL_OCR_MODEL = config.llm.ocr_model_name
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')

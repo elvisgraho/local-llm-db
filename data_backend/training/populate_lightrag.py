@@ -23,7 +23,7 @@ if str(project_root) not in sys.path:
 from langchain_core.documents import Document
 
 # --- Internal Imports ---
-from query.database_paths import get_db_paths
+from common import get_db_paths
 from training.load_documents import load_documents
 from training.processing_utils import (
     manage_db_configuration, 
@@ -86,6 +86,7 @@ def main():
     parser.add_argument("--reset", action="store_true", help="Delete existing DB and start fresh.")
     parser.add_argument("--add-tags", action="store_true", help="Use LLM to enrich metadata (Entities/Summaries).")
     parser.add_argument("--resume", action="store_true", help="Skip already processed files.")
+    parser.add_argument("--ocr", action="store_true", default=True, help="Enable OCR for extracting text from images in PDFs (default: True).")
     parser.add_argument("--chunk_size", type=int, default=1000, help="Chars per chunk.")
     parser.add_argument("--chunk_overlap", type=int, default=200, help="Overlap chars.")
 
@@ -127,9 +128,9 @@ def main():
         # 2. Load Documents
         ignore_registry = (not args.resume) or args.reset
         loaded_docs = load_documents(
-            db_dir=db_dir, 
+            db_dir=db_dir,
             ignore_processed=ignore_registry,
-            is_ocr_enabled=True
+            is_ocr_enabled=args.ocr
         )
         
         total_docs = len(loaded_docs)
@@ -142,9 +143,6 @@ def main():
         # 3. Process & Chunk Documents
         all_processed_chunks = []
 
-        print(loaded_docs)
-        exit(0)
-        
         with tqdm(total=total_docs, desc="Processing Docs", unit="doc") as pbar:
             for doc in loaded_docs:
                 chunks = process_document(

@@ -2,11 +2,35 @@ import streamlit as st
 import time
 import re
 import json
-import ui_logic as logic
-from query.database_paths import PROJECT_ROOT
+from pathlib import Path
+from common import (
+    PROJECT_ROOT,
+    LOGS_DIR,
+    get_file_inventory,
+    is_process_alive,
+    start_script_background,
+    read_log_file,
+    kill_child_processes,
+    JobState
+)
+
+# Local constants
+TRAINING_DIR = Path(__file__).resolve().parent / "training"
+STATE_FILE = LOGS_DIR / "active_job.json"
+
+# Job state helpers
+def save_job_state(pid: int, start_time: float, db_name: str, flavor: str) -> None:
+    JobState(STATE_FILE).save(pid, start_time, db_name, flavor)
+
+def load_job_state():
+    return JobState(STATE_FILE).load()
+
+def clear_job_state() -> None:
+    JobState(STATE_FILE).clear()
+
 
 def render_build_tab(env_vars):
-    LOG_FILE = PROJECT_ROOT / "volumes" / "last_run.log"
+    LOG_FILE = LOGS_DIR / "last_run.log"
 
     # --- 1. State Initialization ---
     if "job_status" not in st.session_state:
@@ -22,9 +46,9 @@ def render_build_tab(env_vars):
 
     # Recover active job if browser was refreshed
     if st.session_state.job_status == "idle":
-        persisted = logic.load_job_state()
+        persisted = load_job_state()
         if persisted:
-            if logic.is_process_alive(persisted["pid"]):
+            if is_process_alive(persisted["pid"]):
                 st.session_state.job_status = "running"
                 st.session_state.worker_pid = persisted["pid"]
                 st.session_state.start_time = persisted["start_time"]
@@ -33,12 +57,12 @@ def render_build_tab(env_vars):
                 time.sleep(0.5)
                 st.rerun()
             else:
-                logic.clear_job_state()
+                clear_job_state()
 
     is_running = (st.session_state.job_status == "running")
-    
+
     # Check if files exist (Lightweight check)
-    _, total_files = logic.get_file_inventory(limit=1)
+    _, total_files = get_file_inventory(limit=1)
     if total_files == 0:
         total_files = 1 # Prevent division by zero logic if used later
 
@@ -80,11 +104,20 @@ def render_build_tab(env_vars):
         if "build_chunk_overlap" not in st.session_state:
             st.session_state.build_chunk_overlap = derived_chunk_overlap
 
-        # D. Action Checkboxes (Reset / Resume / Tags)
-        c_opt1, c_opt2, c_opt3 = st.columns(3)
+        # D. Action Checkboxes (Reset / Resume / Tags / OCR)
+        c_opt1, c_opt2, c_opt3, c_opt4 = st.columns(4)
         do_reset = c_opt1.checkbox("Full Reset", help="Delete DB and rebuild from scratch", disabled=is_running)
         do_resume = c_opt2.checkbox("Resume", value=True, help="Process only new files", disabled=is_running)
         do_tags = c_opt3.checkbox("AI Auto-Tagging", help="Use LLM to generate metadata (Slower)", disabled=is_running)
+
+        # OCR Toggle - default to True for LightRAG, False for Standard RAG
+        default_ocr = (rag_flavor == "LightRAG")
+        do_ocr = c_opt4.checkbox(
+            "Enable OCR",
+            value=default_ocr,
+            help="Extract text from images in PDFs using vision model",
+            disabled=is_running
+        )
 
     with c_b1:
         if "rag_flavor_selector" not in st.session_state:
@@ -99,21 +132,39 @@ def render_build_tab(env_vars):
         
         # Chunking Inputs (Bound to session state calculated above)
         chunk_size = st.number_input(
-            "Chunk Size", 100, 4000, 
+            "Chunk Size", 100, 4000,
             key="build_chunk_size",
             disabled=is_running
         )
         chunk_overlap = st.number_input(
-            "Overlap", 0, 1000, 
+            "Overlap", 0, 1000,
             key="build_chunk_overlap",
             disabled=is_running
         )
+
+        # Show current OCR model if enabled
+        if do_ocr:
+            st.caption(f"OCR Model: {st.session_state.get('ocr_model', 'gliese-ocr-7b-post2.0-final-i1')}")
+            st.caption("💡 Configure in sidebar settings")
 
     st.divider()
 
     # --- 3. Action Buttons (Idle State) ---
     if st.session_state.job_status == "idle":
-        if st.button("Launch Population", type="primary", disabled=(not db_name)):
+        # Validation
+        validation_errors = []
+        if not db_name:
+            validation_errors.append("Database name is required")
+        if not db_name.replace('_', '').replace('-', '').isalnum():
+            validation_errors.append("Database name must contain only letters, numbers, hyphens, and underscores")
+        if total_files <= 1:
+            validation_errors.append("No files found in staging area. Upload documents first.")
+
+        if validation_errors:
+            for error in validation_errors:
+                st.warning(f"⚠️ {error}")
+
+        if st.button("Launch Population", type="primary", disabled=(len(validation_errors) > 0)):
             script_map = {
                 "Standard RAG": "populate_rag.py",
                 "LightRAG": "populate_lightrag.py"
@@ -131,11 +182,13 @@ def render_build_tab(env_vars):
             if do_reset: args.append("--reset")
             if do_resume and not do_reset: args.append("--resume")
             if do_tags: args.append("--add-tags")
+            if do_ocr: args.append("--ocr")
 
             # Start Process
-            pid = logic.start_script_background(script, args, env_vars, LOG_FILE)
+            script_path = TRAINING_DIR / script
+            pid = start_script_background(script_path, args, env_vars, LOG_FILE)
             st.session_state.start_time = time.time()
-            logic.save_job_state(pid, st.session_state.start_time, db_name, rag_flavor)
+            save_job_state(pid, st.session_state.start_time, db_name, rag_flavor)
             
             st.session_state.worker_pid = pid
             st.session_state.job_status = "running"
@@ -146,7 +199,7 @@ def render_build_tab(env_vars):
         pid = st.session_state.worker_pid
         
         # Read logs without regex parsing (Fix for 8k files lag)
-        logs = logic.read_log_file(LOG_FILE, num_lines=1000)
+        logs = read_log_file(LOG_FILE, num_lines=1000)
         
         c_status, c_res = st.columns([3, 1])
         with c_status:
@@ -156,8 +209,8 @@ def render_build_tab(env_vars):
                 
         with c_res:
             if st.button("STOP JOB", type="primary"):
-                logic.kill_child_processes(pid)
-                logic.clear_job_state()
+                kill_child_processes(pid)
+                clear_job_state()
                 st.session_state.job_status = "done"
                 st.rerun()
 
@@ -165,8 +218,8 @@ def render_build_tab(env_vars):
         st.code(logs[-2000:], language="bash")
 
         # Check process health
-        if not logic.is_process_alive(pid):
-            logic.clear_job_state()
+        if not is_process_alive(pid):
+            clear_job_state()
             st.session_state.job_status = "done"
             st.rerun()
         else:
@@ -175,8 +228,8 @@ def render_build_tab(env_vars):
 
     # --- 5. Done State ---
     elif st.session_state.job_status == "done":
-        logic.clear_job_state()
-        logs = logic.read_log_file(LOG_FILE, num_lines=2000)
+        clear_job_state()
+        logs = read_log_file(LOG_FILE, num_lines=2000)
         
         # Simple Error Detection
         errors = [line for line in logs.splitlines() if "Error" in line or "Traceback" in line]

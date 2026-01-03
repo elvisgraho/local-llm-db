@@ -13,10 +13,10 @@ from langchain_core.documents import Document
 
 # --- Local Imports ---
 try:
-    from query.database_paths import RAW_FILES_DIR
+    from common import RAW_FILES_DIR
 except ImportError:
     # Fallback for standalone testing
-    RAW_FILES_DIR = Path(__file__).resolve().parent.parent / "data"
+    RAW_FILES_DIR = Path(__file__).resolve().parent.parent / "volumes" / "raw_files"
 
 logger = logging.getLogger(__name__)
 
