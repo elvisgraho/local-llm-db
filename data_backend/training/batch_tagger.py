@@ -7,22 +7,22 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List
 from langchain_core.documents import Document
+from pydantic import Field
+from langchain_core.output_parsers import PydanticOutputParser
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from training.processing_utils import get_unique_path
-from training.load_documents import calculate_context_ceiling, load_documents
+from training.templates import DocumentMetadata
+from training.processing_utils import calculate_context_ceiling, get_unique_path
+from training.load_documents import load_documents
 from training.history_manager import ProcessingHistory
 from training.extract_metadata_llm import (
     get_llm_response,
     clean_and_parse_json,
     extract_text_parts, 
-    get_metadata_extraction_prompt,
-    PydanticOutputParser,
-    DocumentMetadata,
-    Field
+    get_metadata_extraction_prompt
 )
 
 # Configure Logging

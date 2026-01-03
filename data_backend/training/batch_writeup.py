@@ -14,8 +14,8 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from training.templates import LLM_WRITEUP_SYSTEM_PROMPT, LLM_WRITEUP_USER_TEMPLATE
-from training.processing_utils import get_unique_path
-from training.load_documents import calculate_context_ceiling, load_documents
+from training.processing_utils import calculate_context_ceiling, get_unique_path
+from training.load_documents import load_documents
 from training.history_manager import ProcessingHistory
 from training.extract_metadata_llm import (
     get_llm_response
@@ -142,15 +142,21 @@ def process_documents_sequentially(input_dir: Path, output_dir: Path):
 
             # LLM Inference
             writeup_body = generate_writeup(content)
-
-            if not writeup_body or len(writeup_body) < 100:
-                stats["ERROR"] += 1
-                print(f"\nSmall Response: '{writeup_body}' for {source_path}.")
-                continue
-
-            # File Persistence
             safe_name = clean_filename(source_path.stem)
             final_path = get_unique_path(output_dir, f"{safe_name}.md")
+
+            if not writeup_body or len(writeup_body) < 100:
+                if "DELETE" in writeup_body.upper():
+                    history.record_processing(source_path, output_file=str(final_path))
+                    history.save()
+                    logger.info(f"\nJUNK: {source_path}.")
+                    continue
+                else:
+                    stats["ERROR"] += 1
+                    logger.info(f"\nSmall Response: '{writeup_body}' for {source_path}.")
+                    continue
+
+            # File Persistence            
             final_path.write_text(writeup_body, encoding="utf-8")
 
             # Update History (Immediate synchronization)

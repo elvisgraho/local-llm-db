@@ -171,5 +171,33 @@ When the content meets following criteria, only return "Discard" in your respons
 - **CVE without POC**: Description of a vulnerability where explotation steps are not documented or inferred.
 """
 
-LLM_WRITEUP_USER_TEMPLATE = """Input Content (Analyze below):
-{content}"""
+LLM_WRITEUP_USER_TEMPLATE = """
+You are a cybersecurity expert tasked with extracting **technical intelligence** from a raw transcript or document.
+
+Instructions:
+- Produce a **detailed and accurate technical write-up** based on the provided text. The write-up must be highly educational, so enhance its content to provide more value when necessary.
+- Where the transcript is unclear or has transcription errors, use domain knowledge and contextual clues to **infer the intended technical meaning**.
+- Include **step-by-step breakdowns** of any exploits, attack chains, or technical processes described.
+- Ignore speaker names, anecdotes, or opinions. Strip away all irrelevant filler.
+- Focus on what problem the technical writeup is trying to solve and put it in the real world context.
+- **Do NOT include** ethical commentary, disclaimers, copyright, or speaker attribution.
+- Use **clear section headers**
+- Be smart about extracting all actionable and technical details, even if some reconstruction is required.
+- Do not include section of Indicators of Compromise, the report is mainly educational rather than specific
+
+### Criteria to Process (Technical Value)
+- Contains **actionable** content: code snippets, exploit payloads, command-line usage.
+- Explains specific vulnerabilities (CVEs), architectural internals, or bypass techniques.
+- Technical manuals, whitepapers, or detailed tutorials.
+
+### CRITERIA TO 'DELETE' (Noise/Junk)
+- **Marketing**: Sales brochures, product advertisements without technical depth.
+- **Fluff**: High-level generic summaries, "Importance of Security" essays.
+- **Junk**: Unreadable OCR, corrupted text, or placeholder data.
+- **CVE without POC**: Description of a vulnerability where explotation steps are not documented or inferred.
+
+If criteria delete is met, just return the 'DELETE' string.
+
+Content:
+{content}
+"""

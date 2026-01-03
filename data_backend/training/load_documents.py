@@ -2,7 +2,6 @@ import logging
 import json
 import re
 import fitz  # PyMuPDF
-import tiktoken
 import base64
 from tqdm import tqdm
 from pathlib import Path
@@ -488,50 +487,3 @@ def load_documents(
     logger.info(f"Successfully loaded {len(all_documents)} document chunks from {len(sources)} files.")
     
     return all_documents
-
-def calculate_context_ceiling(documents: List[Document], system_prompt_len: int = 2000) -> List[Document]:
-    if not documents:
-        return []
-
-    encoding = None
-    try:
-        encoding = tiktoken.get_encoding("cl100k_base")
-    except Exception:
-        pass
-
-    # Sort logic optimized
-    if encoding:
-        # Calculate tokens once per doc
-        # Tuple: (token_count, document)
-        doc_data = [
-            (len(encoding.encode(d.page_content)), d) 
-            for d in documents
-        ]
-        
-        # Sort descending by token count (index 0)
-        doc_data.sort(key=lambda x: x[0], reverse=True)
-        sorted_docs = [x[1] for x in doc_data]
-        peak_tokens = doc_data[0][0]
-        
-        # Calculate system tokens once
-        sys_tokens = len(encoding.encode("a" * system_prompt_len))
-    else:
-        # Fallback
-        sorted_docs = sorted(documents, key=lambda d: len(d.page_content), reverse=True)
-        peak_tokens = int(len(sorted_docs[0].page_content) / 2.3)
-        sys_tokens = int(system_prompt_len / 2.3)
-
-    # 2560 buffer + 1.15x margin for KV cache overhead
-    raw_ceiling = int((peak_tokens + sys_tokens + 2560) * 1.15)
-    
-    # Bitwise optimization for power of 2: 1 << (x-1).bit_length() finds next power of 2
-    optimized_ceiling = 1 << (raw_ceiling - 1).bit_length()
-
-    # Safety check if source metadata is missing
-    heaviest_source = sorted_docs[0].metadata.get('source', 'unknown')
-
-    logger.info(f"Heaviest Source: {heaviest_source}")
-    logger.info(f"Peak Tokens: {peak_tokens}")
-    logger.info(f"Allocated Context Ceiling: {optimized_ceiling}")
-    
-    return sorted_docs

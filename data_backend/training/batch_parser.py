@@ -12,8 +12,9 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from training.processing_utils import calculate_context_ceiling
 from training.templates import RedTeamFilter, get_filter_prompt
-from training.load_documents import calculate_context_ceiling, load_documents
+from training.load_documents import load_documents
 from training.history_manager import ProcessingHistory
 from training.extract_metadata_llm import (
     get_llm_response,
