@@ -130,8 +130,14 @@ def query_rag(
         
         initial_docs_scores = sorted(list(combined_dict.values()), key=lambda x: x[1], reverse=True)
 
-        # 5. Rerank & Select
-        reranked_docs_scores = _rerank_results(retrieval_query, initial_docs_scores, top_k)
+        # 5. Rerank & Select (with chunk expansion)
+        reranked_docs_scores = _rerank_results(
+            retrieval_query,
+            initial_docs_scores,
+            top_k,
+            rag_type='rag',
+            db_name=db_name
+        )
         final_docs, sources, estimated_tokens = select_docs_for_context(reranked_docs_scores, tokens)
 
         # 6. Generate
@@ -198,8 +204,14 @@ def query_lightrag(
                 "estimated_context_tokens": 0
             }
 
-        # 5. Rerank & Select
-        reranked_docs_scores = _rerank_results(retrieval_query, threshold_filtered_docs, top_k)
+        # 5. Rerank & Select (with chunk expansion)
+        reranked_docs_scores = _rerank_results(
+            retrieval_query,
+            threshold_filtered_docs,
+            top_k,
+            rag_type='lightrag',
+            db_name=db_name
+        )
         final_docs, sources, estimated_tokens = select_docs_for_context(reranked_docs_scores, tokens)
 
         # 6. Generate

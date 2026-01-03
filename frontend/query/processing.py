@@ -41,19 +41,169 @@ DOC_SEPARATOR = "\n\n---\n\n"
 MIN_DOC_LENGTH = 50           # Minimum characters for a chunk to be considered useful
 HEADER_ONLY_THRESHOLD = 150   # Max length for a chunk starting with '#' to be considered a "header orphan"
 
+def expand_chunks_with_context(
+    ranked_docs: List[Tuple[Document, float]],
+    rag_type: str,
+    db_name: str,
+    expansion_window: int = 1,
+    min_score_threshold: float = 0.5,
+    code_only: bool = True
+) -> List[Tuple[Document, float]]:
+    """
+    Expand high-scoring chunks by retrieving adjacent chunks from the same document.
+
+    This provides complete context for code-heavy content by fetching chunks before/after
+    the matched chunk from the same source file.
+
+    Args:
+        ranked_docs: List of (Document, score) tuples already reranked
+        rag_type: 'rag' or 'lightrag' (for database lookup)
+        db_name: Database name (for database lookup)
+        expansion_window: How many chunks before/after to retrieve (1 = ±1, 2 = ±2)
+        min_score_threshold: Only expand chunks scoring above this threshold
+        code_only: If True, only expand chunks with code_languages metadata
+
+    Returns:
+        Expanded list of (Document, score) with adjacent chunks inserted
+
+    Research basis:
+    - Parent Document Retrieval (LangChain pattern)
+    - Contextual Chunk Expansion for code understanding
+    """
+    if not ranked_docs or expansion_window <= 0:
+        return ranked_docs
+
+    # Get ChromaDB instance
+    db = data_service.get_chroma_db(rag_type, db_name)
+    if not db:
+        logger.warning(f"ChromaDB not available for chunk expansion ({rag_type}/{db_name})")
+        return ranked_docs
+
+    expanded_results = []
+    seen_chunk_ids = set()  # Track chunks we've already included
+    expansion_count = 0
+
+    for doc, score in ranked_docs:
+        # Add the original chunk
+        chunk_id = id(doc)  # Use object id as unique identifier
+        if chunk_id in seen_chunk_ids:
+            continue
+
+        expanded_results.append((doc, score))
+        seen_chunk_ids.add(chunk_id)
+
+        # Check if this chunk qualifies for expansion
+        metadata = doc.metadata
+
+        # Skip if score too low
+        if score < min_score_threshold:
+            continue
+
+        # Skip if code_only=True and no code_languages metadata
+        if code_only:
+            code_langs = metadata.get('code_languages', '')
+            if not code_langs or (isinstance(code_langs, str) and not code_langs.strip()):
+                continue
+
+        # Extract chunk position info
+        chunk_index = metadata.get('chunk_index')
+        total_chunks = metadata.get('total_chunks')
+        source = metadata.get('source')
+
+        if chunk_index is None or total_chunks is None or not source:
+            continue  # Missing required metadata for expansion
+
+        # Calculate adjacent chunk indices to retrieve
+        adjacent_indices = []
+        for offset in range(-expansion_window, expansion_window + 1):
+            if offset == 0:
+                continue  # Skip current chunk (already added)
+
+            target_index = chunk_index + offset
+
+            # Boundary checks
+            if 0 <= target_index < total_chunks:
+                adjacent_indices.append(target_index)
+
+        if not adjacent_indices:
+            continue  # No adjacent chunks to retrieve
+
+        # Query ChromaDB for adjacent chunks
+        try:
+            # Build metadata filter for adjacent chunks from same source
+            for target_index in sorted(adjacent_indices):
+                # Query with metadata filter
+                adjacent_results = db.get(
+                    where={
+                        "$and": [
+                            {"source": {"$eq": source}},
+                            {"chunk_index": {"$eq": target_index}}
+                        ]
+                    },
+                    include=["documents", "metadatas"]
+                )
+
+                if not adjacent_results or not adjacent_results.get("ids"):
+                    continue
+
+                # Extract first matching chunk
+                adj_ids = adjacent_results["ids"]
+                adj_docs = adjacent_results.get("documents", [])
+                adj_metas = adjacent_results.get("metadatas", [])
+
+                if not adj_docs:
+                    continue
+
+                # Create Document object
+                adj_doc = Document(
+                    page_content=adj_docs[0],
+                    metadata=adj_metas[0] if adj_metas else {}
+                )
+
+                adj_chunk_id = id(adj_doc)
+                if adj_chunk_id in seen_chunk_ids:
+                    continue
+
+                # Assign inherited score (80% of parent chunk's score)
+                inherited_score = score * 0.8
+
+                # Insert adjacent chunk near parent (ordered by chunk_index)
+                if target_index < chunk_index:
+                    # Insert before current chunk (we'll need to reorder later)
+                    expanded_results.insert(-1, (adj_doc, inherited_score))
+                else:
+                    # Insert after current chunk
+                    expanded_results.append((adj_doc, inherited_score))
+
+                seen_chunk_ids.add(adj_chunk_id)
+                expansion_count += 1
+
+        except Exception as e:
+            logger.debug(f"Error retrieving adjacent chunks for {source} chunk {chunk_index}: {e}")
+            continue
+
+    if expansion_count > 0:
+        logger.info(f"Chunk expansion: Added {expansion_count} adjacent chunks (window=±{expansion_window})")
+
+    return expanded_results
+
+
 def _rerank_results(
     query_text: str,
     results: List[Tuple[Document, float]],
     k: int,
-    use_metadata_boost: Optional[bool] = None
+    use_metadata_boost: Optional[bool] = None,
+    rag_type: str = 'rag',
+    db_name: str = 'default'
 ) -> List[Tuple[Document, float]]:
     """
-    Reranks retrieval results using CrossEncoder + metadata awareness.
+    Reranks retrieval results using CrossEncoder + metadata awareness + chunk expansion.
 
-    Three-stage process:
+    Four-stage process:
     1. CrossEncoder semantic reranking (if available)
     2. Metadata-aware boosting (MITRE tactics, code languages, topics)
-    3. Diversity-based selection (MMR with metadata)
+    3. Contextual chunk expansion (retrieve adjacent chunks for code-heavy content)
+    4. Diversity-based selection (MMR with metadata)
 
     Includes robust error handling and input validation.
     """
@@ -123,13 +273,28 @@ def _rerank_results(
             final_results = rerank_with_metadata_awareness(
                 query_text,
                 crossencoder_results,
-                k=k * 2,  # Get 2x for diversity selection
+                k=k * 2,  # Get 2x for diversity selection + chunk expansion
                 alpha=config.rag.metadata_boost_alpha,
                 query_intent=query_intent
             )
 
-            # Stage 3: Diversity Selection
-            logger.info("Stage 3: Diversity-based selection.")
+            # Stage 3: Contextual Chunk Expansion (for code-heavy content)
+            if config.rag.enable_chunk_expansion:
+                try:
+                    logger.info("Stage 3: Contextual chunk expansion.")
+                    final_results = expand_chunks_with_context(
+                        final_results,
+                        rag_type=rag_type,
+                        db_name=db_name,
+                        expansion_window=config.rag.chunk_expansion_window,
+                        min_score_threshold=config.rag.chunk_expansion_min_score,
+                        code_only=config.rag.chunk_expansion_for_code_only
+                    )
+                except Exception as e:
+                    logger.error(f"Error during chunk expansion: {e}. Skipping expansion.", exc_info=True)
+
+            # Stage 4: Diversity Selection
+            logger.info("Stage 4: Diversity-based selection.")
             final_results = select_diverse_results(
                 final_results,
                 k=k,

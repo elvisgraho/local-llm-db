@@ -33,6 +33,12 @@ class RAGConfig:
     metadata_boost_alpha: float = 0.7  # 70% original score, 30% metadata boost
     diversity_weight: float = 0.25  # Weight for diversity in result selection
 
+    # Contextual chunk expansion features
+    enable_chunk_expansion: bool = True  # Retrieve adjacent chunks for code-heavy content
+    chunk_expansion_window: int = 1  # How many chunks before/after to retrieve (1 = ±1)
+    chunk_expansion_min_score: float = 0.5  # Only expand chunks scoring above this threshold
+    chunk_expansion_for_code_only: bool = True  # Only expand chunks with code_languages metadata
+
 
 @dataclass
 class SystemConfig:
@@ -71,7 +77,11 @@ class SystemConfig:
                 use_metadata_boost=os.getenv('RAG_USE_METADATA_BOOST', 'true').lower() == 'true',
                 use_metadata_augmentation=os.getenv('RAG_USE_METADATA_AUGMENTATION', 'true').lower() == 'true',
                 metadata_boost_alpha=float(os.getenv('RAG_METADATA_BOOST_ALPHA', RAGConfig.metadata_boost_alpha)),
-                diversity_weight=float(os.getenv('RAG_DIVERSITY_WEIGHT', RAGConfig.diversity_weight))
+                diversity_weight=float(os.getenv('RAG_DIVERSITY_WEIGHT', RAGConfig.diversity_weight)),
+                enable_chunk_expansion=os.getenv('RAG_ENABLE_CHUNK_EXPANSION', 'true').lower() == 'true',
+                chunk_expansion_window=int(os.getenv('RAG_CHUNK_EXPANSION_WINDOW', RAGConfig.chunk_expansion_window)),
+                chunk_expansion_min_score=float(os.getenv('RAG_CHUNK_EXPANSION_MIN_SCORE', RAGConfig.chunk_expansion_min_score)),
+                chunk_expansion_for_code_only=os.getenv('RAG_CHUNK_EXPANSION_CODE_ONLY', 'true').lower() == 'true'
             )
         )
 

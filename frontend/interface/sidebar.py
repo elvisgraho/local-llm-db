@@ -320,10 +320,46 @@ def _render_rag_params(is_direct):
         # The 'key' argument automatically binds to st.session_state["rag_top_k"]
         top_k = st.slider("Top-K (Chunks)", 1, 100, 10, disabled=is_direct, key="rag_top_k")
         history_limit = st.slider("Chat History (Msgs)", 0, 30, 6, key="rag_history_limit")
-        
+
+        # --- Chunk Expansion Settings ---
+        st.markdown("---")
+        st.markdown("**🔗 Contextual Expansion**")
+
+        enable_expansion = st.toggle(
+            "Enable Chunk Expansion",
+            value=True,
+            key="rag_enable_chunk_expansion",
+            disabled=is_direct,
+            help="Retrieve adjacent chunks for code-heavy content to provide complete context (e.g., vulnerable code + fix together)"
+        )
+
+        if enable_expansion:
+            expansion_window = st.slider(
+                "Context Window",
+                min_value=1,
+                max_value=5,
+                value=1,
+                disabled=is_direct or not enable_expansion,
+                key="rag_chunk_expansion_window",
+                help="How many chunks before/after to retrieve (1 = ±1, 2 = ±2, 3 = ±3)"
+            )
+            code_only = st.toggle(
+                "Code Only",
+                value=True,
+                disabled=is_direct or not enable_expansion,
+                key="rag_chunk_expansion_code_only",
+                help="Only expand chunks with code_languages metadata"
+            )
+        else:
+            # Set defaults when disabled
+            expansion_window = 1
+            code_only = True
+
+        st.markdown("---")
+
         hybrid = st.toggle("Hybrid Search", value=True, key="rag_hybrid",
             disabled=is_direct, help="Allows LLM to deviate from source material.")
-        verify = st.toggle("Verify Answer", value=False, key="rag_verify", 
+        verify = st.toggle("Verify Answer", value=False, key="rag_verify",
             help="After initial LLM response, LLM will run again to verify and correct the response")
         rewrite = st.toggle("Rewrite Queries", value=False, key="rag_rewrite",
             help="Automatically uses the LLM to refine your prompt.")
@@ -333,7 +369,10 @@ def _render_rag_params(is_direct):
         "history_limit": history_limit,
         "hybrid": hybrid,
         "rewrite": rewrite,
-        "verify": verify
+        "verify": verify,
+        "enable_chunk_expansion": enable_expansion,
+        "chunk_expansion_window": expansion_window,
+        "chunk_expansion_code_only": code_only
     }
 
 def render_usage_stats(session_data, config, state_manager):

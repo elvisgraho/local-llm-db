@@ -8,6 +8,7 @@ import app_utils
 from query.templates import REFINE_QUERY_PROMPT
 from query.query_data import query_direct, query_rag, query_lightrag
 from query.session_manager import session_manager
+from query.config import config as global_config
 
 def process_user_input(session_data, config, state_manager, container=None):
     """
@@ -86,19 +87,24 @@ def process_user_input(session_data, config, state_manager, container=None):
         )
 
     # --- 5. EXECUTION PIPELINE (Rendered inside Container) ---
+    # Apply UI chunk expansion settings to global config
+    global_config.rag.enable_chunk_expansion = rag_cfg.get("enable_chunk_expansion", True)
+    global_config.rag.chunk_expansion_window = rag_cfg.get("chunk_expansion_window", 1)
+    global_config.rag.chunk_expansion_for_code_only = rag_cfg.get("chunk_expansion_code_only", True)
+
     # Use target_ui.chat_message to append to the history container specifically
     with target_ui.chat_message("assistant"):
         start_time = time.time()
         response_placeholder = st.empty()
-        
+
         query_args = {
             "query_text": final_query_payload,
-            "llm_config": llm_cfg, 
+            "llm_config": llm_cfg,
             "conversation_history": optimized_history
         }
 
         status_label = "🧠 Analyzing..." if not rag_cfg.get("rag_rewrite") else "🧠 Processing Contextualized Query..."
-        
+
         with st.status(status_label, expanded=True) as status:
             try:
                 rag_type = rag_cfg["rag_type"]
