@@ -72,7 +72,7 @@ class StateManager:
             # Mark complete so we don't re-fetch on every interaction
             st.session_state.startup_fetch_done = True
         
-        self._init_setting("rag_strategy", "Standard RAG")
+        self._init_setting("rag_strategy", "LightRAG")
         self._init_setting("persisted_db", None)
 
     def _init_setting(self, key, default_value):

@@ -83,79 +83,6 @@ def query_direct(
         logger.error(f"Error in direct query: {str(e)}", exc_info=True)
         raise
 
-def query_rag(
-    query_text: str,
-    top_k: int = 4,
-    hybrid: bool = False,
-    verify: Optional[bool] = False,
-    db_name: str = DEFAULT_DB_NAME,
-    llm_config: Optional[Dict] = None,
-    conversation_history: Optional[List[Dict[str, str]]] = None,
-    metadata_filter: Optional[Dict[str, Any]] = None
-) -> Dict[str, Union[str, List[str], int]]:
-    try:
-        # 1. Prepare
-        retrieval_query, history, tokens = _prepare_retrieval_context(
-            query_text, llm_config, conversation_history
-        )
-
-        # 2. Get Resources
-        db = _get_db_or_raise('rag', db_name)
-        
-        # 3. Retrieve
-        # ADJUSTMENT: retrieve_semantic now multiplies by 4 internally.
-        # Smart scaling: Use higher multiplier for large top_k to feed diversity stage
-        # - Small queries (≤50): 1.5x multiplier (efficient)
-        # - Large queries (>50): 2.0x multiplier (better diversity pool)
-        if top_k <= 50:
-            k_initial = min(int(top_k * 1.5), 100)
-        else:
-            # Large top_k: need 2x buffer since diversity stage expects k*2 candidates
-            k_initial = min(int(top_k * 2.0), 250)
-
-        # Safety: ensure k_initial >= top_k
-        if k_initial < top_k:
-            k_initial = top_k
-
-        logger.info(f"RAG initial retrieval k = {k_initial} (top_k={top_k})")
-
-        semantic_results = retrieve_semantic(retrieval_query, db, k_initial, metadata_filter)
-        keyword_results = retrieve_keyword(retrieval_query, db, 'rag', db_name, k_initial, metadata_filter)
-
-        # 4. Merge & Deduplicate
-        combined_dict = {doc.page_content: (doc, score) for doc, score in semantic_results}
-        for doc, score in keyword_results:
-            if doc.page_content not in combined_dict or score > combined_dict[doc.page_content][1]:
-                combined_dict[doc.page_content] = (doc, score)
-        
-        initial_docs_scores = sorted(list(combined_dict.values()), key=lambda x: x[1], reverse=True)
-
-        # 5. Rerank & Select (with chunk expansion)
-        reranked_docs_scores = _rerank_results(
-            retrieval_query,
-            initial_docs_scores,
-            top_k,
-            rag_type='rag',
-            db_name=db_name
-        )
-        final_docs, sources, estimated_tokens = select_docs_for_context(reranked_docs_scores, tokens)
-
-        # 6. Generate
-        return _generate_response(
-            query_text=query_text,
-            final_docs=final_docs,
-            sources=sources,
-            rag_type='rag',
-            llm_config=llm_config,
-            truncated_history=history,
-            estimated_context_tokens=estimated_tokens,
-            hybrid=hybrid,
-            verify=verify
-        )
-    except Exception as e:
-        logger.error(f"Error in RAG query: {str(e)}", exc_info=True)
-        raise
-
 def query_lightrag(
     query_text: str,
     top_k: int = 4,
@@ -249,7 +176,6 @@ def main():
 
         query_func_map = {
             'direct': query_direct,
-            'rag': query_rag,
             'lightrag': query_lightrag
         }
 

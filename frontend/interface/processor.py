@@ -6,7 +6,7 @@ import os
 # --- Internal Imports ---
 import app_utils
 from query.templates import REFINE_QUERY_PROMPT
-from query.query_data import query_direct, query_rag, query_lightrag
+from query.query_data import query_direct, query_lightrag
 from query.session_manager import session_manager
 from query.config import config as global_config
 
@@ -117,7 +117,7 @@ def process_user_input(session_data, config, state_manager, container=None):
 
                 elif db_name:
                     status.write(f"🔍 Retrieving from **{db_name}**...")
-                    strategy_func = query_lightrag if rag_type == 'lightrag' else query_rag
+                    strategy_func = query_lightrag
                     
                     response = strategy_func(
                         **query_args,

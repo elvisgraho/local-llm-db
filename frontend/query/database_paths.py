@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 
 # --- Constants ---
 
-VALID_RAG_TYPES: Tuple[str, ...] = ("rag", "lightrag")
+VALID_RAG_TYPES: Tuple[str, ...] = ("lightrag",)
 DEFAULT_DB_NAME = "default"
 
 # --- Root Path Determination ---

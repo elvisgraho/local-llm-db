@@ -1,4 +1,4 @@
-# RAG Architect Frontend
+# LightRAG Architect Frontend
 
 A Dockerized interface for interacting with local knowledge bases via RAG and LightRAG strategies.
 

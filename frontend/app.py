@@ -17,7 +17,7 @@ from query.session_manager import session_manager
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Config
-st.set_page_config(page_title="RAG Architect", page_icon="🧠", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="LightRAG Architect", page_icon="🧠", layout="wide", initial_sidebar_state="expanded")
 
 def main():
     # 1. Init State

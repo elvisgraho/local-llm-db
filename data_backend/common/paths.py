@@ -12,7 +12,7 @@ from typing import Dict, List, Tuple
 
 # --- Constants ---
 
-VALID_RAG_TYPES: Tuple[str, ...] = ("rag", "lightrag")
+VALID_RAG_TYPES: Tuple[str, ...] = ("lightrag",)
 DEFAULT_DB_NAME = "default"
 
 # --- Adaptive Root Determination ---
@@ -81,7 +81,7 @@ def get_db_paths(rag_type: str, db_name: str) -> Dict[str, Path]:
     Generates standard file paths for a specific RAG type and database instance.
 
     Args:
-        rag_type: Type of RAG database ('rag' or 'lightrag')
+        rag_type: Type of RAG database ('lightrag')
         db_name: Name of the database instance
 
     Returns:
@@ -103,7 +103,7 @@ def list_available_dbs(rag_type: str) -> List[str]:
     Lists available database names for a given RAG type.
 
     Args:
-        rag_type: Type of RAG database ('rag' or 'lightrag')
+        rag_type: Type of RAG database ('lightrag')
 
     Returns:
         Sorted list of database names
@@ -127,7 +127,7 @@ def db_exists(rag_type: str, db_name: str) -> bool:
     Checks if a specific database instance exists and appears valid.
 
     Args:
-        rag_type: Type of RAG database ('rag' or 'lightrag')
+        rag_type: Type of RAG database ('lightrag')
         db_name: Name of the database instance
 
     Returns:

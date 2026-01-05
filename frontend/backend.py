@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 
 # --- Internal Logic Imports ---
 # These must exist in your project structure
-from query.query_data import query_direct, query_rag, query_lightrag
+from query.query_data import query_direct, query_lightrag
 from query.database_paths import list_available_dbs, db_exists, DATABASE_DIR
 from query.templates import REFINE_QUERY_PROMPT
 
@@ -19,7 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger("RAG-Architect-Backend")
 
 app = FastAPI(
-    title="RAG Architect Engine",
+    title="LightRAG Architect Engine",
     description="Backend API for RAG operations, contextual rewriting, and LLM interaction.",
     version="1.0.0"
 )
@@ -149,16 +149,8 @@ def execute_query(req: QueryRequest):
         
         if rag_type == 'direct':
             response = query_direct(**query_args)
-            
-        elif rag_type == 'lightrag':
+        else:  # LightRAG
             response = query_lightrag(
-                **query_args,
-                db_name=db_name,
-                top_k=rag_dict.get("top_k", 5),
-                hybrid=rag_dict.get("hybrid", False)
-            )
-        else: # Default RAG
-            response = query_rag(
                 **query_args,
                 db_name=db_name,
                 top_k=rag_dict.get("top_k", 5),
@@ -184,7 +176,7 @@ if __name__ == "__main__":
         logger.warning(f"DATABASE_DIR not found at {DATABASE_DIR}. Creating now...")
         DATABASE_DIR.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Starting RAG Architect Backend on port 8005...")
+    logger.info("Starting LightRAG Architect Backend on port 8005...")
     uvicorn.run(
         "backend_server:app", 
         host="0.0.0.0", 

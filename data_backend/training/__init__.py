@@ -1,11 +1,11 @@
 """
-Training module for document processing and RAG database population.
+Training module for document processing and LightRAG database population.
 
 This module provides utilities for:
 - Document loading and processing
 - LLM-based metadata extraction and tagging
 - Batch processing operations
-- RAG and LightRAG database population
+- LightRAG database population with graph-enhanced retrieval
 - Embedding generation
 """
 

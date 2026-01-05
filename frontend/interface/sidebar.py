@@ -7,7 +7,6 @@ from pathlib import Path
 # --- Constants ---
 STRATEGY_MAP = {
     "Direct Chat": "direct",
-    "Standard RAG": "rag",
     "LightRAG": "lightrag"
 }
 
@@ -256,43 +255,43 @@ def _render_embedding_settings(state_manager):
 
 
 def _render_rag_strategy(state_manager):
-    """Renders only the Architecture and Database selection."""
+    """Renders Knowledge Base selection - LightRAG only."""
     st.subheader("🗄️ Knowledge Base")
-    
-    curr_strat = st.session_state.get("rag_strategy", "Standard RAG")
+
+    curr_strat = st.session_state.get("rag_strategy", "LightRAG")
     # Safety check if strat key is valid
-    if curr_strat not in STRATEGY_MAP: 
-        curr_strat = "Standard RAG"
-        
+    if curr_strat not in STRATEGY_MAP:
+        curr_strat = "LightRAG"
+
     idx = list(STRATEGY_MAP.keys()).index(curr_strat)
 
     selected_strat_label = st.selectbox(
-        "Architecture", 
+        "Mode",
         list(STRATEGY_MAP.keys()),
         index=idx,
         key="rag_type_selector",
         on_change=lambda: setattr(st.session_state, 'rag_strategy', st.session_state.rag_type_selector)
     )
-    
+
     rag_key = STRATEGY_MAP[selected_strat_label]
     is_direct = (rag_key == "direct")
     selected_db = None
-    
+
     if not is_direct:
         available_dbs = get_dbs_for_strategy(rag_key)
         if available_dbs:
             prev_db = st.session_state.get("persisted_db")
             db_idx = available_dbs.index(prev_db) if prev_db in available_dbs else 0
-            
+
             c_db, c_ref = st.columns([0.85, 0.15])
             with c_db:
-                selected_db = st.selectbox("Select Database", available_dbs, index=db_idx, key="db_selector",
+                selected_db = st.selectbox("Database", available_dbs, index=db_idx, key="db_selector",
                     on_change=lambda: setattr(st.session_state, 'persisted_db', st.session_state.db_selector))
             with c_ref:
                 if st.button("🔄", key="ref_db"): st.rerun()
         else:
-            st.warning(f"No databases found in /{rag_key}")
-            
+            st.warning(f"No LightRAG databases found")
+
     return {
         "rag_type": rag_key,
         "db_name": selected_db

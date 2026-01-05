@@ -55,41 +55,41 @@ def scan_databases(db_root: Path = DATABASE_DIR) -> List[Dict[str, Any]]:
     if not db_root.exists():
         return inventory
 
-    for r_type in ["rag", "lightrag"]:
-        type_dir = db_root / r_type
-        if type_dir.exists():
-            for db_instance in type_dir.iterdir():
-                if db_instance.is_dir() and not db_instance.name.startswith('.'):
-                    size_mb, _ = get_dir_stats(db_instance)
+    # Only scan for LightRAG databases
+    type_dir = db_root / "lightrag"
+    if type_dir.exists():
+        for db_instance in type_dir.iterdir():
+            if db_instance.is_dir() and not db_instance.name.startswith('.'):
+                size_mb, _ = get_dir_stats(db_instance)
 
-                    # Count processed files
-                    file_count = 0
-                    reg_path = db_instance / "processed_files.json"
-                    if reg_path.exists():
-                        try:
-                            with open(reg_path, 'r', encoding='utf-8') as f:
-                                file_count = len(json.load(f))
-                        except:
-                            pass
+                # Count processed files
+                file_count = 0
+                reg_path = db_instance / "processed_files.json"
+                if reg_path.exists():
+                    try:
+                        with open(reg_path, 'r', encoding='utf-8') as f:
+                            file_count = len(json.load(f))
+                    except:
+                        pass
 
-                    # Read configuration
-                    config = {}
-                    config_path = db_instance / "db_config.json"
-                    if config_path.exists():
-                        try:
-                            with open(config_path, 'r', encoding='utf-8') as f:
-                                config = json.load(f)
-                        except:
-                            pass
+                # Read configuration
+                config = {}
+                config_path = db_instance / "db_config.json"
+                if config_path.exists():
+                    try:
+                        with open(config_path, 'r', encoding='utf-8') as f:
+                            config = json.load(f)
+                    except:
+                        pass
 
-                    inventory.append({
-                        "Type": r_type,
-                        "Name": db_instance.name,
-                        "Size": f"{size_mb:.1f} MB",
-                        "Files": file_count,
-                        "Path": str(db_instance),
-                        "Config": config
-                    })
+                inventory.append({
+                    "Type": "lightrag",
+                    "Name": db_instance.name,
+                    "Size": f"{size_mb:.1f} MB",
+                    "Files": file_count,
+                    "Path": str(db_instance),
+                    "Config": config
+                })
     return inventory
 
 

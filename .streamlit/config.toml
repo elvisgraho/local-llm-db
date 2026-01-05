@@ -1,0 +1,30 @@
+[server]
+# Production server settings
+headless = true
+port = 8502
+enableCORS = true
+enableXsrfProtection = true
+maxUploadSize = 500
+enableWebsocketCompression = true
+
+[browser]
+# Browser settings
+gatherUsageStats = false
+
+[theme]
+# Custom dark theme matching our CSS
+primaryColor = "#6366f1"
+backgroundColor = "#0f1117"
+secondaryBackgroundColor = "#1a1d29"
+textColor = "#ffffff"
+font = "sans serif"
+
+[client]
+# Client optimization
+showErrorDetails = false
+toolbarMode = "minimal"
+
+[runner]
+# Performance optimization
+magicEnabled = true
+fastReruns = true
