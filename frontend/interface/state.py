@@ -1,4 +1,6 @@
 import streamlit as st
+import logging
+from datetime import datetime
 from query.session_manager import session_manager
 from query.global_vars import LOCAL_LLM_API_URL
 
@@ -135,12 +137,21 @@ class StateManager:
             self._set_initial_session()
 
     def update_session_title(self, session_id, new_title):
-        """Updates title in the local list cache."""
+        """Updates title in the local list cache and on disk."""
         if "session_list" in st.session_state:
             for s in st.session_state.session_list:
                 if s["id"] == session_id:
                     s["title"] = new_title
+                    s["updated_at"] = datetime.now().isoformat()
                     break
+
+    def refresh_session_list(self):
+        """Refresh the session list from disk."""
+        try:
+            st.session_state.session_list = session_manager.list_sessions()
+        except Exception as e:
+            logging.error(f"Failed to refresh session list: {e}")
+            st.session_state.session_list = []
 
     def reset_session(self):
         """Emergency reset if session is corrupt."""

@@ -85,16 +85,25 @@ def _render_session_list(state_manager):
         state_manager.create_new_session()
         st.rerun()
 
-    sessions = state_manager.get_session_list()
+    # Safely get sessions with error handling
+    try:
+        sessions = state_manager.get_session_list()
+    except Exception as e:
+        st.error(f"Error loading chat history: {e}")
+        sessions = []
+
     active_id = state_manager.get_active_session_id()
-    
+
     if not sessions:
         st.caption("No chat history.")
         return
 
     display_sessions = sessions[:15]
-    
-    for s in display_sessions: 
+
+    for s in display_sessions:
+        # Validate session data
+        if not s or not s.get("id"):
+            continue 
         # --- MODE A: CONFIRMATION MODE ---
         # If this specific chat is clicked for deletion, swap the row for a confirmation box
         if st.session_state.confirm_delete_id == s["id"]:
@@ -116,22 +125,35 @@ def _render_session_list(state_manager):
         # --- MODE B: NORMAL ROW MODE ---
         else:
             col_name, col_del = st.columns([0.85, 0.15])
-            
-            clean_title = s.get("title", "Untitled")
-            label = clean_title[:22] + "..." if len(clean_title) > 25 else clean_title
-            
+
+            # Robust title handling with multiple fallbacks
+            raw_title = s.get("title", "").strip()
+            if not raw_title or raw_title == "":
+                raw_title = "Untitled Chat"
+            elif raw_title == "New Chat":
+                # Check if this is actually a new chat or has messages
+                raw_title = "New Chat"
+
+            # Truncate for display
+            clean_title = raw_title.replace("\n", " ").replace("\r", " ")
+            label = clean_title[:28] + "..." if len(clean_title) > 28 else clean_title
+
             if s["id"] == active_id:
                 label = f"📂 {label}"
-            
-            # Select Chat
-            if col_name.button(label, key=f"btn_{s['id']}", use_container_width=True, help=s.get("title")):
-                state_manager.set_active_session(s["id"])
-                st.rerun()
-            
-            # Trigger Delete Mode
-            if col_del.button("🗑️", key=f"trig_{s['id']}"):
-                st.session_state.confirm_delete_id = s["id"]
-                st.rerun()
+
+            # Select Chat with error handling
+            try:
+                if col_name.button(label, key=f"btn_{s['id']}", use_container_width=True, help=clean_title):
+                    state_manager.set_active_session(s["id"])
+                    st.rerun()
+
+                # Trigger Delete Mode
+                if col_del.button("🗑️", key=f"trig_{s['id']}"):
+                    st.session_state.confirm_delete_id = s["id"]
+                    st.rerun()
+            except Exception as e:
+                # If button rendering fails, log and skip this session
+                st.caption(f"⚠️ Error: {s.get('id', 'unknown')[:8]}")
 
 def _render_llm_settings(state_manager):
     """Renders Chat Model settings."""

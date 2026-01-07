@@ -137,14 +137,58 @@ def process_user_input(session_data, config, state_manager, container=None):
 
             except Exception as e:
                 status.update(label="❌ Pipeline Error", state="error")
-                st.error(f"An error occurred: {str(e)}")
+                error_content = f"❌ **Error:** {str(e)}"
                 logging.error("Pipeline Failure", exc_info=True)
+
+                # Display the error immediately in the response placeholder
+                response_placeholder.markdown(error_content, unsafe_allow_html=True)
+
+                # Save error message to chat history so it persists
+                error_message = {
+                    "role": "assistant",
+                    "content": error_content,
+                    "sources": [],
+                    "usage": {
+                        "retrieval_tokens": 0,
+                        "timestamp": time.time()
+                    }
+                }
+                session_data["messages"].append(error_message)
+
+                # Auto-rename if this is the first exchange (even on error)
+                if len(session_data["messages"]) == 2:
+                    _auto_rename_session(session_data, "", state_manager)
+
+                session_manager.save_session(session_data)
+                st.rerun()
                 return 
 
         # --- 6. OUTPUT PARSING ---
         raw_text = response.get("text", "")
         if not raw_text:
-            st.error("Received empty response from LLM.")
+            error_content = "❌ **Error:** Received empty response from LLM."
+
+            # Display the error immediately in the response placeholder
+            response_placeholder.markdown(error_content, unsafe_allow_html=True)
+
+            # Save error message to chat history so it persists
+            error_message = {
+                "role": "assistant",
+                "content": error_content,
+                "sources": [],
+                "usage": {
+                    "retrieval_tokens": 0,
+                    "timestamp": time.time()
+                }
+            }
+            session_data["messages"].append(error_message)
+
+            # Auto-rename if this is the first exchange (even on error)
+            if len(session_data["messages"]) == 2:
+                _auto_rename_session(session_data, "", state_manager)
+
+            session_manager.save_session(session_data)
+            st.rerun()
             return
 
         sources = response.get("sources", [])
@@ -197,8 +241,44 @@ def process_user_input(session_data, config, state_manager, container=None):
         st.rerun()
 
 def _auto_rename_session(session_data, response_text, state_manager):
-    """Generates a short title based on the first response."""
-    clean = response_text.replace("#", "").replace("*", "").replace("`", "").strip()
-    new_title = (clean[:30] + "...") if len(clean) > 30 else clean
-    session_data["title"] = new_title
-    state_manager.update_session_title(session_data["id"], new_title)
+    """
+    Generates a short title based on the first response.
+    Falls back to user message if response is empty or invalid.
+    Only renames if the current title is generic ("New Chat", "Chat", etc.)
+    """
+    try:
+        current_title = session_data.get("title", "").strip()
+
+        # Skip renaming if the chat already has a meaningful custom title
+        # (not a generic one like "New Chat" or auto-generated ones)
+        generic_titles = ["New Chat", "Chat", "Untitled Chat", ""]
+        is_generic = current_title in generic_titles or current_title.startswith("Chat ")
+
+        if not is_generic:
+            # Already has a good title, don't override
+            return
+
+        # Try to use the assistant's response first
+        clean = response_text.replace("#", "").replace("*", "").replace("`", "").strip()
+
+        # If response is too short or empty, use the user's message instead
+        if len(clean) < 3:
+            # Get the first user message
+            user_msg = next((m["content"] for m in session_data["messages"] if m["role"] == "user"), None)
+            if user_msg:
+                clean = user_msg.replace("#", "").replace("*", "").replace("`", "").strip()
+
+        # Final fallback if still empty
+        if len(clean) < 3:
+            new_title = f"Chat {session_data.get('id', '')[:8]}"
+        else:
+            # Truncate to reasonable length
+            new_title = (clean[:35] + "...") if len(clean) > 35 else clean
+
+        session_data["title"] = new_title
+        state_manager.update_session_title(session_data["id"], new_title)
+
+    except Exception as e:
+        logging.error(f"Failed to auto-rename session: {e}")
+        # Use a safe default
+        session_data["title"] = f"Chat {session_data.get('id', '')[:8]}"

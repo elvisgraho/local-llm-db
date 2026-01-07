@@ -52,17 +52,26 @@ def main():
     chat_container = render_chat_area(current_session, state, app_config)
 
     # --- 7. INPUT HANDLING ---
-    
+
     # We check if our custom input injected a prompt into session state
     if st.session_state.get("pending_injected_prompt"):
         user_input = st.session_state.pop("pending_injected_prompt")
-        
+
         # Add to history
         current_session["messages"].append({"role": "user", "content": user_input})
+
+        # If this is the first message and chat is still named "New Chat", rename it immediately
+        if len(current_session["messages"]) == 1 and current_session.get("title", "").strip() in ["New Chat", ""]:
+            # Use the user's message as the title
+            clean_input = user_input.replace("#", "").replace("*", "").replace("`", "").strip()
+            new_title = (clean_input[:35] + "...") if len(clean_input) > 35 else clean_input
+            current_session["title"] = new_title
+            state.update_session_title(current_session["id"], new_title)
+
         session_manager.save_session(current_session)
-        
+
         # Trigger Processing
-        st.session_state.pending_processing = True 
+        st.session_state.pending_processing = True
         st.rerun()
 
     # 8. Processing Hook

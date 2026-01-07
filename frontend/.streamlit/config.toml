@@ -1,7 +1,7 @@
 [server]
 # Production server settings
 headless = true
-port = 8502
+port = 8501
 enableCORS = true
 enableXsrfProtection = true
 maxUploadSize = 500
