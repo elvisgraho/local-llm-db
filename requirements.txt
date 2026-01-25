@@ -1,9 +1,13 @@
 chromadb
+faiss-cpu
+fastapi
+google-generativeai
 keybert
 langchain
 langchain-chroma
 langchain-community
 langchain-core
+langchain-text-splitters
 psutil
 pydantic
 PyMuPDF
@@ -14,3 +18,4 @@ streamlit
 tenacity
 tiktoken
 tqdm
+uvicorn
